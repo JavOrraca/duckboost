@@ -1,0 +1,136 @@
+# name: test/sql/duckboost/cat_features.test
+# description: CatBoost OneHot and OnlineCtr (Counter) dump import
+# group: [duckboost]
+
+require duckboost
+
+# --- OneHotFeature: True when feature hash equals value ---
+statement ok
+CREATE TABLE oh_models AS
+SELECT duckboost_import(
+	'catboost',
+	(SELECT content FROM read_text('test/sql/duckboost/data/catboost_onehot.json'))
+) AS model;
+
+query I
+SELECT model LIKE '%"compare":"equal"%' FROM oh_models;
+----
+true
+
+# equal → right leaf -0.25; not equal → left leaf 0.5
+query I
+SELECT duckboost_predict(model, [42.0]) FROM oh_models;
+----
+-0.25
+
+query I
+SELECT duckboost_predict(model, [41.0]) FROM oh_models;
+----
+0.5
+
+statement ok
+CREATE TABLE oh_rows AS SELECT 42.0 AS f0 UNION ALL SELECT 41.0;
+
+statement ok
+SET VARIABLE oh_sql = (
+	SELECT duckboost_to_sql(model, 'oh_rows', ['f0'], MAP {'separate_trees': 'false', 'prediction_alias': 'pred'})
+	FROM oh_models
+);
+
+statement ok
+CREATE TABLE oh_sql_pred AS SELECT pred::DOUBLE AS pred FROM query(getvariable('oh_sql'));
+
+query I
+SELECT count(*) = 2 AND bool_and(abs(n.pred - s.pred) < 1e-12)
+FROM (
+	SELECT duckboost_predict(model, [f0]) AS pred FROM oh_models, oh_rows
+) n
+JOIN oh_sql_pred s ON abs(n.pred - s.pred) < 1e-12;
+----
+true
+
+# --- OnlineCtr Counter: cat hash 7 → combination hash in fixture map ---
+statement ok
+CREATE TABLE ctr_models AS
+SELECT duckboost_import(
+	'catboost',
+	(SELECT content FROM read_text('test/sql/duckboost/data/catboost_ctr_counter.json'))
+) AS model;
+
+query I
+SELECT model LIKE '%"ctr_features"%' FROM ctr_models;
+----
+true
+
+# hash present → CTR ≈ 10.91 > 5 → right → -1
+query I
+SELECT duckboost_predict(model, [7.0]) FROM ctr_models;
+----
+-1.0
+
+# hash missing → CTR = 0 < 5 → left → 1
+query I
+SELECT duckboost_predict(model, [99.0]) FROM ctr_models;
+----
+1.0
+
+# SQL export for Counter CTR matches in-process predict
+statement ok
+CREATE TABLE ctr_rows AS SELECT 7.0 AS f0 UNION ALL SELECT 99.0;
+
+statement ok
+SET VARIABLE ctr_sql = (
+	SELECT duckboost_to_sql(model, 'ctr_rows', ['f0'], MAP {'separate_trees': 'false', 'prediction_alias': 'pred'})
+	FROM ctr_models
+);
+
+statement ok
+CREATE TABLE ctr_sql_pred AS SELECT pred::DOUBLE AS pred FROM query(getvariable('ctr_sql'));
+
+query I
+SELECT count(*) = 2 AND bool_and(abs(n.pred - s.pred) < 1e-9)
+FROM (
+	SELECT duckboost_predict(model, [f0]) AS pred FROM ctr_models, ctr_rows
+) n
+JOIN ctr_sql_pred s ON abs(n.pred - s.pred) < 1e-9;
+----
+true
+
+# --- OnlineCtr with float_feature combination element ---
+statement ok
+CREATE TABLE ctr_float_models AS
+SELECT duckboost_import(
+	'catboost',
+	(SELECT content FROM read_text('test/sql/duckboost/data/catboost_ctr_float_combo.json'))
+) AS model;
+
+# features: [float0, cat_hash]; cat=7 and float>=15.5 → combo hash hit → -1
+query I
+SELECT duckboost_predict(model, [20.0, 7.0]) FROM ctr_float_models;
+----
+-1.0
+
+# float bin 0 → miss → 1
+query I
+SELECT duckboost_predict(model, [10.0, 7.0]) FROM ctr_float_models;
+----
+1.0
+
+# --- OnlineCtr with cat_feature_exact_value combination element ---
+statement ok
+CREATE TABLE ctr_oh_models AS
+SELECT duckboost_import(
+	'catboost',
+	(SELECT content FROM read_text('test/sql/duckboost/data/catboost_ctr_onehot_combo.json'))
+) AS model;
+
+# exact match on first cat (42) + second cat hash 7 → hit → -1
+query I
+SELECT duckboost_predict(model, [42.0, 7.0]) FROM ctr_oh_models;
+----
+-1.0
+
+query I
+SELECT duckboost_predict(model, [41.0, 7.0]) FROM ctr_oh_models;
+----
+1.0

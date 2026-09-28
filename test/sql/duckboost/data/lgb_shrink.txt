@@ -1,0 +1,16 @@
+Tree=0
+num_leaves=1
+num_cat=0
+split_feature=
+threshold=
+decision_type=
+left_child=
+right_child=
+leaf_value=2.0
+leaf_weight=1
+leaf_count=1
+internal_value=
+internal_weight=
+internal_count=
+is_linear=0
+shrinkage=0.1

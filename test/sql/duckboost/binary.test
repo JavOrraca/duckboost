@@ -1,0 +1,40 @@
+# name: test/sql/duckboost/binary.test
+# description: duckboost binary logistic boosting
+# group: [duckboost]
+
+require duckboost
+
+statement ok
+CREATE TABLE train AS
+SELECT
+	i::DOUBLE AS x1,
+	(i % 2)::DOUBLE AS x2,
+	CASE WHEN i > 15 THEN 1.0 ELSE 0.0 END AS y
+FROM range(40) t(i);
+
+statement ok
+CREATE TABLE models AS
+SELECT duckboost_train(
+	y,
+	[x1, x2],
+	MAP {
+		'backend': 'reference',
+		'task': 'binary',
+		'n_estimators': '20',
+		'max_depth': '2',
+		'learning_rate': '0.2',
+		'feature_names': 'x1,x2'
+	}
+) AS model
+FROM train;
+
+query I
+SELECT duckboost_evaluate_agg(m.model, t.y, [t.x1, t.x2], MAP {'metric': 'accuracy'}) >= 0.9
+FROM models m, train t;
+----
+true
+
+query I
+SELECT duckboost_predict((SELECT model FROM models), [30.0, 1.0]) > 0.5;
+----
+true

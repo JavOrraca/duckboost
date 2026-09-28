@@ -1,0 +1,54 @@
+# Submit this file to https://github.com/duckdb/community-extensions as:
+#   extensions/duckboost/description.yml
+#
+# Publish surface (orphan branch, do not merge into v2.0-cyanoptera):
+#   branch: cursor/duckboost-community-oot-0c09
+#   repo:   JavOrraca/duckdb-2-alpha-testing
+#
+# Refresh after re-extracting:
+#   scripts/extract_duckboost_oot.sh /tmp/duckboost_oot
+#   # push orphan branch, then update repo.ref below
+
+extension:
+  name: duckboost
+  description: In-database gradient boosting with SQL export (reference GBDT + XGBoost/LightGBM/CatBoost dump import)
+  version: 0.1.0
+  language: C++
+  build: cmake
+  license: MIT
+  maintainers:
+    - JavOrraca
+  # Default community builds ship without vendor ML libraries (import + reference trainer).
+  # Optional native trainers are compile-time flags for custom builds.
+  requires_toolchains: "python3"
+
+repo:
+  github: JavOrraca/duckdb-2-alpha-testing
+  ref: 2bcdcae3d5fc8375b026d367da051a78416809db
+
+docs:
+  hello_world: |
+    LOAD duckboost;
+    CREATE TABLE train AS
+    SELECT i % 2 AS y, i * 0.1 AS x1, (i % 3) * 0.2 AS x2
+    FROM range(40) t(i);
+    CREATE TABLE models AS
+    SELECT duckboost_train(
+      y, [x1, x2],
+      MAP {'n_estimators': '20', 'max_depth': '3', 'learning_rate': '0.1', 'feature_names': 'x1,x2'}
+    ) AS model
+    FROM train;
+    SELECT duckboost_predict(model, [x1, x2]) AS pred
+    FROM models, train
+    LIMIT 5;
+  extended_description: |
+    `duckboost` trains and evaluates tree ensembles inside DuckDB, imports XGBoost /
+    LightGBM / CatBoost dumps, and exports orbital-style SQL (`duckboost_to_sql`) for
+    inference without the extension.
+
+    Default community binaries use the built-in reference GBDT trainer plus dump import.
+    Optional in-process XGBoost / LightGBM training requires rebuilding with
+    `DUCKBOOST_WITH_XGBOOST` / `DUCKBOOST_WITH_LIGHTGBM`. CatBoost is import-only.
+
+    The community build surface is the orphan branch `cursor/duckboost-community-oot-0c09`
+    in this repository (extension-template layout). See `community/SUBMIT.md`.

@@ -1,0 +1,26 @@
+{
+  "features_info": {
+    "float_features": [],
+    "categorical_features": [
+      {
+        "feature_index": 0,
+        "flat_feature_index": 0,
+        "values": [42.0]
+      }
+    ]
+  },
+  "oblivious_trees": [
+    {
+      "leaf_values": [0.5, -0.25],
+      "splits": [
+        {
+          "split_index": 0,
+          "cat_feature_index": 0,
+          "value": 42.0,
+          "split_type": "OneHotFeature"
+        }
+      ]
+    }
+  ],
+  "scale_and_bias": [1.0, [0.0]]
+}

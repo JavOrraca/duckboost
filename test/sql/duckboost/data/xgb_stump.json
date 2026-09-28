@@ -1,0 +1,15 @@
+[
+  {
+    "nodeid": 0,
+    "depth": 0,
+    "split": "f0",
+    "split_condition": 1.5,
+    "yes": 1,
+    "no": 2,
+    "missing": 1,
+    "children": [
+      {"nodeid": 1, "leaf": 0.5},
+      {"nodeid": 2, "leaf": -0.25}
+    ]
+  }
+]

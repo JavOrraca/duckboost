@@ -1,0 +1,49 @@
+{
+  "features_info": {
+    "float_features": [],
+    "categorical_features": [
+      {
+        "feature_index": 0,
+        "flat_feature_index": 0
+      }
+    ],
+    "ctrs": [
+      {
+        "ctr_type": "Counter",
+        "identifier": "{\"identifier\":[{\"cat_feature_index\":0,\"combination_element\":\"cat_feature_value\"}],\"type\":\"Counter\"}",
+        "prior_numerator": 0,
+        "prior_denomerator": 1,
+        "scale": 15,
+        "shift": 0,
+        "borders": [5.0],
+        "elements": [
+          {
+            "cat_feature_index": 0,
+            "combination_element": "cat_feature_value"
+          }
+        ]
+      }
+    ]
+  },
+  "ctr_data": {
+    "{\"identifier\":[{\"cat_feature_index\":0,\"combination_element\":\"cat_feature_value\"}],\"type\":\"Counter\"}": {
+      "counter_denominator": 10,
+      "hash_stride": 2,
+      "hash_map": ["14670935167156705519", 8]
+    }
+  },
+  "oblivious_trees": [
+    {
+      "leaf_values": [1.0, -1.0],
+      "splits": [
+        {
+          "split_index": 0,
+          "split_type": "OnlineCtr",
+          "border": 5.0,
+          "ctr_target_border_idx": 0
+        }
+      ]
+    }
+  ],
+  "scale_and_bias": [1.0, [0.0]]
+}

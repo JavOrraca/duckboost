@@ -1,0 +1,76 @@
+# name: test/sql/duckboost/multiclass.test
+# description: CatBoost multiclass dump import / predict / proba / to_sql
+# group: [duckboost]
+
+require duckboost
+
+statement ok
+CREATE TABLE mc_models AS
+SELECT duckboost_import(
+	'catboost',
+	(SELECT content FROM read_text('test/sql/duckboost/data/catboost_multiclass.json'))
+) AS model;
+
+query I
+SELECT model LIKE '%"task":"multiclass"%' FROM mc_models;
+----
+true
+
+query I
+SELECT model LIKE '%"n_classes":3%' FROM mc_models;
+----
+true
+
+# f0 <= 1.5 → class 0 (scores ~ [2, 0, 0.1]); f0 > 1.5 → class 1 (scores ~ [0, 2, 0.1])
+query I
+SELECT duckboost_predict(model, [1.0]) FROM mc_models;
+----
+0.0
+
+query I
+SELECT duckboost_predict(model, [2.0]) FROM mc_models;
+----
+1.0
+
+query I
+SELECT list_reduce(duckboost_predict_proba(model, [1.0]), lambda a, b: a + b) BETWEEN 0.999 AND 1.001
+FROM mc_models;
+----
+true
+
+query I
+SELECT duckboost_predict_proba(model, [1.0])[1] >
+       duckboost_predict_proba(model, [1.0])[2]
+FROM mc_models;
+----
+true
+
+statement ok
+CREATE TABLE mc_rows AS
+SELECT 1.0 AS f0 UNION ALL SELECT 2.0;
+
+statement ok
+SET VARIABLE mc_sql = (
+	SELECT duckboost_to_sql(model, 'mc_rows', ['f0'], MAP {'prediction_alias': 'pred'})
+	FROM mc_models
+);
+
+statement ok
+CREATE TABLE mc_sql_pred AS SELECT pred::DOUBLE AS pred FROM query(getvariable('mc_sql'));
+
+query I
+SELECT count(*) = 2 AND bool_and(abs(n.pred - s.pred) < 1e-12)
+FROM (
+	SELECT duckboost_predict(model, [f0]) AS pred FROM mc_models, mc_rows
+) n
+JOIN mc_sql_pred s ON abs(n.pred - s.pred) < 1e-12;
+----
+true
+
+query I
+SELECT duckboost_evaluate_agg(m.model, y, [f0], MAP {'metric': 'accuracy'}) = 1.0
+FROM mc_models m, (
+	SELECT 1.0 AS f0, 0.0 AS y UNION ALL SELECT 2.0, 1.0
+) t;
+----
+true

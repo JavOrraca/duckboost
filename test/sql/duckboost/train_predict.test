@@ -1,0 +1,65 @@
+# name: test/sql/duckboost/train_predict.test
+# description: duckboost train / predict / evaluate / backends
+# group: [duckboost]
+
+require duckboost
+
+statement ok
+CREATE TABLE train AS
+SELECT
+	i::DOUBLE AS x1,
+	(i % 3)::DOUBLE AS x2,
+	(2.0 * i + 0.5 * (i % 3) + 1.0)::DOUBLE AS y
+FROM range(40) t(i);
+
+query III
+SELECT backend, training_supported, notes ILIKE '%reference%'
+FROM duckboost_backends()
+WHERE backend = 'reference';
+----
+reference	true	true
+
+statement ok
+CREATE TABLE models AS
+SELECT duckboost_train(
+	y,
+	[x1, x2],
+	MAP {
+		'backend': 'reference',
+		'task': 'regression',
+		'n_estimators': '15',
+		'max_depth': '3',
+		'learning_rate': '0.2',
+		'feature_names': 'x1,x2'
+	}
+) AS model
+FROM train;
+
+# Model JSON should round-trip and expose backend metadata
+query I
+SELECT model LIKE '%"backend":"reference"%' FROM models;
+----
+true
+
+# Predictions should be close to the linear target on training data
+query I
+SELECT
+	duckboost_evaluate_agg(m.model, t.y, [t.x1, t.x2], MAP {'metric': 'rmse'}) < 1.5
+FROM models m, train t;
+----
+true
+
+# Scalar predict works
+query I
+SELECT duckboost_predict((SELECT model FROM models), [10.0, 1.0]) IS NOT NULL;
+----
+true
+
+# Native train availability depends on DUCKBOOST_WITH_* linking; see build_info.test
+# (default build) and native_train.test (linked build).
+
+# Import tags a duckboost JSON model with another backend name
+query I
+SELECT duckboost_import('lightgbm', (SELECT model FROM models)) LIKE '%"backend":"lightgbm"%';
+----
+true

@@ -1,0 +1,56 @@
+# name: test/sql/duckboost/macros.test
+# description: duckboost_fit / duckboost_score table macros
+# group: [duckboost]
+
+require duckboost
+
+statement ok
+CREATE TABLE train AS
+SELECT
+	i::DOUBLE AS x1,
+	(i % 3)::DOUBLE AS x2,
+	(2.0 * i + 0.5 * (i % 3) + 1.0)::DOUBLE AS y
+FROM range(40) t(i);
+
+statement ok
+CREATE TABLE models AS
+FROM duckboost_fit(
+	'train',
+	y,
+	[x1, x2],
+	options := MAP {
+		'backend': 'reference',
+		'task': 'regression',
+		'n_estimators': '20',
+		'max_depth': '3',
+		'learning_rate': '0.2',
+		'feature_names': 'x1,x2'
+	}
+);
+
+query I
+SELECT model LIKE '%"backend":"reference"%' FROM models;
+----
+true
+
+query I
+SELECT
+	duckboost_evaluate_agg(m.model, t.y, [t.x1, t.x2], MAP {'metric': 'rmse'}) < 1.5
+FROM models m, train t;
+----
+true
+
+statement ok
+CREATE TABLE scored AS
+FROM duckboost_score((SELECT model FROM models), 'train', [x1, x2]);
+
+query I
+SELECT count(*) = 40 AND bool_and(prediction IS NOT NULL) FROM scored;
+----
+true
+
+query I
+SELECT count(*) = 40 AND bool_and(abs(s.prediction - duckboost_predict(m.model, [s.x1, s.x2])) < 1e-12)
+FROM scored s, models m;
+----
+true

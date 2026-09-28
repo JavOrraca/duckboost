@@ -1,0 +1,47 @@
+# name: test/sql/duckboost/build_info.test
+# description: duckboost_build_info and native trainer compile flags
+# group: [duckboost]
+
+require duckboost
+
+query III
+SELECT name, enabled, notes ILIKE '%xgboost%'
+FROM duckboost_build_info()
+WHERE name = 'DUCKBOOST_WITH_XGBOOST';
+----
+DUCKBOOST_WITH_XGBOOST	false	true
+
+query III
+SELECT name, enabled, notes ILIKE '%stub%'
+FROM duckboost_build_info()
+WHERE name = 'DUCKBOOST_NATIVE_STUB';
+----
+DUCKBOOST_NATIVE_STUB	false	true
+
+query I
+SELECT count(*) >= 10 FROM duckboost_build_info();
+----
+true
+
+# Default build: vendor backends are not trainable in-process
+query I
+SELECT training_supported FROM duckboost_backends() WHERE backend = 'reference';
+----
+true
+
+query I
+SELECT bool_or(training_supported) FROM duckboost_backends() WHERE backend != 'reference';
+----
+false
+
+query I
+SELECT enabled FROM duckboost_build_info() WHERE name = 'native_xgboost_linked';
+----
+false
+
+# Native path still unavailable without WITH_* flags
+statement error
+SELECT duckboost_train(y, [x], MAP {'backend': 'xgboost'})
+FROM (SELECT 1.0 AS y, 2.0 AS x);
+----
+<REGEX>:.*native training for backend 'xgboost'.*

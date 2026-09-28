@@ -1,0 +1,140 @@
+# name: test/sql/duckboost/import_dumps.test
+# description: Import XGBoost / LightGBM / CatBoost dumps into duckboost
+# group: [duckboost]
+
+require duckboost
+
+# --- XGBoost dump_model JSON (yes = feature < threshold) ---
+statement ok
+CREATE TABLE xgb_models AS
+SELECT duckboost_import(
+	'xgboost',
+	(SELECT content FROM read_text('test/sql/duckboost/data/xgb_stump.json')),
+	MAP {'task': 'regression', 'base_score': '0.0'}
+) AS model;
+
+query I
+SELECT duckboost_predict(model, [1.0]) FROM xgb_models;
+----
+0.5
+
+query I
+SELECT duckboost_predict(model, [2.0]) FROM xgb_models;
+----
+-0.25
+
+query I
+SELECT model LIKE '%"backend":"xgboost"%' FROM xgb_models;
+----
+true
+
+statement ok
+CREATE TABLE xgb_rows AS SELECT 1.0 AS f0 UNION ALL SELECT 2.0;
+
+statement ok
+SET VARIABLE xgb_sql = (
+	SELECT duckboost_to_sql(model, 'xgb_rows', ['f0'], MAP {'separate_trees': 'false', 'prediction_alias': 'pred'})
+	FROM xgb_models
+);
+
+statement ok
+CREATE TABLE xgb_sql_pred AS SELECT pred::DOUBLE AS pred FROM query(getvariable('xgb_sql'));
+
+query I
+SELECT count(*) = 2 AND bool_and(abs(n.pred - s.pred) < 1e-12)
+FROM (
+	SELECT duckboost_predict(model, [f0]) AS pred FROM xgb_models, xgb_rows
+) n
+JOIN xgb_sql_pred s ON abs(n.pred - s.pred) < 1e-12;
+----
+true
+
+# --- LightGBM save_model text (left = feature <= threshold) ---
+statement ok
+CREATE TABLE lgb_models AS
+SELECT duckboost_import(
+	'lightgbm',
+	(SELECT content FROM read_text('test/sql/duckboost/data/lgb_stump.txt'))
+) AS model;
+
+query I
+SELECT duckboost_predict(model, [1.5]) FROM lgb_models;
+----
+0.5
+
+query I
+SELECT duckboost_predict(model, [1.5000001]) FROM lgb_models;
+----
+-0.25
+
+query I
+SELECT model LIKE '%"backend":"lightgbm"%' FROM lgb_models;
+----
+true
+
+statement ok
+CREATE TABLE lgb_shrink AS
+SELECT duckboost_import(
+	'lightgbm',
+	(SELECT content FROM read_text('test/sql/duckboost/data/lgb_shrink.txt'))
+) AS model;
+
+query I
+SELECT duckboost_predict(model, []) FROM lgb_shrink;
+----
+0.2
+
+# --- CatBoost save_model JSON (True when feature > border) ---
+statement ok
+CREATE TABLE cb_models AS
+SELECT duckboost_import(
+	'catboost',
+	(SELECT content FROM read_text('test/sql/duckboost/data/catboost_stump.json'))
+) AS model;
+
+query I
+SELECT abs(duckboost_predict(model, [1.0]) - 0.6) < 1e-12 FROM cb_models;
+----
+true
+
+query I
+SELECT abs(duckboost_predict(model, [2.0]) - (-0.15)) < 1e-12 FROM cb_models;
+----
+true
+
+query I
+SELECT model LIKE '%"backend":"catboost"%' FROM cb_models;
+----
+true
+
+statement ok
+CREATE TABLE cb_depth2 AS
+SELECT duckboost_import(
+	'catboost',
+	(SELECT content FROM read_text('test/sql/duckboost/data/catboost_depth2.json'))
+) AS model;
+
+query IIII
+SELECT
+	duckboost_predict(model, [-1.0, -1.0]),
+	duckboost_predict(model, [-1.0, 1.0]),
+	duckboost_predict(model, [1.0, -1.0]),
+	duckboost_predict(model, [1.0, 1.0])
+FROM cb_depth2;
+----
+10.0	20.0	30.0	40.0
+
+# Native duckboost JSON still importable / retaggable
+query I
+SELECT duckboost_import('xgboost', (SELECT model FROM xgb_models)) LIKE '%"backend":"xgboost"%';
+----
+true
+
+# Unsupported catboost split type
+statement error
+SELECT duckboost_import(
+	'catboost',
+	'{"oblivious_trees":[{"leaf_values":[0.0,1.0],"splits":[{"split_type":"UnknownSplit","border":0.0,"float_feature_index":0}]}],"features_info":{"float_features":[]}}'
+);
+----
+<REGEX>:.*split_type.*not supported.*

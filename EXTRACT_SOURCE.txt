@@ -1,0 +1,4 @@
+Extracted from /Users/javierorraca/Documents/GitHub/duckdb-2-alpha-testing
+Source path: extension/duckboost
+Git describe: a72a1bb4e8
+Date: 2026-09-28T06:25:10Z

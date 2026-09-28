@@ -1,0 +1,87 @@
+# name: test/sql/duckboost/to_sql.test
+# description: duckboost SQL export matches in-process predictions
+# group: [duckboost]
+
+require duckboost
+
+statement ok
+CREATE TABLE train AS
+SELECT
+	i::DOUBLE AS x1,
+	((i * 3) % 5)::DOUBLE AS x2,
+	(1.5 * i - 0.25 * ((i * 3) % 5))::DOUBLE AS y
+FROM range(30) t(i);
+
+statement ok
+CREATE TABLE score AS
+SELECT * FROM train WHERE x1 >= 20;
+
+statement ok
+CREATE TABLE models AS
+SELECT duckboost_train(
+	y,
+	[x1, x2],
+	MAP {
+		'backend': 'reference',
+		'task': 'regression',
+		'n_estimators': '8',
+		'max_depth': '2',
+		'learning_rate': '0.3',
+		'feature_names': 'x1,x2'
+	}
+) AS model
+FROM train;
+
+statement ok
+CREATE TABLE native_pred AS
+SELECT
+	s.x1,
+	s.x2,
+	duckboost_predict(m.model, [s.x1, s.x2]) AS pred
+FROM score s, models m;
+
+statement ok
+CREATE TABLE sql_text AS
+SELECT duckboost_to_sql(
+	model,
+	'score',
+	['x1', 'x2'],
+	MAP {'separate_trees': 'true', 'prediction_alias': 'pred'}
+) AS q
+FROM models;
+
+# Exported SQL should mention separate tree columns
+query I
+SELECT q ILIKE '%tree_0%' AND q ILIKE '%_duckboost_trees%' FROM sql_text;
+----
+true
+
+statement ok
+SET VARIABLE duckboost_sql = (SELECT q FROM sql_text);
+
+statement ok
+CREATE TABLE sql_pred AS
+SELECT * FROM query(getvariable('duckboost_sql'));
+
+# Max absolute difference between native predict and SQL export should be tiny
+query I
+SELECT max(abs(n.pred - s.pred)) < 1e-8
+FROM (
+	SELECT pred, row_number() OVER (ORDER BY x1, x2) AS rn FROM native_pred
+) n
+JOIN (
+	SELECT pred, row_number() OVER () AS rn FROM sql_pred
+) s USING (rn);
+----
+true
+
+# Compact (non-separated) SQL export also works
+query I
+SELECT duckboost_to_sql(
+	(SELECT model FROM models),
+	'score',
+	['x1', 'x2'],
+	MAP {'separate_trees': 'false'}
+) ILIKE '%CASE WHEN%';
+----
+true

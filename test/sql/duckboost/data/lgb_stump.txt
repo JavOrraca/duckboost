@@ -1,0 +1,29 @@
+tree
+version=v3
+num_class=1
+num_tree_per_iteration=1
+label_index=0
+max_feature_idx=0
+objective=regression
+feature_names=x1
+feature_infos=none
+
+Tree=0
+num_leaves=2
+num_cat=0
+split_feature=0
+split_gain=1
+threshold=1.5
+decision_type=2
+left_child=-1
+right_child=-2
+leaf_value=0.5 -0.25
+leaf_weight=1 1
+leaf_count=1 1
+internal_value=0
+internal_weight=0
+internal_count=2
+is_linear=0
+shrinkage=1
+
+end of trees
