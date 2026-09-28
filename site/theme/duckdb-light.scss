@@ -1,0 +1,38 @@
+/*-- scss:defaults --*/
+
+// Light-mode values from duckdb.org (:root). The bright #fff100 yellow is unreadable on white,
+// so accents use yellow-30 (#998b00), which duckdb.org uses for light-mode link hovers.
+$duckdb-yellow: #998b00;
+$duckdb-link-underline: #b2b2b2;
+$duckdb-sidebar-selected-bg: #f2f2f2;
+
+$body-bg: #fcfcfc;
+$body-color: #0d0d0d;
+$body-emphasis-color: #050505;
+$text-muted: #666666;
+$border-color: #e6e6e6;
+
+$primary: $duckdb-yellow;
+$secondary: #666666;
+$link-color: $body-color;
+$link-hover-color: $duckdb-yellow;
+
+$code-color: #0d0d0d;
+$code-bg: #f2f2f2;
+$code-block-bg: #f2f2f2;
+$code-block-border-left: false;
+
+$sidebar-bg: $body-bg;
+$sidebar-fg: #262626;
+$sidebar-hl: $duckdb-yellow;
+$toc-color: #666666;
+$toc-active-border: $duckdb-yellow;
+$toc-inactive-border: #e6e6e6;
+
+$input-bg: #ffffff;
+$input-color: $body-color;
+$input-border-color: #d9d9d9;
+
+$table-color: $body-color;
+$table-border-color: $border-color;
+$hr-border-color: $border-color;
