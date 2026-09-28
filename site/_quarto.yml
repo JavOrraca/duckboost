@@ -30,9 +30,11 @@ website:
 
 format:
   html:
+    # dark is listed first so it is the default; the toggle switches to light.
     theme:
-      light: flatly
-      dark: darkly
+      dark: [darkly, theme/duckdb-common.scss, theme/duckdb-dark.scss]
+      light: [cosmo, theme/duckdb-common.scss, theme/duckdb-light.scss]
+    highlight-style: github
     toc: true
     code-copy: true
 

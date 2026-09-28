@@ -1,0 +1,37 @@
+/*-- scss:defaults --*/
+
+// Dark-mode values from duckdb.org (html.darkmode).
+$duckdb-yellow: #fff100;
+$duckdb-link-underline: #808080;
+$duckdb-sidebar-selected-bg: #1a1a1a;
+
+$body-bg: #0d0d0d;
+$body-color: #f2f2f2;
+$body-emphasis-color: #ffffff;
+$text-muted: #b2b2b2;
+$border-color: #333333;
+
+$primary: $duckdb-yellow;
+$secondary: #b2b2b2;
+$link-color: $body-color;
+$link-hover-color: $duckdb-yellow;
+
+$code-color: #f2f2f2;
+$code-bg: #1a1a1a;
+$code-block-bg: #1a1a1a;
+$code-block-border-left: false;
+
+$sidebar-bg: $body-bg;
+$sidebar-fg: #d9d9d9;
+$sidebar-hl: $duckdb-yellow;
+$toc-color: #808080;
+$toc-active-border: $duckdb-yellow;
+$toc-inactive-border: #333333;
+
+$input-bg: #1a1a1a;
+$input-color: $body-color;
+$input-border-color: #4c4c4c;
+
+$table-color: $body-color;
+$table-border-color: $border-color;
+$hr-border-color: $border-color;
