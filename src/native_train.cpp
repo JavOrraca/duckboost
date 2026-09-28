@@ -123,18 +123,7 @@ idx_t InferClassCount(const vector<double> &y, const TrainOptions &options) {
 	if (options.task != BoostTask::MULTICLASS) {
 		return 1;
 	}
-	double max_label = -1;
-	for (auto v : y) {
-		if (!std::isfinite(v) || v < 0) {
-			throw InvalidInputException("duckboost: multiclass labels must be finite non-negative class indices");
-		}
-		max_label = MaxValue(max_label, v);
-	}
-	auto inferred = static_cast<idx_t>(max_label) + 1;
-	if (inferred < 2) {
-		throw InvalidInputException("duckboost: multiclass train requires at least 2 classes");
-	}
-	return inferred;
+	return ResolveClassCount(y, options);
 }
 
 #if defined(DUCKBOOST_WITH_XGBOOST) && !defined(DUCKBOOST_NATIVE_STUB)

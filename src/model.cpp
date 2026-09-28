@@ -331,6 +331,11 @@ TrainOptions TrainOptions::FromMap(const unordered_map<string, string> &options)
 			result.min_samples_leaf = static_cast<idx_t>(std::stoull(value));
 		} else if (key == "max_bins") {
 			result.max_bins = static_cast<idx_t>(std::stoull(value));
+		} else if (key == "n_classes" || key == "num_class" || key == "num_classes") {
+			result.n_classes = static_cast<idx_t>(std::stoull(value));
+			if (result.n_classes < 2) {
+				throw InvalidInputException("duckboost: n_classes must be >= 2");
+			}
 		} else if (key == "feature_names") {
 			result.feature_names = StringUtil::Split(value, ',');
 			for (auto &name : result.feature_names) {

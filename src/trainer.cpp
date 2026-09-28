@@ -281,6 +281,80 @@ idx_t BuildTreeBinary(BoostTree &tree, const vector<vector<double>> &x, const ve
 	return node_idx;
 }
 
+double EvalTreeRow(const BoostTree &tree, const vector<double> &row) {
+	idx_t node_idx = 0;
+	while (true) {
+		auto &node = tree.nodes[node_idx];
+		if (node.is_leaf) {
+			return node.value;
+		}
+		node_idx = row[node.feature] < node.threshold ? node.left : node.right;
+	}
+}
+
+//! Softmax cross-entropy boosting: each round fits one Newton tree per class (layout [round][class]).
+void TrainMulticlass(BoostModel &model, const vector<double> &y, const vector<vector<double>> &x,
+                     const vector<idx_t> &all_rows, const TrainOptions &options) {
+	const idx_t n_classes = ResolveClassCount(y, options);
+	const idx_t n_rows = y.size();
+	model.n_classes = n_classes;
+	model.base_score = 0;
+
+	vector<idx_t> labels(n_rows);
+	vector<double> counts(n_classes, 0);
+	for (idx_t i = 0; i < n_rows; i++) {
+		labels[i] = static_cast<idx_t>(y[i]);
+		counts[labels[i]] += 1;
+	}
+	model.base_scores.resize(n_classes);
+	for (idx_t c = 0; c < n_classes; c++) {
+		auto prior = std::max(counts[c] / static_cast<double>(n_rows), 1e-6);
+		model.base_scores[c] = std::log(prior);
+	}
+
+	// raw[i * n_classes + c] is the running score of class c for row i
+	vector<double> raw(n_rows * n_classes);
+	for (idx_t i = 0; i < n_rows; i++) {
+		for (idx_t c = 0; c < n_classes; c++) {
+			raw[i * n_classes + c] = model.base_scores[c];
+		}
+	}
+
+	vector<double> proba(n_rows * n_classes);
+	vector<double> gradients(n_rows);
+	vector<double> hessians(n_rows);
+	for (idx_t round = 0; round < options.n_estimators; round++) {
+		for (idx_t i = 0; i < n_rows; i++) {
+			auto *scores = &raw[i * n_classes];
+			double max_score = *std::max_element(scores, scores + n_classes);
+			double sum = 0;
+			for (idx_t c = 0; c < n_classes; c++) {
+				proba[i * n_classes + c] = std::exp(scores[c] - max_score);
+				sum += proba[i * n_classes + c];
+			}
+			for (idx_t c = 0; c < n_classes; c++) {
+				proba[i * n_classes + c] /= sum;
+			}
+		}
+		// All trees of a round use the probabilities from the start of the round.
+		vector<BoostTree> round_trees(n_classes);
+		for (idx_t c = 0; c < n_classes; c++) {
+			for (idx_t i = 0; i < n_rows; i++) {
+				double p = proba[i * n_classes + c];
+				gradients[i] = p - (labels[i] == c ? 1.0 : 0.0);
+				hessians[i] = std::max(p * (1.0 - p), 1e-6);
+			}
+			BuildTreeBinary(round_trees[c], x, gradients, hessians, all_rows, 0, options);
+		}
+		for (idx_t c = 0; c < n_classes; c++) {
+			for (idx_t i = 0; i < n_rows; i++) {
+				raw[i * n_classes + c] += options.learning_rate * EvalTreeRow(round_trees[c], x[i]);
+			}
+			model.trees.push_back(std::move(round_trees[c]));
+		}
+	}
+}
+
 BoostModel TrainReference(const vector<double> &y, const vector<vector<double>> &x, const TrainOptions &options) {
 	if (y.size() != x.size()) {
 		throw InvalidInputException("duckboost: y/x row count mismatch");
@@ -340,6 +414,11 @@ BoostModel TrainReference(const vector<double> &y, const vector<vector<double>> 
 		return model;
 	}
 
+	if (options.task == BoostTask::MULTICLASS) {
+		TrainMulticlass(model, y, x, all_rows, options);
+		return model;
+	}
+
 	// binary logistic boosting
 	for (auto label : y) {
 		if (!(label == 0.0 || label == 1.0)) {
@@ -377,6 +456,30 @@ BoostModel TrainReference(const vector<double> &y, const vector<vector<double>> 
 }
 
 } // namespace
+
+idx_t ResolveClassCount(const vector<double> &y, const TrainOptions &options) {
+	double max_label = -1;
+	for (auto v : y) {
+		if (!std::isfinite(v) || v < 0 || v != std::floor(v)) {
+			throw InvalidInputException(
+			    "duckboost: multiclass labels must be integer class indices 0, 1, ..., n_classes - 1 (got %s)",
+			    std::to_string(v));
+		}
+		max_label = std::max(max_label, v);
+	}
+	auto n_classes = static_cast<idx_t>(max_label) + 1;
+	if (options.n_classes > 0) {
+		if (n_classes > options.n_classes) {
+			throw InvalidInputException("duckboost: multiclass label %llu is out of range for n_classes = %llu",
+			                            (unsigned long long)(n_classes - 1), (unsigned long long)options.n_classes);
+		}
+		n_classes = options.n_classes;
+	}
+	if (n_classes < 2) {
+		throw InvalidInputException("duckboost: multiclass train requires at least 2 classes");
+	}
+	return n_classes;
+}
 
 BoostModel TrainModel(const vector<double> &y, const vector<vector<double>> &x, const TrainOptions &options) {
 	if (options.backend == BoostBackend::REFERENCE) {
