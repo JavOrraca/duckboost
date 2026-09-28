@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 173.21 200" width="173.21" height="200">
+<defs>
+<symbol id="duck" viewBox="0 0 100 100">
+  <path fill="#fff100" d="M6 46 C14 52 22 56 34 56 L52 56
+    C50 50 47 44 47 36 C47 20 58 10 71 10 C84 10 93 20 93 32
+    C93 40 90 45 85 49 C94 55 97 64 95 74 C92 88 78 94 58 94
+    L40 94 C20 94 8 84 6 68 C5 60 5 52 6 46 Z"/>
+  <path fill="#fff100" d="M88 26 C95 23 100 24 100 28 C100 33 95 37 88 38 Z"/>
+  <circle cx="75" cy="27" r="4.2" fill="#0d0d0d"/>
+</symbol>
+</defs>
+<polygon points="86.60,8.08 7.00,54.04 7.00,145.96 86.60,191.92 166.21,145.96 166.21,54.04" fill="#0d0d0d" stroke="#fff100" stroke-width="14" stroke-linejoin="round"/>
+<use href="#duck" x="31.60" y="45.00" width="110.00" height="110.00"/>
+</svg>
