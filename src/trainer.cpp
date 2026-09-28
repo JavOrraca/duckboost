@@ -18,8 +18,6 @@ struct SplitCandidate {
 	idx_t feature = 0;
 	double threshold = 0;
 	double gain = -std::numeric_limits<double>::infinity();
-	double left_value = 0;
-	double right_value = 0;
 };
 
 double Mean(const vector<double> &values) {
@@ -33,181 +31,99 @@ double Mean(const vector<double> &values) {
 	return sum / static_cast<double>(values.size());
 }
 
-vector<double> UniqueSorted(vector<double> values) {
-	std::sort(values.begin(), values.end());
-	values.erase(std::unique(values.begin(), values.end()), values.end());
-	return values;
-}
-
-vector<double> CandidateThresholds(const vector<double> &column, idx_t max_bins) {
-	auto unique = UniqueSorted(column);
+//! Midpoints between distinct values of an ascending column, thinned to at most max_bins quantiles.
+vector<double> CandidateThresholds(const vector<double> &sorted_column, idx_t max_bins) {
+	vector<double> unique;
+	for (auto v : sorted_column) {
+		if (unique.empty() || v != unique.back()) {
+			unique.push_back(v);
+		}
+	}
 	if (unique.size() <= 1) {
 		return {};
 	}
+	vector<double> thresholds;
 	if (unique.size() <= max_bins + 1) {
-		vector<double> thresholds;
 		for (idx_t i = 0; i + 1 < unique.size(); i++) {
 			thresholds.push_back(0.5 * (unique[i] + unique[i + 1]));
 		}
 		return thresholds;
 	}
-	vector<double> thresholds;
 	for (idx_t b = 1; b <= max_bins; b++) {
 		double q = static_cast<double>(b) / static_cast<double>(max_bins + 1);
 		idx_t idx = static_cast<idx_t>(q * static_cast<double>(unique.size() - 1));
 		if (idx + 1 < unique.size()) {
-			thresholds.push_back(0.5 * (unique[idx] + unique[idx + 1]));
+			auto threshold = 0.5 * (unique[idx] + unique[idx + 1]);
+			if (thresholds.empty() || threshold != thresholds.back()) {
+				thresholds.push_back(threshold);
+			}
 		}
 	}
-	return UniqueSorted(std::move(thresholds));
+	return thresholds;
 }
 
-double LeafValueRegression(const vector<double> &residuals, const vector<idx_t> &rows) {
-	if (rows.empty()) {
-		return 0;
-	}
-	double sum = 0;
-	for (auto row : rows) {
-		sum += residuals[row];
-	}
-	return sum / static_cast<double>(rows.size());
-}
-
-double LeafValueBinary(const vector<double> &gradients, const vector<double> &hessians, const vector<idx_t> &rows) {
-	double g = 0;
-	double h = 0;
-	for (auto row : rows) {
-		g += gradients[row];
-		h += hessians[row];
-	}
+double NewtonLeaf(double g, double h) {
 	if (h <= 1e-12) {
 		return 0;
 	}
 	return -g / h;
 }
 
-double SplitGainRegression(const vector<double> &residuals, const vector<idx_t> &left, const vector<idx_t> &right) {
-	vector<idx_t> all = left;
-	all.insert(all.end(), right.begin(), right.end());
-	auto left_mean = LeafValueRegression(residuals, left);
-	auto right_mean = LeafValueRegression(residuals, right);
-	auto parent = LeafValueRegression(residuals, all);
-	double left_sse = 0;
-	double right_sse = 0;
-	double parent_sse = 0;
-	for (auto row : left) {
-		auto left_err = residuals[row] - left_mean;
-		auto parent_err = residuals[row] - parent;
-		left_sse += left_err * left_err;
-		parent_sse += parent_err * parent_err;
+double NewtonScore(double g, double h) {
+	if (h <= 1e-12) {
+		return 0;
 	}
-	for (auto row : right) {
-		auto right_err = residuals[row] - right_mean;
-		auto parent_err = residuals[row] - parent;
-		right_sse += right_err * right_err;
-		parent_sse += parent_err * parent_err;
-	}
-	return parent_sse - (left_sse + right_sse);
+	return (g * g) / h;
 }
 
-double SplitGainBinary(const vector<double> &gradients, const vector<double> &hessians, const vector<idx_t> &left,
-                       const vector<idx_t> &right) {
-	auto score = [&](const vector<idx_t> &rows) {
-		double g = 0;
-		double h = 0;
-		for (auto row : rows) {
-			g += gradients[row];
-			h += hessians[row];
-		}
-		if (h <= 1e-12) {
-			return 0.0;
-		}
-		return (g * g) / h;
-	};
-	vector<idx_t> all = left;
-	all.insert(all.end(), right.begin(), right.end());
-	return score(left) + score(right) - score(all);
-}
-
-SplitCandidate FindBestSplitRegression(const vector<vector<double>> &x, const vector<double> &residuals,
-                                       const vector<idx_t> &rows, const TrainOptions &options) {
+//! Second-order split search. Squared error is the special case g = prediction - y, h = 1.
+SplitCandidate FindBestSplit(const vector<vector<double>> &x, const vector<double> &gradients,
+                             const vector<double> &hessians, const vector<idx_t> &rows, const TrainOptions &options) {
 	SplitCandidate best;
-	if (rows.size() < 2 * options.min_samples_leaf) {
+	const idx_t n = rows.size();
+	if (n < 2 * options.min_samples_leaf) {
 		return best;
 	}
+	double g_total = 0;
+	double h_total = 0;
+	for (auto row : rows) {
+		g_total += gradients[row];
+		h_total += hessians[row];
+	}
+	const double parent_score = NewtonScore(g_total, h_total);
+
 	idx_t n_features = x.empty() ? 0 : x[0].size();
+	vector<std::pair<double, idx_t>> sorted(n);
+	vector<idx_t> order(n);
+	vector<double> column(n);
 	for (idx_t f = 0; f < n_features; f++) {
-		vector<double> column;
-		column.reserve(rows.size());
-		for (auto row : rows) {
-			column.push_back(x[row][f]);
+		for (idx_t i = 0; i < n; i++) {
+			sorted[i] = {x[rows[i]][f], rows[i]};
+		}
+		std::sort(sorted.begin(), sorted.end());
+		for (idx_t i = 0; i < n; i++) {
+			column[i] = sorted[i].first;
+			order[i] = sorted[i].second;
 		}
 		auto thresholds = CandidateThresholds(column, options.max_bins);
+		// Sweep: rows with value < threshold form a growing prefix of the sorted order.
+		idx_t pos = 0;
+		double g_left = 0;
+		double h_left = 0;
 		for (auto threshold : thresholds) {
-			vector<idx_t> left;
-			vector<idx_t> right;
-			left.reserve(rows.size());
-			right.reserve(rows.size());
-			for (auto row : rows) {
-				if (x[row][f] < threshold) {
-					left.push_back(row);
-				} else {
-					right.push_back(row);
-				}
+			while (pos < n && column[pos] < threshold) {
+				g_left += gradients[order[pos]];
+				h_left += hessians[order[pos]];
+				pos++;
 			}
-			if (left.size() < options.min_samples_leaf || right.size() < options.min_samples_leaf) {
+			if (pos < options.min_samples_leaf || n - pos < options.min_samples_leaf) {
 				continue;
 			}
-			auto gain = SplitGainRegression(residuals, left, right);
+			auto gain = NewtonScore(g_left, h_left) + NewtonScore(g_total - g_left, h_total - h_left) - parent_score;
 			if (gain > best.gain) {
 				best.gain = gain;
 				best.feature = f;
 				best.threshold = threshold;
-				best.left_value = LeafValueRegression(residuals, left);
-				best.right_value = LeafValueRegression(residuals, right);
-			}
-		}
-	}
-	return best;
-}
-
-SplitCandidate FindBestSplitBinary(const vector<vector<double>> &x, const vector<double> &gradients,
-                                   const vector<double> &hessians, const vector<idx_t> &rows,
-                                   const TrainOptions &options) {
-	SplitCandidate best;
-	if (rows.size() < 2 * options.min_samples_leaf) {
-		return best;
-	}
-	idx_t n_features = x.empty() ? 0 : x[0].size();
-	for (idx_t f = 0; f < n_features; f++) {
-		vector<double> column;
-		column.reserve(rows.size());
-		for (auto row : rows) {
-			column.push_back(x[row][f]);
-		}
-		auto thresholds = CandidateThresholds(column, options.max_bins);
-		for (auto threshold : thresholds) {
-			vector<idx_t> left;
-			vector<idx_t> right;
-			left.reserve(rows.size());
-			right.reserve(rows.size());
-			for (auto row : rows) {
-				if (x[row][f] < threshold) {
-					left.push_back(row);
-				} else {
-					right.push_back(row);
-				}
-			}
-			if (left.size() < options.min_samples_leaf || right.size() < options.min_samples_leaf) {
-				continue;
-			}
-			auto gain = SplitGainBinary(gradients, hessians, left, right);
-			if (gain > best.gain) {
-				best.gain = gain;
-				best.feature = f;
-				best.threshold = threshold;
-				best.left_value = LeafValueBinary(gradients, hessians, left);
-				best.right_value = LeafValueBinary(gradients, hessians, right);
 			}
 		}
 	}
@@ -222,14 +138,23 @@ idx_t BuildLeaf(BoostTree &tree, double value) {
 	return tree.nodes.size() - 1;
 }
 
-idx_t BuildTreeRegression(BoostTree &tree, const vector<vector<double>> &x, const vector<double> &residuals,
-                          const vector<idx_t> &rows, idx_t depth, const TrainOptions &options) {
+idx_t BuildTree(BoostTree &tree, const vector<vector<double>> &x, const vector<double> &gradients,
+                const vector<double> &hessians, const vector<idx_t> &rows, idx_t depth, const TrainOptions &options) {
+	auto leaf_value = [&]() {
+		double g = 0;
+		double h = 0;
+		for (auto row : rows) {
+			g += gradients[row];
+			h += hessians[row];
+		}
+		return NewtonLeaf(g, h);
+	};
 	if (depth >= options.max_depth || rows.size() < 2 * options.min_samples_leaf) {
-		return BuildLeaf(tree, LeafValueRegression(residuals, rows));
+		return BuildLeaf(tree, leaf_value());
 	}
-	auto split = FindBestSplitRegression(x, residuals, rows, options);
+	auto split = FindBestSplit(x, gradients, hessians, rows, options);
 	if (!std::isfinite(split.gain) || split.gain <= 1e-12) {
-		return BuildLeaf(tree, LeafValueRegression(residuals, rows));
+		return BuildLeaf(tree, leaf_value());
 	}
 	vector<idx_t> left_rows;
 	vector<idx_t> right_rows;
@@ -246,39 +171,83 @@ idx_t BuildTreeRegression(BoostTree &tree, const vector<vector<double>> &x, cons
 	node.threshold = split.threshold;
 	auto node_idx = tree.nodes.size();
 	tree.nodes.push_back(node);
-	tree.nodes[node_idx].left = BuildTreeRegression(tree, x, residuals, left_rows, depth + 1, options);
-	tree.nodes[node_idx].right = BuildTreeRegression(tree, x, residuals, right_rows, depth + 1, options);
+	tree.nodes[node_idx].left = BuildTree(tree, x, gradients, hessians, left_rows, depth + 1, options);
+	tree.nodes[node_idx].right = BuildTree(tree, x, gradients, hessians, right_rows, depth + 1, options);
 	return node_idx;
 }
 
-idx_t BuildTreeBinary(BoostTree &tree, const vector<vector<double>> &x, const vector<double> &gradients,
-                      const vector<double> &hessians, const vector<idx_t> &rows, idx_t depth,
-                      const TrainOptions &options) {
-	if (depth >= options.max_depth || rows.size() < 2 * options.min_samples_leaf) {
-		return BuildLeaf(tree, LeafValueBinary(gradients, hessians, rows));
+double EvalTreeRow(const BoostTree &tree, const vector<double> &row) {
+	idx_t node_idx = 0;
+	while (true) {
+		auto &node = tree.nodes[node_idx];
+		if (node.is_leaf) {
+			return node.value;
+		}
+		node_idx = row[node.feature] < node.threshold ? node.left : node.right;
 	}
-	auto split = FindBestSplitBinary(x, gradients, hessians, rows, options);
-	if (!std::isfinite(split.gain) || split.gain <= 1e-12) {
-		return BuildLeaf(tree, LeafValueBinary(gradients, hessians, rows));
+}
+
+//! Softmax cross-entropy boosting: each round fits one Newton tree per class (layout [round][class]).
+void TrainMulticlass(BoostModel &model, const vector<double> &y, const vector<vector<double>> &x,
+                     const vector<idx_t> &all_rows, const TrainOptions &options) {
+	const idx_t n_classes = ResolveClassCount(y, options);
+	const idx_t n_rows = y.size();
+	model.n_classes = n_classes;
+	model.base_score = 0;
+
+	vector<idx_t> labels(n_rows);
+	vector<double> counts(n_classes, 0);
+	for (idx_t i = 0; i < n_rows; i++) {
+		labels[i] = static_cast<idx_t>(y[i]);
+		counts[labels[i]] += 1;
 	}
-	vector<idx_t> left_rows;
-	vector<idx_t> right_rows;
-	for (auto row : rows) {
-		if (x[row][split.feature] < split.threshold) {
-			left_rows.push_back(row);
-		} else {
-			right_rows.push_back(row);
+	model.base_scores.resize(n_classes);
+	for (idx_t c = 0; c < n_classes; c++) {
+		auto prior = std::max(counts[c] / static_cast<double>(n_rows), 1e-6);
+		model.base_scores[c] = std::log(prior);
+	}
+
+	// raw[i * n_classes + c] is the running score of class c for row i
+	vector<double> raw(n_rows * n_classes);
+	for (idx_t i = 0; i < n_rows; i++) {
+		for (idx_t c = 0; c < n_classes; c++) {
+			raw[i * n_classes + c] = model.base_scores[c];
 		}
 	}
-	TreeNode node;
-	node.is_leaf = false;
-	node.feature = split.feature;
-	node.threshold = split.threshold;
-	auto node_idx = tree.nodes.size();
-	tree.nodes.push_back(node);
-	tree.nodes[node_idx].left = BuildTreeBinary(tree, x, gradients, hessians, left_rows, depth + 1, options);
-	tree.nodes[node_idx].right = BuildTreeBinary(tree, x, gradients, hessians, right_rows, depth + 1, options);
-	return node_idx;
+
+	vector<double> proba(n_rows * n_classes);
+	vector<double> gradients(n_rows);
+	vector<double> hessians(n_rows);
+	for (idx_t round = 0; round < options.n_estimators; round++) {
+		for (idx_t i = 0; i < n_rows; i++) {
+			auto *scores = &raw[i * n_classes];
+			double max_score = *std::max_element(scores, scores + n_classes);
+			double sum = 0;
+			for (idx_t c = 0; c < n_classes; c++) {
+				proba[i * n_classes + c] = std::exp(scores[c] - max_score);
+				sum += proba[i * n_classes + c];
+			}
+			for (idx_t c = 0; c < n_classes; c++) {
+				proba[i * n_classes + c] /= sum;
+			}
+		}
+		// All trees of a round use the probabilities from the start of the round.
+		vector<BoostTree> round_trees(n_classes);
+		for (idx_t c = 0; c < n_classes; c++) {
+			for (idx_t i = 0; i < n_rows; i++) {
+				double p = proba[i * n_classes + c];
+				gradients[i] = p - (labels[i] == c ? 1.0 : 0.0);
+				hessians[i] = std::max(p * (1.0 - p), 1e-6);
+			}
+			BuildTree(round_trees[c], x, gradients, hessians, all_rows, 0, options);
+		}
+		for (idx_t c = 0; c < n_classes; c++) {
+			for (idx_t i = 0; i < n_rows; i++) {
+				raw[i * n_classes + c] += options.learning_rate * EvalTreeRow(round_trees[c], x[i]);
+			}
+			model.trees.push_back(std::move(round_trees[c]));
+		}
+	}
 }
 
 BoostModel TrainReference(const vector<double> &y, const vector<vector<double>> &x, const TrainOptions &options) {
@@ -313,63 +282,41 @@ BoostModel TrainReference(const vector<double> &y, const vector<vector<double>> 
 	vector<idx_t> all_rows(y.size());
 	std::iota(all_rows.begin(), all_rows.end(), 0);
 
-	if (options.task == BoostTask::REGRESSION) {
-		model.base_score = Mean(y);
-		vector<double> prediction(y.size(), model.base_score);
-		for (idx_t round = 0; round < options.n_estimators; round++) {
-			vector<double> residuals(y.size());
-			for (idx_t i = 0; i < y.size(); i++) {
-				residuals[i] = y[i] - prediction[i];
-			}
-			BoostTree tree;
-			BuildTreeRegression(tree, x, residuals, all_rows, 0, options);
-			for (idx_t i = 0; i < y.size(); i++) {
-				prediction[i] += options.learning_rate * [&]() {
-					idx_t node_idx = 0;
-					while (true) {
-						auto &node = tree.nodes[node_idx];
-						if (node.is_leaf) {
-							return node.value;
-						}
-						node_idx = x[i][node.feature] < node.threshold ? node.left : node.right;
-					}
-				}();
-			}
-			model.trees.push_back(std::move(tree));
-		}
+	if (options.task == BoostTask::MULTICLASS) {
+		TrainMulticlass(model, y, x, all_rows, options);
 		return model;
 	}
 
-	// binary logistic boosting
-	for (auto label : y) {
-		if (!(label == 0.0 || label == 1.0)) {
-			throw InvalidInputException("duckboost: binary task requires labels in {0, 1}");
+	if (options.task == BoostTask::BINARY) {
+		for (auto label : y) {
+			if (!(label == 0.0 || label == 1.0)) {
+				throw InvalidInputException("duckboost: binary task requires labels in {0, 1}");
+			}
 		}
+		double pos = Mean(y);
+		pos = std::min(1.0 - 1e-6, std::max(1e-6, pos));
+		model.base_score = std::log(pos / (1.0 - pos));
+	} else {
+		model.base_score = Mean(y);
 	}
-	double pos = Mean(y);
-	pos = std::min(1.0 - 1e-6, std::max(1e-6, pos));
-	model.base_score = std::log(pos / (1.0 - pos));
+
 	vector<double> raw(y.size(), model.base_score);
+	vector<double> gradients(y.size());
+	vector<double> hessians(y.size(), 1.0);
 	for (idx_t round = 0; round < options.n_estimators; round++) {
-		vector<double> gradients(y.size());
-		vector<double> hessians(y.size());
 		for (idx_t i = 0; i < y.size(); i++) {
-			double p = 1.0 / (1.0 + std::exp(-raw[i]));
-			gradients[i] = p - y[i];
-			hessians[i] = std::max(p * (1.0 - p), 1e-6);
+			if (options.task == BoostTask::BINARY) {
+				double p = 1.0 / (1.0 + std::exp(-raw[i]));
+				gradients[i] = p - y[i];
+				hessians[i] = std::max(p * (1.0 - p), 1e-6);
+			} else {
+				gradients[i] = raw[i] - y[i];
+			}
 		}
 		BoostTree tree;
-		BuildTreeBinary(tree, x, gradients, hessians, all_rows, 0, options);
+		BuildTree(tree, x, gradients, hessians, all_rows, 0, options);
 		for (idx_t i = 0; i < y.size(); i++) {
-			idx_t node_idx = 0;
-			while (true) {
-				auto &node = tree.nodes[node_idx];
-				if (node.is_leaf) {
-					raw[i] += options.learning_rate * node.value;
-					break;
-				}
-				node_idx = x[i][node.feature] < node.threshold ? node.left : node.right;
-			}
+			raw[i] += options.learning_rate * EvalTreeRow(tree, x[i]);
 		}
 		model.trees.push_back(std::move(tree));
 	}
@@ -377,6 +324,30 @@ BoostModel TrainReference(const vector<double> &y, const vector<vector<double>> 
 }
 
 } // namespace
+
+idx_t ResolveClassCount(const vector<double> &y, const TrainOptions &options) {
+	double max_label = -1;
+	for (auto v : y) {
+		if (!std::isfinite(v) || v < 0 || v != std::floor(v)) {
+			throw InvalidInputException(
+			    "duckboost: multiclass labels must be integer class indices 0, 1, ..., n_classes - 1 (got %s)",
+			    std::to_string(v));
+		}
+		max_label = std::max(max_label, v);
+	}
+	auto n_classes = static_cast<idx_t>(max_label) + 1;
+	if (options.n_classes > 0) {
+		if (n_classes > options.n_classes) {
+			throw InvalidInputException("duckboost: multiclass label %llu is out of range for n_classes = %llu",
+			                            (unsigned long long)(n_classes - 1), (unsigned long long)options.n_classes);
+		}
+		n_classes = options.n_classes;
+	}
+	if (n_classes < 2) {
+		throw InvalidInputException("duckboost: multiclass train requires at least 2 classes");
+	}
+	return n_classes;
+}
 
 BoostModel TrainModel(const vector<double> &y, const vector<vector<double>> &x, const TrainOptions &options) {
 	if (options.backend == BoostBackend::REFERENCE) {

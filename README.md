@@ -120,8 +120,13 @@ FROM duckboost_fit('train', y, [x1, x2], options := MAP {'n_estimators': '20', '
 
 SELECT * FROM duckboost_score((SELECT model FROM models), 'test', [x1, x2]);
 
--- Multiclass: predict returns argmax class index; predict_proba returns softmax LIST
-SELECT duckboost_predict(model, features), duckboost_predict_proba(model, features);
+-- Multiclass: labels are class indices 0 .. n_classes - 1 (n_classes inferred, or set 'n_classes')
+CREATE TABLE mc_models AS
+SELECT duckboost_train(label, features, MAP {'task': 'multiclass', 'n_estimators': '20'}) AS model
+FROM mc_train;
+
+-- predict returns argmax class index; predict_proba returns softmax LIST
+SELECT duckboost_predict(model, features), duckboost_predict_proba(model, features) FROM mc_models, mc_test;
 ```
 
 ### Example datasets
@@ -154,7 +159,7 @@ The [example datasets vignette](https://javorraca.github.io/duckboost/vignettes/
 | `lightgbm` | Optional (`DUCKBOOST_WITH_LIGHTGBM`) | `booster_.save_model()` text | Yes |
 | `catboost` | Optional (`DUCKBOOST_WITH_CATBOOST`) | `save_model(..., format='json')` float trees | Yes |
 
-Native XGBoost / LightGBM linking is opt-in via `DUCKBOOST_WITH_*`. Linked builds train in-process through the vendor C API, then convert the dump into duckboost JSON. CatBoost remains import-only. Prefer `duckboost_import()` when you already train outside DuckDB; use `backend='reference'` for dependency-free experiments.
+Native XGBoost / LightGBM linking is opt-in via `DUCKBOOST_WITH_*`. Linked builds train in-process through the vendor C API, then convert the dump into duckboost JSON. CatBoost remains import-only. Prefer `duckboost_import()` when you already train outside DuckDB; use `backend='reference'` for dependency-free experiments. [Use cases and choosing a trainer](https://javorraca.github.io/duckboost/use-cases.html) compares the three paths in detail.
 
 ### Dump import notes
 
@@ -189,7 +194,7 @@ For `task: "multiclass"`, `n_classes >= 2`, optional `base_scores` holds per-cla
 
 - **Layout**: standalone community extension ([extension-template](https://github.com/duckdb/extension-template)) so optional vendor ML libraries stay out of core DuckDB builds. The `duckdb` submodule tracks DuckDB 2.0 (`v2.0-cyanoptera`).
 - **SQL export** mirrors orbital's `separate_trees` idea so DuckDB can evaluate ensemble members as independent columns.
-- **Reference trainer** is a didactic histogram/quantile-split GBDT (squared error + logistic). It is not a replacement for production XGBoost/LightGBM/CatBoost quality, but it exercises the full train → evaluate → SQL path.
+- **Reference trainer** is a didactic histogram/quantile-split GBDT (squared error, logistic, and softmax for multiclass). It is not a replacement for production XGBoost/LightGBM/CatBoost quality, but it exercises the full train → evaluate → SQL path.
 - **Table macros** `duckboost_fit` / `duckboost_score` wrap `duckboost_train` / `duckboost_predict` with `query_table` for a compact SQL workflow.
 
 ## Roadmap
