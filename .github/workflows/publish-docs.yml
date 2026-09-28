@@ -1,5 +1,6 @@
-# Publish the Quarto site in site/ to GitHub Pages.
-# Executed examples are stored in site/_freeze, so this job does not run SQL
+# Publish the Quarto site in site/ with GitHub's Pages deployment.
+# Pages is configured to build and deploy from GitHub Actions (not a gh-pages branch).
+# Executed examples are stored in site/_freeze, so rendering does not run SQL
 # and does not build DuckDB.
 name: Publish docs
 on:
@@ -8,21 +9,49 @@ on:
       - main
     paths:
       - 'site/**'
+      - '.github/workflows/publish-docs.yml'
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
 
 jobs:
-  publish:
-    name: Render and publish
+  build:
+    name: Render site
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: quarto-dev/quarto-actions/setup@v2
-      - uses: quarto-dev/quarto-actions/publish@v2
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Quarto
+        uses: quarto-dev/quarto-actions/setup@v2
         with:
-          target: gh-pages
+          version: "1.10.18"
+
+      - name: Render Quarto project
+        uses: quarto-dev/quarto-actions/render@v2
+        with:
           path: site
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site/_site
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
