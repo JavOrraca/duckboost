@@ -1,0 +1,409 @@
+---
+title: "Example datasets: iris and penguins"
+---
+
+The repository ships two small, well-known datasets under [`data/`](https://github.com/JavOrraca/duckboost/tree/main/data) so you can try duckboost on real measurements instead of synthetic lines:
+
+| File | Rows | Columns | Source |
+| --- | --- | --- | --- |
+| [`data/iris.csv`](https://github.com/JavOrraca/duckboost/blob/main/data/iris.csv) | 150 | 4 measurements (cm) and `species` | R's `datasets::iris` (Fisher, 1936; Anderson, 1935) |
+| [`data/penguins.csv`](https://github.com/JavOrraca/duckboost/blob/main/data/penguins.csv) | 344 | species, island, 4 measurements, sex, year | [palmerpenguins](https://allisonhorst.github.io/palmerpenguins/) (Horst, Hill, and Gorman, 2020), CC0 |
+
+The iris column names are snake_case (`sepal_length` rather than R's `Sepal.Length`) to match the penguins file. The values are R's, which differ from the UCI copy in rows 35 and 38. The penguins file is the package's `penguins` table, with missing values written as `NA`.
+
+The examples read the files with relative paths, so run them from the repository root with `./build/release/duckdb -unsigned`. Each block on this page starts a new in-memory database. Blocks that continue an earlier step silently recreate the tables that step made.
+
+Species is the obvious target for both datasets, but the reference trainer only fits regression and binary tasks today. The examples below use binary and regression targets instead.
+
+## Iris
+
+### Load and look
+
+```{python}
+#| echo: false
+#| output: asis
+from _helpers.duckrun import show
+
+show("""
+LOAD duckboost;
+CREATE TABLE iris AS FROM read_csv('data/iris.csv');
+SELECT
+  species,
+  count(*) AS n,
+  round(avg(sepal_length), 3) AS sepal_length,
+  round(avg(sepal_width), 3) AS sepal_width,
+  round(avg(petal_length), 3) AS petal_length,
+  round(avg(petal_width), 3) AS petal_width
+FROM iris
+GROUP BY species
+ORDER BY species;
+""")
+```
+
+### Split into train and test
+
+duckboost has no split function; you split with SQL before training. This split is stratified by species and deterministic: within each species, rows are ranked by their measurements and every fifth row is held out. That gives 40 training and 10 test rows per species, and the same split on every run.
+
+```{python}
+#| echo: false
+#| output: asis
+IRIS_SPLIT = """
+LOAD duckboost;
+CREATE TABLE iris AS FROM read_csv('data/iris.csv');
+CREATE TABLE iris_split AS
+SELECT
+  *,
+  CASE
+    WHEN row_number() OVER (
+      PARTITION BY species
+      ORDER BY sepal_length, sepal_width, petal_length, petal_width
+    ) % 5 = 0 THEN 'test'
+    ELSE 'train'
+  END AS split
+FROM iris;
+"""
+
+show(IRIS_SPLIT + """
+SELECT split, species, count(*) AS n
+FROM iris_split
+GROUP BY ALL
+ORDER BY ALL;
+""")
+```
+
+### Binary: virginica or versicolor?
+
+Setosa is separable from the other two species by petal size alone, so this task drops it and asks the harder question: is a flower *virginica* rather than *versicolor*? The binary task needs a 0/1 label.
+
+```{python}
+#| echo: false
+#| output: asis
+show(setup=IRIS_SPLIT, sql="""
+CREATE TABLE iris_binary AS
+SELECT
+  (species = 'virginica')::DOUBLE AS is_virginica,
+  [sepal_length, sepal_width, petal_length, petal_width] AS features,
+  split
+FROM iris_split
+WHERE species <> 'setosa';
+
+CREATE TABLE models AS
+SELECT duckboost_train(
+  is_virginica, features,
+  MAP {
+    'task': 'binary',
+    'n_estimators': '30',
+    'max_depth': '2',
+    'learning_rate': '0.3',
+    'feature_names': 'sepal_length,sepal_width,petal_length,petal_width'
+  }
+) AS model
+FROM iris_binary
+WHERE split = 'train';
+
+SELECT
+  round(duckboost_evaluate_agg(model, is_virginica, features, MAP {'metric': 'accuracy'}), 3) AS test_accuracy,
+  round(duckboost_evaluate_agg(model, is_virginica, features, MAP {'metric': 'logloss'}), 3) AS test_logloss
+FROM models, iris_binary
+WHERE split = 'test';
+""")
+```
+
+`duckboost_predict` returns the probability of the positive class for a binary model:
+
+```{python}
+#| echo: false
+#| output: asis
+show(setup=IRIS_SPLIT + """
+CREATE TABLE iris_binary AS
+SELECT
+  species,
+  (species = 'virginica')::DOUBLE AS is_virginica,
+  [sepal_length, sepal_width, petal_length, petal_width] AS features,
+  split
+FROM iris_split
+WHERE species <> 'setosa';
+CREATE TABLE models AS
+SELECT duckboost_train(
+  is_virginica, features,
+  MAP {'task': 'binary', 'n_estimators': '30', 'max_depth': '2', 'learning_rate': '0.3'}
+) AS model
+FROM iris_binary
+WHERE split = 'train';
+""", sql="""
+SELECT
+  species,
+  features,
+  round(duckboost_predict(model, features), 3) AS p_virginica
+FROM models, iris_binary
+WHERE split = 'test'
+ORDER BY p_virginica
+LIMIT 6;
+""")
+```
+
+### Regression with one-hot species
+
+To predict `petal_width` from the other measurements and the species, turn `species` into numeric columns first. duckboost only accepts `DOUBLE` features, so one-hot encoding is a comparison cast to `DOUBLE` per level. Trees do not need a reference level dropped, so every level gets a column.
+
+The baseline column is the RMSE of always predicting the training mean.
+
+```{python}
+#| echo: false
+#| output: asis
+show(setup=IRIS_SPLIT, sql="""
+CREATE TABLE iris_reg AS
+SELECT
+  petal_width,
+  [
+    sepal_length,
+    sepal_width,
+    petal_length,
+    (species = 'setosa')::DOUBLE,
+    (species = 'versicolor')::DOUBLE,
+    (species = 'virginica')::DOUBLE
+  ] AS features,
+  split
+FROM iris_split;
+
+CREATE TABLE models AS
+SELECT duckboost_train(
+  petal_width, features,
+  MAP {
+    'n_estimators': '50',
+    'max_depth': '3',
+    'learning_rate': '0.1',
+    'feature_names': 'sepal_length,sepal_width,petal_length,species_setosa,species_versicolor,species_virginica'
+  }
+) AS model
+FROM iris_reg
+WHERE split = 'train';
+
+SELECT
+  round(duckboost_evaluate_agg(model, petal_width, features, MAP {'metric': 'rmse'}), 3) AS test_rmse,
+  round(sqrt(avg(power(
+    petal_width - (SELECT avg(petal_width) FROM iris_reg WHERE split = 'train'), 2
+  ))), 3) AS baseline_rmse
+FROM models, iris_reg
+WHERE split = 'test';
+""")
+```
+
+## Palmer penguins
+
+### Load and handle missing values
+
+The file writes missing values as `NA`, so pass `nullstr = 'NA'`. Two penguins have no measurements, and eleven (including those two) have no recorded sex.
+
+```{python}
+#| echo: false
+#| output: asis
+show("""
+LOAD duckboost;
+CREATE TABLE penguins AS FROM read_csv('data/penguins.csv', nullstr = 'NA');
+SELECT
+  count(*) AS n,
+  count(*) - count(bill_length_mm) AS missing_measurements,
+  count(*) - count(sex) AS missing_sex,
+  count(*) FILTER (WHERE sex IS NOT NULL AND bill_length_mm IS NOT NULL) AS complete_rows
+FROM penguins;
+""")
+```
+
+```{python}
+#| echo: false
+#| output: asis
+show("""
+LOAD duckboost;
+CREATE TABLE penguins AS FROM read_csv('data/penguins.csv', nullstr = 'NA');
+SELECT species, island, count(*) AS n, round(avg(body_mass_g)) AS avg_body_mass_g
+FROM penguins
+GROUP BY ALL
+ORDER BY ALL;
+""")
+```
+
+### Preprocess and split three ways
+
+This step keeps the 333 complete rows, one-hot encodes `species`, `island`, and `sex`, and splits train / validation / test (about 60 / 20 / 20). The split is stratified by species and sex. The validation rows are for choosing hyperparameters, so the test rows only score the final model.
+
+```{python}
+#| echo: false
+#| output: asis
+PENGUINS_PREP = """
+LOAD duckboost;
+CREATE TABLE penguins AS FROM read_csv('data/penguins.csv', nullstr = 'NA');
+CREATE TABLE penguins_prep AS
+SELECT
+  species,
+  body_mass_g::DOUBLE AS body_mass_g,
+  (sex = 'male')::DOUBLE AS is_male,
+  bill_length_mm,
+  bill_depth_mm,
+  flipper_length_mm::DOUBLE AS flipper_length_mm,
+  (species = 'Adelie')::DOUBLE AS species_adelie,
+  (species = 'Chinstrap')::DOUBLE AS species_chinstrap,
+  (species = 'Gentoo')::DOUBLE AS species_gentoo,
+  (island = 'Biscoe')::DOUBLE AS island_biscoe,
+  (island = 'Dream')::DOUBLE AS island_dream,
+  (island = 'Torgersen')::DOUBLE AS island_torgersen,
+  CASE row_number() OVER (
+      PARTITION BY species, sex
+      ORDER BY bill_length_mm, bill_depth_mm, flipper_length_mm, body_mass_g, island, year
+    ) % 5
+    WHEN 0 THEN 'test'
+    WHEN 1 THEN 'validation'
+    ELSE 'train'
+  END AS split
+FROM penguins
+WHERE sex IS NOT NULL AND bill_length_mm IS NOT NULL;
+"""
+
+show(PENGUINS_PREP + """
+SELECT split, count(*) AS n
+FROM penguins_prep
+GROUP BY split
+ORDER BY split;
+""")
+```
+
+### Regression: body mass
+
+Predict `body_mass_g` from the bill and flipper measurements, sex, species, and island. The model is trained on train and validation together, since nothing is tuned here.
+
+```{python}
+#| echo: false
+#| output: asis
+show(setup=PENGUINS_PREP, sql="""
+CREATE TABLE mass AS
+SELECT
+  body_mass_g,
+  [
+    bill_length_mm, bill_depth_mm, flipper_length_mm, is_male,
+    species_adelie, species_chinstrap, species_gentoo,
+    island_biscoe, island_dream, island_torgersen
+  ] AS features,
+  split
+FROM penguins_prep;
+
+CREATE TABLE models AS
+SELECT duckboost_train(
+  body_mass_g, features,
+  MAP {'n_estimators': '100', 'max_depth': '3', 'learning_rate': '0.1'}
+) AS model
+FROM mass
+WHERE split <> 'test';
+
+SELECT
+  round(duckboost_evaluate_agg(model, body_mass_g, features, MAP {'metric': 'rmse'}), 1) AS test_rmse_g,
+  round(duckboost_evaluate_agg(model, body_mass_g, features, MAP {'metric': 'mae'}), 1) AS test_mae_g,
+  round(sqrt(avg(power(
+    body_mass_g - (SELECT avg(body_mass_g) FROM mass WHERE split <> 'test'), 2
+  ))), 1) AS baseline_rmse_g
+FROM models, mass
+WHERE split = 'test';
+""")
+```
+
+### Binary with a grid search: sex
+
+Predict whether a penguin is male from its measurements and species. duckboost has no built-in tuner, but `duckboost_train` is an aggregate, so a grid search is a cross join with a table of hyperparameter values and a `GROUP BY`. Options that should not vary, such as `n_estimators` here, stay fixed in the `MAP`.
+
+Each grid row trains one model on the training rows and is scored on the validation rows:
+
+```{python}
+#| echo: false
+#| output: asis
+PENGUINS_SEX = PENGUINS_PREP + """
+CREATE TABLE sex AS
+SELECT
+  is_male,
+  [
+    bill_length_mm, bill_depth_mm, flipper_length_mm, body_mass_g,
+    species_adelie, species_chinstrap, species_gentoo
+  ] AS features,
+  split
+FROM penguins_prep;
+"""
+
+PENGUINS_GRID = """
+CREATE TABLE grid AS
+SELECT depth::VARCHAR AS max_depth, lr::VARCHAR AS learning_rate
+FROM (VALUES (1), (2), (3)) d(depth), (VALUES (0.1), (0.3)) l(lr);
+
+CREATE TABLE models AS
+SELECT
+  max_depth,
+  learning_rate,
+  duckboost_train(
+    is_male, features,
+    MAP {
+      'task': 'binary',
+      'n_estimators': '50',
+      'max_depth': max_depth,
+      'learning_rate': learning_rate
+    }
+  ) AS model
+FROM sex, grid
+WHERE split = 'train'
+GROUP BY max_depth, learning_rate;
+
+CREATE TABLE tuning AS
+SELECT
+  max_depth,
+  learning_rate,
+  round(duckboost_evaluate_agg(model, is_male, features, MAP {'metric': 'logloss'}), 4) AS validation_logloss,
+  round(duckboost_evaluate_agg(model, is_male, features, MAP {'metric': 'accuracy'}), 3) AS validation_accuracy
+FROM models, sex
+WHERE split = 'validation'
+GROUP BY max_depth, learning_rate, model;
+"""
+
+show(setup=PENGUINS_SEX, sql=PENGUINS_GRID + """
+FROM tuning ORDER BY validation_logloss;
+""")
+```
+
+Refit the combination with the lowest validation log loss on train and validation together, then score the untouched test rows once:
+
+```{python}
+#| echo: false
+#| output: asis
+show(setup=PENGUINS_SEX + PENGUINS_GRID, sql="""
+CREATE TABLE best AS
+FROM tuning ORDER BY validation_logloss LIMIT 1;
+
+CREATE TABLE final AS
+SELECT
+  best.max_depth,
+  best.learning_rate,
+  duckboost_train(
+    is_male, features,
+    MAP {
+      'task': 'binary',
+      'n_estimators': '50',
+      'max_depth': best.max_depth,
+      'learning_rate': best.learning_rate
+    }
+  ) AS model
+FROM sex, best
+WHERE split <> 'test'
+GROUP BY best.max_depth, best.learning_rate;
+
+SELECT
+  max_depth,
+  learning_rate,
+  round(duckboost_evaluate_agg(model, is_male, features, MAP {'metric': 'accuracy'}), 3) AS test_accuracy,
+  round(duckboost_evaluate_agg(model, is_male, features, MAP {'metric': 'logloss'}), 4) AS test_logloss
+FROM final, sex
+WHERE split = 'test'
+GROUP BY max_depth, learning_rate, model;
+""")
+```
+
+## Citations
+
+- Anderson, E. (1935). The irises of the Gaspé Peninsula. *Bulletin of the American Iris Society*, 59, 2–5.
+- Fisher, R. A. (1936). The use of multiple measurements in taxonomic problems. *Annals of Eugenics*, 7(2), 179–188.
+- Horst, A. M., Hill, A. P., and Gorman, K. B. (2020). palmerpenguins: Palmer Archipelago (Antarctica) penguin data. R package version 0.1.0. <https://allisonhorst.github.io/palmerpenguins/>. doi:10.5281/zenodo.3960218.
+- Gorman, K. B., Williams, T. D., and Fraser, W. R. (2014). Ecological sexual dimorphism and environmental variability within a community of Antarctic penguins (genus *Pygoscelis*). *PLoS ONE*, 9(3), e90081. doi:10.1371/journal.pone.0090081.

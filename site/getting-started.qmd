@@ -70,3 +70,8 @@ FROM models, train
 LIMIT 5;
 """)
 ```
+
+## Next steps
+
+- [Example datasets: iris and penguins](vignettes/datasets.qmd) trains binary and regression models on the two CSV files in `data/`, with one-hot encoding, a train/validation/test split, and a grid search in SQL.
+- [Train, predict, export](vignettes/train-predict-export.qmd) exports a model to plain SQL and scores it without the extension.
