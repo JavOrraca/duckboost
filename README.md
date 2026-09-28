@@ -124,6 +124,27 @@ SELECT * FROM duckboost_score((SELECT model FROM models), 'test', [x1, x2]);
 SELECT duckboost_predict(model, features), duckboost_predict_proba(model, features);
 ```
 
+### Example datasets
+
+[`data/`](data/) ships two small datasets to learn with. Run from the repository root:
+
+```sql
+LOAD duckboost;
+CREATE TABLE iris AS FROM read_csv('data/iris.csv');                          -- 150 rows
+CREATE TABLE penguins AS FROM read_csv('data/penguins.csv', nullstr = 'NA');  -- 344 rows
+
+-- Binary: is a (non-setosa) iris virginica?
+CREATE TABLE iris_binary AS
+SELECT (species = 'virginica')::DOUBLE AS y,
+       [sepal_length, sepal_width, petal_length, petal_width] AS features
+FROM iris WHERE species <> 'setosa';
+
+SELECT duckboost_evaluate_agg(model, y, features, MAP {'metric': 'accuracy'})
+FROM (SELECT duckboost_train(y, features, MAP {'task': 'binary'}) AS model FROM iris_binary), iris_binary;
+```
+
+The [example datasets vignette](https://javorraca.github.io/duckboost/vignettes/datasets.html) walks through train/validation/test splits, one-hot encoding, regression, binary classification, and a SQL grid search on both files.
+
 ### Backends
 
 | Backend | Train in this build | Dump import | Predict / evaluate / `to_sql` |

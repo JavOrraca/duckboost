@@ -19,6 +19,8 @@ website:
         contents:
           - text: Train, predict, export
             href: vignettes/train-predict-export.qmd
+          - text: "Example datasets: iris and penguins"
+            href: vignettes/datasets.qmd
           - text: Import model dumps
             href: vignettes/import-dumps.qmd
       - text: SQL reference

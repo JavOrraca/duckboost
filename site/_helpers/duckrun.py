@@ -70,10 +70,15 @@ def parse_json_sets(text: str) -> list:
     return sets
 
 
-def show(sql: str) -> None:
-    """Print the SQL and its box output as Markdown."""
+def show(sql: str, setup: str = "") -> None:
+    """Print the SQL and its box output as Markdown.
+
+    `setup` runs first in the same database but is not printed. It must not
+    produce output (DDL only), or that output would appear under `sql`.
+    """
     sql = sql.strip()
-    output = run_sql(sql).rstrip()
+    setup = setup.strip()
+    output = run_sql(f"{setup}\n{sql}" if setup else sql).rstrip()
     print(f"```sql\n{sql}\n```\n")
     print("```text")
     print(output)
