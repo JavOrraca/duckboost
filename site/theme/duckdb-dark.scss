@@ -2,7 +2,7 @@
 
 // Dark-mode values from duckdb.org (html.darkmode).
 $duckdb-yellow: #fff100;
-$duckdb-link-underline: #808080;
+$duckdb-link-underline: #fff100;
 $duckdb-sidebar-selected-bg: #1a1a1a;
 
 $body-bg: #0d0d0d;
@@ -16,8 +16,8 @@ $secondary: #b2b2b2;
 $link-color: $body-color;
 $link-hover-color: $duckdb-yellow;
 
-$code-color: #f2f2f2;
-$code-bg: #1a1a1a;
+$code-color: #0d0d0d;
+$code-bg: #fff100;
 $code-block-bg: #1a1a1a;
 $code-block-border-left: false;
 

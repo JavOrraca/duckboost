@@ -19,6 +19,7 @@ $breadcrumb-padding-x: 0;
 main a,
 .quarto-title-block a {
   text-decoration-color: $duckdb-link-underline;
+  text-decoration-thickness: 2px;
   text-underline-offset: 0.2em;
   transition: color 0.3s, text-decoration-color 0.3s;
 
@@ -49,6 +50,13 @@ pre:not(.sourceCode) {
 
 code {
   font-size: 0.875em;
+}
+
+// Inline code is dark text on DuckDB yellow in both modes; keep it readable inside links and on hover.
+:not(pre) > code:not(.sourceCode),
+a:hover > code:not(.sourceCode) {
+  color: $code-color;
+  background-color: $code-bg;
 }
 
 .table {
