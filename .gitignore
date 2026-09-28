@@ -5,3 +5,4 @@ build/
 *.duckdb.wal
 .DS_Store
 vcpkg_installed/
+.cache/
