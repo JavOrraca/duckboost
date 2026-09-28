@@ -32,7 +32,7 @@ unordered_map<string, string> MapVectorToOptions(Vector &map_vector, idx_t row) 
 		return options;
 	}
 	UnifiedVectorFormat map_format;
-	map_vector.ToUnifiedFormat(map_vector.size(), map_format);
+	map_vector.ToUnifiedFormat(map_format);
 	auto map_idx = map_format.sel->get_index(row);
 	if (!map_format.validity.RowIsValid(map_idx)) {
 		return options;
@@ -43,8 +43,8 @@ unordered_map<string, string> MapVectorToOptions(Vector &map_vector, idx_t row) 
 	auto &values = MapVector::GetValues(map_vector);
 	UnifiedVectorFormat key_format;
 	UnifiedVectorFormat value_format;
-	keys.ToUnifiedFormat(ListVector::GetListSize(map_vector), key_format);
-	values.ToUnifiedFormat(ListVector::GetListSize(map_vector), value_format);
+	keys.ToUnifiedFormat(key_format);
+	values.ToUnifiedFormat(value_format);
 	auto key_data = UnifiedVectorFormat::GetData<string_t>(key_format);
 	auto value_data = UnifiedVectorFormat::GetData<string_t>(value_format);
 	for (idx_t i = 0; i < entry.length; i++) {
@@ -60,16 +60,16 @@ unordered_map<string, string> MapVectorToOptions(Vector &map_vector, idx_t row) 
 
 vector<double> ReadFeatureList(Vector &list_vector, idx_t row) {
 	UnifiedVectorFormat list_format;
-	list_vector.ToUnifiedFormat(list_vector.size(), list_format);
+	list_vector.ToUnifiedFormat(list_format);
 	auto list_idx = list_format.sel->get_index(row);
 	if (!list_format.validity.RowIsValid(list_idx)) {
 		throw InvalidInputException("duckboost: feature list cannot be NULL");
 	}
 	auto list_data = UnifiedVectorFormat::GetData<list_entry_t>(list_format);
 	auto entry = list_data[list_idx];
-	auto &child = ListVector::GetEntry(list_vector);
+	auto &child = ListVector::GetChild(list_vector);
 	UnifiedVectorFormat child_format;
-	child.ToUnifiedFormat(ListVector::GetListSize(list_vector), child_format);
+	child.ToUnifiedFormat(child_format);
 	auto child_data = UnifiedVectorFormat::GetData<double>(child_format);
 	vector<double> features;
 	features.reserve(entry.length);
@@ -85,16 +85,16 @@ vector<double> ReadFeatureList(Vector &list_vector, idx_t row) {
 
 vector<string> ReadVarcharList(Vector &list_vector, idx_t row) {
 	UnifiedVectorFormat list_format;
-	list_vector.ToUnifiedFormat(list_vector.size(), list_format);
+	list_vector.ToUnifiedFormat(list_format);
 	auto list_idx = list_format.sel->get_index(row);
 	if (!list_format.validity.RowIsValid(list_idx)) {
 		return {};
 	}
 	auto list_data = UnifiedVectorFormat::GetData<list_entry_t>(list_format);
 	auto entry = list_data[list_idx];
-	auto &child = ListVector::GetEntry(list_vector);
+	auto &child = ListVector::GetChild(list_vector);
 	UnifiedVectorFormat child_format;
-	child.ToUnifiedFormat(ListVector::GetListSize(list_vector), child_format);
+	child.ToUnifiedFormat(child_format);
 	auto child_data = UnifiedVectorFormat::GetData<string_t>(child_format);
 	vector<string> values;
 	values.reserve(entry.length);
@@ -149,11 +149,11 @@ void TrainUpdate(Vector inputs[], AggregateInputData &, idx_t input_count, Vecto
 	auto &y_vector = inputs[0];
 	auto &x_vector = inputs[1];
 	UnifiedVectorFormat y_format;
-	y_vector.ToUnifiedFormat(count, y_format);
+	y_vector.ToUnifiedFormat(y_format);
 	auto y_data = UnifiedVectorFormat::GetData<double>(y_format);
 
 	UnifiedVectorFormat state_format;
-	state_vector.ToUnifiedFormat(count, state_format);
+	state_vector.ToUnifiedFormat(state_format);
 	auto states = UnifiedVectorFormat::GetData<TrainState *>(state_format);
 
 	for (idx_t i = 0; i < count; i++) {
@@ -176,8 +176,8 @@ void TrainUpdate(Vector inputs[], AggregateInputData &, idx_t input_count, Vecto
 void TrainCombine(Vector &source, Vector &target, AggregateInputData &, idx_t count) {
 	UnifiedVectorFormat source_format;
 	UnifiedVectorFormat target_format;
-	source.ToUnifiedFormat(count, source_format);
-	target.ToUnifiedFormat(count, target_format);
+	source.ToUnifiedFormat(source_format);
+	target.ToUnifiedFormat(target_format);
 	auto source_states = UnifiedVectorFormat::GetData<TrainState *>(source_format);
 	auto target_states = UnifiedVectorFormat::GetData<TrainState *>(target_format);
 	for (idx_t i = 0; i < count; i++) {
@@ -199,7 +199,7 @@ void TrainCombine(Vector &source, Vector &target, AggregateInputData &, idx_t co
 void TrainFinalize(Vector &state_vector, AggregateFinalizeInputData &, Vector &result, idx_t count, idx_t offset) {
 	result.SetVectorType(VectorType::FLAT_VECTOR);
 	UnifiedVectorFormat state_format;
-	state_vector.ToUnifiedFormat(count, state_format);
+	state_vector.ToUnifiedFormat(state_format);
 	auto states = UnifiedVectorFormat::GetData<TrainState *>(state_format);
 	auto writer = FlatVector::Writer<string_t>(result, count, offset);
 	for (idx_t i = 0; i < count; i++) {
@@ -238,7 +238,7 @@ AggregateFunction GetTrainFunction(bool with_options) {
 void PredictFunction(DataChunk &args, ExpressionState &, Vector &result) {
 	auto count = args.size();
 	UnifiedVectorFormat model_format;
-	args.data[0].ToUnifiedFormat(count, model_format);
+	args.data[0].ToUnifiedFormat(model_format);
 	auto model_data = UnifiedVectorFormat::GetData<string_t>(model_format);
 	auto writer = FlatVector::Writer<double>(result, count);
 	for (idx_t i = 0; i < count; i++) {
@@ -257,7 +257,7 @@ void PredictProbaFunction(DataChunk &args, ExpressionState &, Vector &result) {
 	auto count = args.size();
 	result.SetVectorType(VectorType::FLAT_VECTOR);
 	UnifiedVectorFormat model_format;
-	args.data[0].ToUnifiedFormat(count, model_format);
+	args.data[0].ToUnifiedFormat(model_format);
 	auto model_data = UnifiedVectorFormat::GetData<string_t>(model_format);
 	auto writer = FlatVector::Writer<VectorListType<double>>(result, count);
 	for (idx_t i = 0; i < count; i++) {
@@ -280,8 +280,8 @@ void EvaluateFunction(DataChunk &args, ExpressionState &, Vector &result) {
 	auto count = args.size();
 	UnifiedVectorFormat model_format;
 	UnifiedVectorFormat y_format;
-	args.data[0].ToUnifiedFormat(count, model_format);
-	args.data[1].ToUnifiedFormat(count, y_format);
+	args.data[0].ToUnifiedFormat(model_format);
+	args.data[1].ToUnifiedFormat(y_format);
 	auto model_data = UnifiedVectorFormat::GetData<string_t>(model_format);
 	auto y_data = UnifiedVectorFormat::GetData<double>(y_format);
 	auto writer = FlatVector::Writer<double>(result, count);
@@ -366,12 +366,12 @@ struct EvaluateAggOperation {
 
 void EvaluateAggUpdate(Vector inputs[], AggregateInputData &, idx_t input_count, Vector &state_vector, idx_t count) {
 	UnifiedVectorFormat state_format;
-	state_vector.ToUnifiedFormat(count, state_format);
+	state_vector.ToUnifiedFormat(state_format);
 	auto states = UnifiedVectorFormat::GetData<EvaluateAggState *>(state_format);
 	UnifiedVectorFormat model_format;
 	UnifiedVectorFormat y_format;
-	inputs[0].ToUnifiedFormat(count, model_format);
-	inputs[1].ToUnifiedFormat(count, y_format);
+	inputs[0].ToUnifiedFormat(model_format);
+	inputs[1].ToUnifiedFormat(y_format);
 	auto model_data = UnifiedVectorFormat::GetData<string_t>(model_format);
 	auto y_data = UnifiedVectorFormat::GetData<double>(y_format);
 
@@ -401,8 +401,8 @@ void EvaluateAggUpdate(Vector inputs[], AggregateInputData &, idx_t input_count,
 void EvaluateAggCombine(Vector &source, Vector &target, AggregateInputData &, idx_t count) {
 	UnifiedVectorFormat source_format;
 	UnifiedVectorFormat target_format;
-	source.ToUnifiedFormat(count, source_format);
-	target.ToUnifiedFormat(count, target_format);
+	source.ToUnifiedFormat(source_format);
+	target.ToUnifiedFormat(target_format);
 	auto source_states = UnifiedVectorFormat::GetData<EvaluateAggState *>(source_format);
 	auto target_states = UnifiedVectorFormat::GetData<EvaluateAggState *>(target_format);
 	for (idx_t i = 0; i < count; i++) {
@@ -431,7 +431,7 @@ void EvaluateAggFinalize(Vector &state_vector, AggregateFinalizeInputData &, Vec
                          idx_t offset) {
 	result.SetVectorType(VectorType::FLAT_VECTOR);
 	UnifiedVectorFormat state_format;
-	state_vector.ToUnifiedFormat(count, state_format);
+	state_vector.ToUnifiedFormat(state_format);
 	auto states = UnifiedVectorFormat::GetData<EvaluateAggState *>(state_format);
 	auto writer = FlatVector::Writer<double>(result, count, offset);
 	for (idx_t i = 0; i < count; i++) {
@@ -475,8 +475,8 @@ void ToSQLFunction(DataChunk &args, ExpressionState &, Vector &result) {
 	auto count = args.size();
 	UnifiedVectorFormat model_format;
 	UnifiedVectorFormat table_format;
-	args.data[0].ToUnifiedFormat(count, model_format);
-	args.data[1].ToUnifiedFormat(count, table_format);
+	args.data[0].ToUnifiedFormat(model_format);
+	args.data[1].ToUnifiedFormat(table_format);
 	auto model_data = UnifiedVectorFormat::GetData<string_t>(model_format);
 	auto table_data = UnifiedVectorFormat::GetData<string_t>(table_format);
 	auto writer = FlatVector::Writer<string_t>(result, count);
@@ -502,8 +502,8 @@ void ImportFunction(DataChunk &args, ExpressionState &, Vector &result) {
 	auto count = args.size();
 	UnifiedVectorFormat backend_format;
 	UnifiedVectorFormat model_format;
-	args.data[0].ToUnifiedFormat(count, backend_format);
-	args.data[1].ToUnifiedFormat(count, model_format);
+	args.data[0].ToUnifiedFormat(backend_format);
+	args.data[1].ToUnifiedFormat(model_format);
 	auto backend_data = UnifiedVectorFormat::GetData<string_t>(backend_format);
 	auto model_data = UnifiedVectorFormat::GetData<string_t>(model_format);
 	auto writer = FlatVector::Writer<string_t>(result, count);
