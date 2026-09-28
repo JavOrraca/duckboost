@@ -1,13 +1,6 @@
 # Submit this file to https://github.com/duckdb/community-extensions as:
 #   extensions/duckboost/description.yml
-#
-# Publish surface (orphan branch, do not merge into v2.0-cyanoptera):
-#   branch: cursor/duckboost-community-oot-0c09
-#   repo:   JavOrraca/duckdb-2-alpha-testing
-#
-# Refresh after re-extracting:
-#   scripts/extract_duckboost_oot.sh /tmp/duckboost_oot
-#   # push orphan branch, then update repo.ref below
+# Targets DuckDB 2.0. Hold submission until DuckDB 2.0 is released.
 
 extension:
   name: duckboost
@@ -23,8 +16,8 @@ extension:
   requires_toolchains: "python3"
 
 repo:
-  github: JavOrraca/duckdb-2-alpha-testing
-  ref: 2bcdcae3d5fc8375b026d367da051a78416809db
+  github: JavOrraca/duckboost
+  ref: 561ec27ae1edb5c7f2529a1000c23a13f7389d14
 
 docs:
   hello_world: |
@@ -49,6 +42,3 @@ docs:
     Default community binaries use the built-in reference GBDT trainer plus dump import.
     Optional in-process XGBoost / LightGBM training requires rebuilding with
     `DUCKBOOST_WITH_XGBOOST` / `DUCKBOOST_WITH_LIGHTGBM`. CatBoost is import-only.
-
-    The community build surface is the orphan branch `cursor/duckboost-community-oot-0c09`
-    in this repository (extension-template layout). See `community/SUBMIT.md`.
