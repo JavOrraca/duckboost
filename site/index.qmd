@@ -1,0 +1,41 @@
+---
+title: "duckboost"
+---
+
+`duckboost` is an experimental [DuckDB](https://duckdb.org/) extension for **in-database gradient boosting**. It trains and scores tree ensembles inside DuckDB, imports dumps from XGBoost, LightGBM, and CatBoost, and exports the trees as ordinary SQL so scoring does not need the extension.
+
+## Why train inside the database
+
+[Orbital](https://posit-dev.github.io/orbital/) turns an already-trained Python or R pipeline into SQL so production scoring can stay in the warehouse. `duckboost` pulls the training step into DuckDB as well:
+
+1. Train with a selectable boosting backend.
+2. Measure fit quality in SQL.
+3. Export the trees with `duckboost_to_sql` (`CASE` expressions, optionally one column per tree).
+4. Score later with `duckboost_predict`, or run the exported SQL in any DuckDB session.
+
+The built-in **reference** backend is a small histogram-style gradient booster (squared error and logistic loss). It is there so the train → evaluate → SQL path works with no extra libraries. It is not a substitute for a production XGBoost, LightGBM, or CatBoost model. Prefer `duckboost_import()` when you already train outside DuckDB.
+
+## What you can do
+
+| Piece | What it does |
+| --- | --- |
+| Reference GBDT | `duckboost_train` with `backend = 'reference'` for regression and binary labels |
+| Dump import | `duckboost_import` for XGBoost `dump_model` JSON, LightGBM `save_model` text, and CatBoost `save_model` JSON |
+| In-process score | `duckboost_predict` and `duckboost_predict_proba` |
+| Metrics | `duckboost_evaluate` (one row) and `duckboost_evaluate_agg` (a whole table) |
+| SQL export | `duckboost_to_sql` writes a query that reproduces those predictions |
+
+Optional in-process XGBoost and LightGBM training is a compile-time flag (`DUCKBOOST_WITH_XGBOOST`, `DUCKBOOST_WITH_LIGHTGBM`). CatBoost has no public training C API, so it is import-only. A default `make` build ships the reference trainer and dump import, not the vendor libraries.
+
+## DuckDB 2.0
+
+This repository tracks the DuckDB 2.0 alpha (`v2.0-cyanoptera` in the `duckdb` submodule). The PyPI and CRAN `duckdb` packages are still 1.x and cannot load this extension. Build the shell in this repo and run examples with `build/release/duckdb`.
+
+Once DuckDB 2.0 is released, the plan is to publish the community descriptor so a released DuckDB can install it with:
+
+```sql
+INSTALL duckboost FROM community;
+LOAD duckboost;
+```
+
+Until then, follow [Getting started](getting-started.qmd) and load the local unsigned extension.

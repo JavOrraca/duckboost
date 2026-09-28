@@ -9,12 +9,14 @@ on:
       - 'docs/**'
       - 'LICENSE'
       - 'EXTRACT_SOURCE.txt'
+      - 'site/**'
   pull_request:
     paths-ignore:
       - '**.md'
       - 'docs/**'
       - 'LICENSE'
       - 'EXTRACT_SOURCE.txt'
+      - 'site/**'
   workflow_dispatch:
 
 concurrency:

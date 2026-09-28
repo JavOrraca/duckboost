@@ -1,0 +1,107 @@
+---
+title: "Train, predict, and export SQL"
+---
+
+This walkthrough fits a reference model, scores it, measures RMSE, and exports the trees. The exported query is then run in a second `build/release/duckdb` process whose script never calls `duckboost_*`.
+
+The holdout is `x1 >= 20` from a 30-row line. Predictions below are whatever this build's reference trainer produces; the check is that the SQL matches `duckboost_predict`, not a hand-written target.
+
+## Train, predict, evaluate
+
+```{python}
+#| echo: false
+#| output: asis
+from _helpers.duckrun import show
+
+show("""
+LOAD 'build/release/extension/duckboost/duckboost.duckdb_extension';
+CREATE TABLE train AS
+SELECT
+  i::DOUBLE AS x1,
+  ((i * 3) % 5)::DOUBLE AS x2,
+  (1.5 * i - 0.25 * ((i * 3) % 5))::DOUBLE AS y
+FROM range(30) t(i);
+CREATE TABLE score AS
+SELECT x1, x2, y FROM train WHERE x1 >= 20 ORDER BY x1, x2;
+CREATE TABLE models AS
+SELECT duckboost_train(
+  y, [x1, x2],
+  MAP {
+    'backend': 'reference',
+    'task': 'regression',
+    'n_estimators': '6',
+    'max_depth': '2',
+    'learning_rate': '0.3',
+    'feature_names': 'x1,x2'
+  }
+) AS model
+FROM train;
+SELECT s.x1, s.x2, duckboost_predict(m.model, [s.x1, s.x2]) AS pred
+FROM score s, models m
+ORDER BY s.x1, s.x2;
+SELECT duckboost_evaluate_agg(
+  m.model, s.y, [s.x1, s.x2], MAP {'metric': 'rmse'}
+) AS rmse
+FROM score s, models m;
+""")
+```
+
+## Export, then score without calling the extension
+
+`duckboost_to_sql` returns a `SELECT`. The second process runs that text after creating `score` with ordinary SQL. `separate_trees` is true, so the query sums one expression per tree (the default).
+
+```{python}
+#| echo: false
+#| output: asis
+from _helpers.duckrun import show_export_roundtrip
+
+show_export_roundtrip(
+    setup_sql="""
+LOAD 'build/release/extension/duckboost/duckboost.duckdb_extension';
+CREATE TABLE train AS
+SELECT
+  i::DOUBLE AS x1,
+  ((i * 3) % 5)::DOUBLE AS x2,
+  (1.5 * i - 0.25 * ((i * 3) % 5))::DOUBLE AS y
+FROM range(30) t(i);
+CREATE TABLE score AS
+SELECT x1, x2 FROM train WHERE x1 >= 20 ORDER BY x1, x2;
+CREATE TABLE models AS
+SELECT duckboost_train(
+  y, [x1, x2],
+  MAP {
+    'backend': 'reference',
+    'task': 'regression',
+    'n_estimators': '6',
+    'max_depth': '2',
+    'learning_rate': '0.3',
+    'feature_names': 'x1,x2'
+  }
+) AS model
+FROM train;
+""",
+    native_sql="""
+SELECT duckboost_predict(m.model, [s.x1, s.x2]) AS pred
+FROM score s, models m
+ORDER BY s.x1, s.x2;
+""",
+    export_sql="""
+SELECT duckboost_to_sql(
+  model,
+  'score',
+  ['x1', 'x2'],
+  MAP {'separate_trees': 'true', 'prediction_alias': 'pred'}
+) AS exported_sql
+FROM models;
+""",
+    score_ddl="""
+CREATE TABLE score AS
+SELECT
+  i::DOUBLE AS x1,
+  ((i * 3) % 5)::DOUBLE AS x2
+FROM range(30) t(i)
+WHERE i >= 20
+ORDER BY x1, x2;
+""",
+)
+```

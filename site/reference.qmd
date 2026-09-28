@@ -1,0 +1,352 @@
+---
+title: "SQL reference"
+---
+
+Signatures below match `SELECT * FROM duckdb_functions() WHERE function_name LIKE 'duckboost%'` on `build/release/duckdb`, including parameter names. MAP keys come from the parsers in `src/model.cpp` and `src/import.cpp`. Table-macro argument types are NULL in `duckdb_functions()`; the types stated for `duckboost_fit` and `duckboost_score` are taken from the macro body in `src/duckboost_functions.cpp`.
+
+Every example is a new in-memory database. `LOAD` uses the unsigned extension path relative to the repository root.
+
+## `duckboost_train`
+
+Aggregate. Returns one model JSON `VARCHAR` for the whole input.
+
+```text
+duckboost_train(y DOUBLE, features DOUBLE[]) -> VARCHAR
+duckboost_train(y DOUBLE, features DOUBLE[], options MAP(VARCHAR, VARCHAR)) -> VARCHAR
+```
+
+| Option | Aliases | Default | Meaning |
+| --- | --- | --- | --- |
+| `backend` | | `reference` | `reference`, `xgboost` / `xgb`, `lightgbm` / `lgbm` / `lgb`, `catboost` / `cb`. Also accepts `duckboost` and `gbdt` for the reference backend. |
+| `task` | `objective` | `regression` | `regression` (`regressor`, `mse`), `binary` (`classification`, `logistic`, `binomial`), `multiclass` (`multi_class`, `multi-class`, `softmax`) |
+| `n_estimators` | `num_boost_round`, `iterations` | `10` | Number of boosting rounds. Must be > 0. |
+| `max_depth` | `depth` | `3` | Maximum tree depth. Must be > 0. |
+| `learning_rate` | `eta`, `lr` | `0.1` | Must be > 0. |
+| `min_samples_leaf` | `min_data_in_leaf` | `1` | Minimum rows in a leaf. |
+| `max_bins` | | `16` | Histogram bins for the reference splitter. |
+| `feature_names` | | `f0,f1,...` | Comma-separated names. The count must match the feature width. |
+
+Unknown keys raise `duckboost: unknown train option`. Values are strings inside the MAP.
+
+Regression uses squared error. Binary uses logistic loss and requires labels in `{0, 1}`. `duckboost_predict` then returns the class probability, not a 0/1 label.
+
+**TODO:** `TrainReference` has no multiclass boosting loop. A `task = 'multiclass'` request falls through into the binary logistic loop while the stored model task stays `multiclass`. Non-0/1 labels error. Multiclass models on this site are CatBoost imports, which is what `test/sql/duckboost/multiclass.test` covers.
+
+```{python}
+#| echo: false
+#| output: asis
+from _helpers.duckrun import show
+
+show("""
+LOAD 'build/release/extension/duckboost/duckboost.duckdb_extension';
+CREATE TABLE train AS
+SELECT i::DOUBLE AS x, (2 * i)::DOUBLE AS y FROM range(12) t(i);
+SELECT left(model, 80) AS model_prefix
+FROM (
+  SELECT duckboost_train(
+    y, [x],
+    MAP {'task': 'regression', 'n_estimators': '4', 'max_depth': '2', 'feature_names': 'x'}
+  ) AS model
+  FROM train
+);
+""")
+```
+
+## `duckboost_predict`
+
+Scalar.
+
+```text
+duckboost_predict(model VARCHAR, features DOUBLE[]) -> DOUBLE
+```
+
+Regression returns the numeric prediction. Binary returns a probability in `(0, 1)`. Multiclass returns the argmax class index as a double (ties keep the lowest index).
+
+```{python}
+#| echo: false
+#| output: asis
+from _helpers.duckrun import show
+
+show("""
+LOAD 'build/release/extension/duckboost/duckboost.duckdb_extension';
+CREATE TABLE train AS
+SELECT i::DOUBLE AS x, (2 * i)::DOUBLE AS y FROM range(12) t(i);
+CREATE TABLE models AS
+SELECT duckboost_train(
+  y, [x],
+  MAP {'n_estimators': '4', 'max_depth': '2', 'feature_names': 'x'}
+) AS model
+FROM train;
+SELECT duckboost_predict(model, [4.0]) AS pred FROM models;
+""")
+```
+
+## `duckboost_predict_proba`
+
+Scalar.
+
+```text
+duckboost_predict_proba(model VARCHAR, features DOUBLE[]) -> DOUBLE[]
+```
+
+Regression returns a one-element list holding `duckboost_predict`. Binary returns `[1 - p, p]`. Multiclass returns a softmax over class scores. The multiclass import on [Import model dumps](vignettes/import-dumps.qmd) checks that those values sum to 1.
+
+```{python}
+#| echo: false
+#| output: asis
+from _helpers.duckrun import show
+
+show("""
+LOAD 'build/release/extension/duckboost/duckboost.duckdb_extension';
+CREATE TABLE train AS
+SELECT i::DOUBLE AS x, CASE WHEN i > 6 THEN 1.0 ELSE 0.0 END AS y
+FROM range(12) t(i);
+CREATE TABLE models AS
+SELECT duckboost_train(
+  y, [x],
+  MAP {'task': 'binary', 'n_estimators': '8', 'max_depth': '2', 'feature_names': 'x'}
+) AS model
+FROM train;
+SELECT duckboost_predict_proba(model, [10.0]) AS proba FROM models;
+""")
+```
+
+## `duckboost_evaluate`
+
+Scalar. One prediction versus one label.
+
+```text
+duckboost_evaluate(model VARCHAR, y DOUBLE, features DOUBLE[]) -> DOUBLE
+duckboost_evaluate(model VARCHAR, y DOUBLE, features DOUBLE[], options MAP(VARCHAR, VARCHAR)) -> DOUBLE
+```
+
+The only option is `metric` (`auto`, `rmse`, `mae`, `accuracy`, `logloss`). Unknown keys raise `duckboost: unknown evaluate option`.
+
+What the scalar function returns for each metric:
+
+| `metric` | Result on that row |
+| --- | --- |
+| `mae` | Absolute error |
+| `accuracy` | `1` if the classification is correct, else `0`. Binary treats probability `>= 0.5` as class 1. Multiclass compares the argmax index. |
+| `logloss` | Row log loss. Multiclass uses the probability of the integer label. |
+| anything else, including `auto` and `rmse` | Squared error |
+
+**TODO:** For regression, the `auto` branch that would select MAE is guarded by `&& false`, so it never runs. `metric = 'auto'` therefore returns squared error, not MAE and not RMSE. Dataset RMSE is `duckboost_evaluate_agg`.
+
+```{python}
+#| echo: false
+#| output: asis
+from _helpers.duckrun import show
+
+show("""
+LOAD 'build/release/extension/duckboost/duckboost.duckdb_extension';
+CREATE TABLE train AS
+SELECT i::DOUBLE AS x, (2 * i)::DOUBLE AS y FROM range(12) t(i);
+CREATE TABLE models AS
+SELECT duckboost_train(
+  y, [x], MAP {'n_estimators': '4', 'max_depth': '2', 'feature_names': 'x'}
+) AS model
+FROM train;
+SELECT
+  duckboost_evaluate(model, y, [x]) AS auto_squared_error,
+  duckboost_evaluate(model, y, [x], MAP {'metric': 'mae'}) AS abs_error
+FROM models, train
+WHERE x = 4;
+""")
+```
+
+## `duckboost_evaluate_agg`
+
+Aggregate. One number for every input row that shares the model.
+
+```text
+duckboost_evaluate_agg(model VARCHAR, y DOUBLE, features DOUBLE[]) -> DOUBLE
+duckboost_evaluate_agg(model VARCHAR, y DOUBLE, features DOUBLE[], options MAP(VARCHAR, VARCHAR)) -> DOUBLE
+```
+
+`metric` defaults to `auto`: RMSE for regression, accuracy for binary and multiclass. `rmse`, `mae`, and `logloss` are means (RMSE is the square root of the mean squared error). `accuracy` is the fraction of correct rows. `model` and `y` cannot be NULL.
+
+```{python}
+#| echo: false
+#| output: asis
+from _helpers.duckrun import show
+
+show("""
+LOAD 'build/release/extension/duckboost/duckboost.duckdb_extension';
+CREATE TABLE train AS
+SELECT i::DOUBLE AS x, (2 * i)::DOUBLE AS y FROM range(12) t(i);
+CREATE TABLE models AS
+SELECT duckboost_train(
+  y, [x], MAP {'n_estimators': '4', 'max_depth': '2', 'feature_names': 'x'}
+) AS model
+FROM train;
+SELECT duckboost_evaluate_agg(m.model, t.y, [t.x], MAP {'metric': 'rmse'}) AS rmse
+FROM models m, train t;
+""")
+```
+
+## `duckboost_to_sql`
+
+Scalar. Returns a `SELECT` that scores `table_name`.
+
+```text
+duckboost_to_sql(model VARCHAR, table_name VARCHAR, feature_columns VARCHAR[]) -> VARCHAR
+duckboost_to_sql(model VARCHAR, table_name VARCHAR, feature_columns VARCHAR[], options MAP(VARCHAR, VARCHAR)) -> VARCHAR
+```
+
+| Option | Aliases | Default | Meaning |
+| --- | --- | --- | --- |
+| `separate_trees` | | `true` | `true` / `1` / `yes` emits one column per tree and sums them. `false` / `0` / `no` inlines a single expression. |
+| `prediction_alias` | `alias` | `prediction` | Output column name. |
+
+`table_name` must be non-empty. `feature_columns` must name at least as many raw features as the model has. Binary predictions are wrapped in a sigmoid. Multiclass export is an argmax over per-class scores. The [train and export](vignettes/train-predict-export.qmd) vignette runs the generated text without calling `duckboost_*`.
+
+```{python}
+#| echo: false
+#| output: asis
+from _helpers.duckrun import show
+
+show("""
+LOAD 'build/release/extension/duckboost/duckboost.duckdb_extension';
+CREATE TABLE train AS
+SELECT i::DOUBLE AS x, (2 * i)::DOUBLE AS y FROM range(8) t(i);
+CREATE TABLE models AS
+SELECT duckboost_train(
+  y, [x], MAP {'n_estimators': '2', 'max_depth': '1', 'feature_names': 'x'}
+) AS model
+FROM train;
+SELECT left(duckboost_to_sql(model, 'train', ['x']), 120) AS sql_prefix
+FROM models;
+""")
+```
+
+## `duckboost_import`
+
+Scalar. Returns model JSON.
+
+```text
+duckboost_import(backend VARCHAR, dump VARCHAR) -> VARCHAR
+duckboost_import(backend VARCHAR, dump VARCHAR, options MAP(VARCHAR, VARCHAR)) -> VARCHAR
+```
+
+`backend` uses the same names as `duckboost_train`'s `backend` option. `dump` is XGBoost JSON, LightGBM text, CatBoost JSON, or duckboost's own JSON. See [Import model dumps](vignettes/import-dumps.qmd) for executed fixtures and the option keys (`task`, `base_score`, `learning_rate`, `feature_names`, `n_classes`, plus the aliases parsed in `ImportOptions::FromMap`).
+
+```{python}
+#| echo: false
+#| output: asis
+from _helpers.duckrun import show
+
+show("""
+LOAD 'build/release/extension/duckboost/duckboost.duckdb_extension';
+SELECT duckboost_predict(model, [1.0]) AS pred
+FROM (
+  SELECT duckboost_import(
+    'xgboost',
+    (SELECT content FROM read_text('test/sql/duckboost/data/xgb_stump.json')),
+    MAP {'task': 'regression', 'base_score': '0.0'}
+  ) AS model
+);
+""")
+```
+
+## `duckboost_backends`
+
+Table function with no arguments. Columns from the bind function: `backend VARCHAR`, `training_supported BOOLEAN`, `notes VARCHAR`.
+
+```{python}
+#| echo: false
+#| output: asis
+from _helpers.duckrun import show
+
+show("""
+LOAD 'build/release/extension/duckboost/duckboost.duckdb_extension';
+SELECT backend, training_supported FROM duckboost_backends() ORDER BY backend;
+""")
+```
+
+## `duckboost_build_info`
+
+Table function with no arguments. Columns: `name VARCHAR`, `enabled BOOLEAN`, `notes VARCHAR`.
+
+Rows are the compile flags `DUCKBOOST_WITH_XGBOOST`, `DUCKBOOST_WITH_LIGHTGBM`, `DUCKBOOST_WITH_CATBOOST`, and `DUCKBOOST_NATIVE_STUB`, then `native_*_compiled` / `native_*_linked` for each vendor backend. `native_catboost_linked` is always false: CatBoost has no public training C API.
+
+```{python}
+#| echo: false
+#| output: asis
+from _helpers.duckrun import show
+
+show("""
+LOAD 'build/release/extension/duckboost/duckboost.duckdb_extension';
+SELECT name, enabled FROM duckboost_build_info() ORDER BY name;
+""")
+```
+
+## `duckboost_fit`
+
+Table macro.
+
+```text
+duckboost_fit(source, y, features, options)
+```
+
+`options` defaults to `MAP {}`. The body is:
+
+```sql
+SELECT duckboost_train(y, features, options) AS model
+FROM query_table(source::VARCHAR)
+```
+
+Pass the table name as a VARCHAR literal. `y` and `features` are expressions in that table, same as `duckboost_train`. The macro's parameter types are NULL in `duckdb_functions()`.
+
+```{python}
+#| echo: false
+#| output: asis
+from _helpers.duckrun import show
+
+show("""
+LOAD 'build/release/extension/duckboost/duckboost.duckdb_extension';
+CREATE TABLE train AS
+SELECT i::DOUBLE AS x, (2 * i)::DOUBLE AS y FROM range(12) t(i);
+SELECT left(model, 60) AS model_prefix
+FROM duckboost_fit(
+  'train', y, [x],
+  options := MAP {'n_estimators': '4', 'max_depth': '2', 'feature_names': 'x'}
+);
+""")
+```
+
+## `duckboost_score`
+
+Table macro. No default arguments.
+
+```text
+duckboost_score(model, source, features)
+```
+
+The body is:
+
+```sql
+SELECT *, duckboost_predict(model, features) AS prediction
+FROM query_table(source::VARCHAR)
+```
+
+`model` is a model JSON value (typically a scalar subquery). `source` is a table name. `features` is the feature list expression inside that table.
+
+```{python}
+#| echo: false
+#| output: asis
+from _helpers.duckrun import show
+
+show("""
+LOAD 'build/release/extension/duckboost/duckboost.duckdb_extension';
+CREATE TABLE train AS
+SELECT i::DOUBLE AS x, (2 * i)::DOUBLE AS y FROM range(12) t(i);
+CREATE TABLE models AS
+SELECT duckboost_train(
+  y, [x], MAP {'n_estimators': '4', 'max_depth': '2', 'feature_names': 'x'}
+) AS model
+FROM train;
+SELECT * FROM duckboost_score((SELECT model FROM models), 'train', [x])
+WHERE x = 4;
+""")
+```
