@@ -1,6 +1,8 @@
 project:
   type: website
   execute-dir: project
+  resources:
+    - images/duckboost-social.png
 
 website:
   title: "duckboost"
@@ -9,7 +11,8 @@ website:
   repo-url: https://github.com/JavOrraca/duckboost
   repo-actions: [edit, issue]
   favicon: images/favicon.png
-  image: images/duckboost-social.png
+  # absolute, because Quarto resolves a relative image against each page (vignettes/images/... 404s)
+  image: https://javorraca.github.io/duckboost/images/duckboost-social.png
   image-alt: "duckboost: gradient-boosted trees, trained and scored in DuckDB SQL"
   open-graph: true
   twitter-card:
@@ -45,6 +48,7 @@ format:
       dark: [darkly, theme/duckdb-common.scss, theme/duckdb-dark.scss]
       light: [cosmo, theme/duckdb-common.scss, theme/duckdb-light.scss]
     highlight-style: github
+    include-in-header: _includes/social-image-size.html
     toc: true
     code-copy: true
 

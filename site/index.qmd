@@ -1,6 +1,11 @@
 ---
 title: "duckboost"
+# otherwise Quarto uses the first image on the page (the SVG hex) as the link preview
+image: https://javorraca.github.io/duckboost/images/duckboost-social.png
+image-alt: "duckboost: gradient-boosted trees, trained and scored in DuckDB SQL"
 ---
+
+<img src="images/duckboost-hex.svg" class="home-hex" alt="duckboost hex logo">
 
 `duckboost` is an experimental [DuckDB](https://duckdb.org/) extension for **in-database gradient boosting**. It trains and scores tree ensembles inside DuckDB, imports dumps from XGBoost, LightGBM, and CatBoost, and exports the trees as ordinary SQL so scoring does not need the extension.
 
