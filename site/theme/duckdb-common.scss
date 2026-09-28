@@ -33,6 +33,17 @@ main a,
   transition: color 0.3s;
 }
 
+// Quarto hides the sidebar logo below the lg breakpoint, so the home page carries it there instead.
+.home-hex {
+  float: right;
+  height: 130px;
+  margin: 0 0 0.75rem 1.25rem;
+
+  @include media-breakpoint-up(lg) {
+    display: none;
+  }
+}
+
 .sidebar-navigation .sidebar-item .sidebar-link.active {
   font-weight: 500;
   color: $body-color;
