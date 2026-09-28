@@ -1,78 +1,39 @@
-# Packaging duckboost as a community / out-of-tree extension
+# Packaging duckboost as a community extension
 
-`duckboost` is prototyped in-tree under `extension/duckboost` for DuckDB 2.0 development. The intended long-term home is a **community (out-of-tree) extension** so optional ML vendor libraries do not weigh down core DuckDB builds.
+This repository is a standalone DuckDB extension in the [extension-template](https://github.com/duckdb/extension-template) layout. It targets DuckDB 2.0 through the `duckdb` submodule pinned to `v2.0-cyanoptera`. Optional ML vendor libraries stay out of the default community binary.
 
-## In-tree build (current)
+## Build
 
 ```bash
-DUCKDB_EXTENSIONS='duckboost' make reldebug
+git submodule update --init --recursive
+make
 # or
-EXTENSION_CONFIGS=.github/config/extensions/duckboost.cmake make reldebug
-# or
-BUILD_DUCKBOOST=1 make reldebug
+GEN=ninja make
 ```
 
-## Out-of-tree style load from this directory
+Artifacts:
 
-`extension_config.cmake` in this folder mirrors the [extension-template](https://github.com/duckdb/extension-template) pattern:
+- Shell: `./build/release/duckdb`
+- Tests: `make test`
+- Loadable extension: `build/release/extension/duckboost/duckboost.duckdb_extension`
+
+Load a local unsigned build:
 
 ```bash
-EXTENSION_CONFIGS=extension/duckboost/extension_config.cmake make reldebug
+./build/release/duckdb -unsigned
 ```
 
-`CMakeLists.txt` is dual-mode: in-tree builds use `build_extension_library`; standalone / community builds use `build_static_extension` + `build_loadable_extension`.
-
-## Extract a standalone repository
-
-```bash
-scripts/extract_duckboost_oot.sh                  # -> build/duckboost_oot
-scripts/extract_duckboost_oot.sh /path/to/duckboost
+```sql
+LOAD '<path>/build/release/extension/duckboost/duckboost.duckdb_extension';
 ```
 
-The extract produces an [extension-template](https://github.com/duckdb/extension-template)-compatible tree:
+## Community extensions submission
 
-```text
-duckboost/
-  CMakeLists.txt          # dual-mode
-  Makefile                # wraps extension-ci-tools
-  vcpkg.json
-  extension_config.cmake
-  duckboost_extension.cpp
-  include/duckboost/...
-  src/...
-  test/sql/...
-  .github/workflows/MainDistributionPipeline.yml
-  docs/community_extensions_description.yml
-  LICENSE
-  README.md
-  PACKAGING.md
-```
+Submission is on hold until DuckDB 2.0 is released.
 
-Then:
+The descriptor is [`docs/community_extensions_description.yml`](docs/community_extensions_description.yml). Community extensions are registered with that YAML in [duckdb/community-extensions](https://github.com/duckdb/community-extensions):
 
-```bash
-cd build/duckboost_oot   # or your output dir
-git init
-git add .
-git commit -m "Initial duckboost community extension extract"
-# Push to a public GitHub repo, e.g. JavOrraca/duckboost
-make                     # clones duckdb + extension-ci-tools and builds
-```
-
-## Submit to DuckDB community extensions
-
-See [`community/SUBMIT.md`](community/SUBMIT.md) for the current commit SHA and
-one-shot PR steps.
-
-Publish surface (already pushed): orphan branch
-`cursor/duckboost-community-oot-0c09` on `JavOrraca/duckdb-2-alpha-testing`
-(extension-template layout at repo root — **do not merge** into `v2.0-cyanoptera`).
-
-Community extensions are registered with a single YAML descriptor in
-[duckdb/community-extensions](https://github.com/duckdb/community-extensions):
-
-1. Copy [`community/description.yml`](community/description.yml) into a fork as
-   `extensions/duckboost/description.yml` (that file only).
+1. After DuckDB 2.0 is released, copy `docs/community_extensions_description.yml` into a fork as `extensions/duckboost/description.yml` (that file only).
 2. Open a PR against `duckdb/community-extensions`.
 3. After merge and CI, users install with:
 
@@ -91,12 +52,12 @@ Docs: https://duckdb.org/community_extensions/documentation.html
 | `extension.version` | `0.1.0` (bump on release) |
 | `extension.license` | `MIT` |
 | `extension.maintainers` | `JavOrraca` |
-| `repo.github` | `JavOrraca/duckdb-2-alpha-testing` |
-| `repo.ref` | SHA of `cursor/duckboost-community-oot-0c09` (see `description.yml`) |
+| `repo.github` | `JavOrraca/duckboost` |
+| `repo.ref` | `561ec27ae1edb5c7f2529a1000c23a13f7389d14` (see `docs/community_extensions_description.yml`) |
 
 Default community binaries intentionally omit vendor ML libraries: they ship the
 reference trainer + dump import. Optional `DUCKBOOST_WITH_*` native trainers are for
-custom / advanced builds.
+custom builds.
 
 ## Native trainer flags
 
@@ -110,8 +71,13 @@ custom / advanced builds.
 Example:
 
 ```bash
-EXTRA_CMAKE_VARIABLES='-DDUCKBOOST_WITH_XGBOOST=ON -DDUCKBOOST_WITH_LIGHTGBM=ON' \
-  DUCKDB_EXTENSIONS='duckboost' make reldebug
+EXTRA_CMAKE_VARIABLES='-DDUCKBOOST_WITH_XGBOOST=ON -DDUCKBOOST_WITH_LIGHTGBM=ON' make
+```
+
+Compile the native `#ifdef` paths without linking vendor libraries:
+
+```bash
+EXTRA_CMAKE_VARIABLES='-DDUCKBOOST_WITH_XGBOOST=ON -DDUCKBOOST_NATIVE_STUB_ONLY=ON' make
 ```
 
 Inspect the active build:
@@ -122,3 +88,10 @@ SELECT * FROM duckboost_backends();
 ```
 
 Linked XGBoost/LightGBM builds set `training_supported=true` for those backends. CatBoost remains import-only.
+
+Native train tests (linked builds only):
+
+```bash
+export LD_LIBRARY_PATH="$HOME/.local/lib/python3.12/site-packages/xgboost/lib:$HOME/.local/lib/python3.12/site-packages/lightgbm/lib:${LD_LIBRARY_PATH}"
+DUCKBOOST_NATIVE_TRAIN_TEST=1 make test T=test/sql/duckboost/native_train.test
+```

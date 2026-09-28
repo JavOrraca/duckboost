@@ -2,6 +2,8 @@
 
 Experimental DuckDB extension for **in-database gradient boosting**: train and evaluate tree ensembles inside DuckDB, then export pure SQL for orbital-style in-database inference.
 
+Standalone [extension-template](https://github.com/duckdb/extension-template) repository targeting DuckDB 2.0. The `duckdb` submodule is pinned to `v2.0-cyanoptera`.
+
 ## Motivation
 
 [Orbital](https://posit-dev.github.io/orbital/) converts trained sklearn / tidymodels pipelines into SQL so scoring needs no Python runtime. `duckboost` brings a similar loop fully into DuckDB:
@@ -13,26 +15,39 @@ Experimental DuckDB extension for **in-database gradient boosting**: train and e
 
 ## Build
 
+Initialize the submodules, then build the release shell and loadable extension:
+
 ```bash
-DUCKDB_EXTENSIONS='duckboost' make reldebug
+git submodule update --init --recursive
+make
 # or
-EXTENSION_CONFIGS=.github/config/extensions/duckboost.cmake make reldebug
-# or
-BUILD_DUCKBOOST=1 make reldebug
-# out-of-tree style (same sources via local extension_config.cmake)
-EXTENSION_CONFIGS=extension/duckboost/extension_config.cmake make reldebug
+GEN=ninja make
+```
+
+The shell is `./build/release/duckdb`. Tests:
+
+```bash
+make test
+```
+
+Load a local unsigned build:
+
+```bash
+./build/release/duckdb -unsigned
+```
+
+```sql
+LOAD '<path>/build/release/extension/duckboost/duckboost.duckdb_extension';
 ```
 
 Optional native trainer flags (XGBoost / LightGBM train via vendor C API → dump → import):
 
 ```bash
 # Link real libraries (pip wheels work; set ROOT or rely on auto-detect under ~/.local)
-EXTRA_CMAKE_VARIABLES='-DDUCKBOOST_WITH_XGBOOST=ON -DDUCKBOOST_WITH_LIGHTGBM=ON' \
-  DUCKDB_EXTENSIONS='duckboost' make reldebug
+EXTRA_CMAKE_VARIABLES='-DDUCKBOOST_WITH_XGBOOST=ON -DDUCKBOOST_WITH_LIGHTGBM=ON' make
 
 # Compile #ifdef paths without linking vendor libraries
-EXTRA_CMAKE_VARIABLES='-DDUCKBOOST_WITH_XGBOOST=ON -DDUCKBOOST_NATIVE_STUB_ONLY=ON' \
-  DUCKDB_EXTENSIONS='duckboost' make reldebug
+EXTRA_CMAKE_VARIABLES='-DDUCKBOOST_WITH_XGBOOST=ON -DDUCKBOOST_NATIVE_STUB_ONLY=ON' make
 ```
 
 CatBoost has no public in-process training C API — use `duckboost_import('catboost', ...)`.
@@ -48,16 +63,10 @@ Native train tests (linked builds only):
 
 ```bash
 export LD_LIBRARY_PATH="$HOME/.local/lib/python3.12/site-packages/xgboost/lib:$HOME/.local/lib/python3.12/site-packages/lightgbm/lib:${LD_LIBRARY_PATH}"
-DUCKBOOST_NATIVE_TRAIN_TEST=1 build/reldebug/test/unittest test/sql/duckboost/native_train.test
+DUCKBOOST_NATIVE_TRAIN_TEST=1 make test T=test/sql/duckboost/native_train.test
 ```
 
-Then:
-
-```bash
-build/reldebug/test/unittest test/sql/duckboost/*
-```
-
-See [`PACKAGING.md`](PACKAGING.md) for community / out-of-tree extraction.
+See [`PACKAGING.md`](PACKAGING.md) for the community-extension descriptor and native-trainer flags.
 
 ## SQL API
 
@@ -155,7 +164,7 @@ For `task: "multiclass"`, `n_classes >= 2`, optional `base_scores` holds per-cla
 
 ## Design notes
 
-- **Intended home**: out-of-tree community extension (heavy optional deps + ML surface area). Prototyped in-tree here for DuckDB 2.0 development.
+- **Layout**: standalone community extension ([extension-template](https://github.com/duckdb/extension-template)) so optional vendor ML libraries stay out of core DuckDB builds. The `duckdb` submodule tracks DuckDB 2.0 (`v2.0-cyanoptera`).
 - **SQL export** mirrors orbital's `separate_trees` idea so DuckDB can evaluate ensemble members as independent columns.
 - **Reference trainer** is a didactic histogram/quantile-split GBDT (squared error + logistic). It is not a replacement for production XGBoost/LightGBM/CatBoost quality, but it exercises the full train → evaluate → SQL path.
 - **Table macros** `duckboost_fit` / `duckboost_score` wrap `duckboost_train` / `duckboost_predict` with `query_table` for a compact SQL workflow.
@@ -163,8 +172,6 @@ For `task: "multiclass"`, `n_classes >= 2`, optional `base_scores` holds per-cla
 ## Roadmap
 
 - [x] Native trainer scaffolding behind `DUCKBOOST_WITH_*` / `DUCKBOOST_NATIVE_STUB_ONLY` + `duckboost_build_info()`
-- [x] Community packaging docs (`PACKAGING.md`, local `extension_config.cmake`)
 - [x] Vendor C API bridges for XGBoost / LightGBM (train → dump → import into `BoostModel`)
-- [x] Community publish kit (`community/description.yml`, `scripts/extract_duckboost_oot.sh`, dual-mode CMake)
-- [x] Orphan publish surface `cursor/duckboost-community-oot-0c09` + submit-ready descriptor (`community/SUBMIT.md`)
-- [ ] Open PR on `duckdb/community-extensions` with `extensions/duckboost/description.yml`
+- [x] Standalone extension-template repository (`Makefile`, `extension_config.cmake`, [`docs/community_extensions_description.yml`](docs/community_extensions_description.yml))
+- [ ] Submit [`docs/community_extensions_description.yml`](docs/community_extensions_description.yml) to `duckdb/community-extensions` after DuckDB 2.0 is released
