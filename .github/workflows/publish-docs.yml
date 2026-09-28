@@ -1,0 +1,28 @@
+# Publish the Quarto site in site/ to GitHub Pages.
+# Executed examples are stored in site/_freeze, so this job does not run SQL
+# and does not build DuckDB.
+name: Publish docs
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'site/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    name: Render and publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: quarto-dev/quarto-actions/setup@v2
+      - uses: quarto-dev/quarto-actions/publish@v2
+        with:
+          target: gh-pages
+          path: site
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

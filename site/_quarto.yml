@@ -1,0 +1,36 @@
+project:
+  type: website
+  execute-dir: project
+
+website:
+  title: "duckboost"
+  site-url: https://javorraca.github.io/duckboost/
+  repo-url: https://github.com/JavOrraca/duckboost
+  repo-actions: [edit, issue]
+  sidebar:
+    style: docked
+    search: true
+    contents:
+      - text: Overview
+        href: index.qmd
+      - text: Getting started
+        href: getting-started.qmd
+      - section: Vignettes
+        contents:
+          - text: Train, predict, export
+            href: vignettes/train-predict-export.qmd
+          - text: Import model dumps
+            href: vignettes/import-dumps.qmd
+      - text: SQL reference
+        href: reference.qmd
+
+format:
+  html:
+    theme:
+      light: flatly
+      dark: darkly
+    toc: true
+    code-copy: true
+
+execute:
+  freeze: auto

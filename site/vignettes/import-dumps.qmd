@@ -1,0 +1,139 @@
+---
+title: "Import XGBoost, LightGBM, and CatBoost dumps"
+---
+
+`duckboost_import(backend, dump)` turns a vendor dump into the same JSON model that `duckboost_predict` and `duckboost_to_sql` already understand. These examples use the fixtures under `test/sql/duckboost/data/` that `test/sql/duckboost/import_dumps.test` and `multiclass.test` load with `read_text`. A default `make` build can import these dumps; it does not link the vendor training libraries.
+
+Imported models set `learning_rate` to 1 and fold vendor shrinkage or scale into the leaf values. LightGBM `<=` splits become duckboost `<` splits via `nextafter` toward `+∞`.
+
+## XGBoost JSON
+
+`dump_model(..., dump_format='json')`. The `yes` child is `feature < split_condition`. This stump predicts 0.5 at `f0 = 1` and -0.25 at `f0 = 2`.
+
+```{python}
+#| echo: false
+#| output: asis
+from _helpers.duckrun import show
+
+show("""
+LOAD 'build/release/extension/duckboost/duckboost.duckdb_extension';
+CREATE TABLE models AS
+SELECT duckboost_import(
+  'xgboost',
+  (SELECT content FROM read_text('test/sql/duckboost/data/xgb_stump.json')),
+  MAP {'task': 'regression', 'base_score': '0.0'}
+) AS model;
+SELECT
+  duckboost_predict(model, [1.0]) AS pred_1,
+  duckboost_predict(model, [2.0]) AS pred_2
+FROM models;
+""")
+```
+
+Passing a duckboost JSON document back through `duckboost_import` keeps the backend name. The test does that with the model just imported.
+
+## LightGBM text
+
+`booster_.save_model()` text. The left child is `feature <= threshold` in LightGBM; after import, `1.5` stays on the left leaf and the next representable double goes right.
+
+```{python}
+#| echo: false
+#| output: asis
+from _helpers.duckrun import show
+
+show("""
+LOAD 'build/release/extension/duckboost/duckboost.duckdb_extension';
+CREATE TABLE models AS
+SELECT duckboost_import(
+  'lightgbm',
+  (SELECT content FROM read_text('test/sql/duckboost/data/lgb_stump.txt'))
+) AS model;
+SELECT
+  duckboost_predict(model, [1.5]) AS at_threshold,
+  duckboost_predict(model, [1.5000001]) AS above_threshold
+FROM models;
+""")
+```
+
+`test/sql/duckboost/data/lgb_shrink.txt` is a second fixture whose `shrinkage` is baked into the leaf. The import test expects `duckboost_predict(model, []) = 0.2` for that file.
+
+## CatBoost JSON
+
+`save_model(..., format='json')` float trees. A `FloatFeature` split is true when the value is greater than the border, which is the opposite direction from the reference trainer's `<` split. The stump fixture has `scale_and_bias` `[1.0, [0.1]]`, and the import test expects about 0.6 and -0.15.
+
+```{python}
+#| echo: false
+#| output: asis
+from _helpers.duckrun import show
+
+show("""
+LOAD 'build/release/extension/duckboost/duckboost.duckdb_extension';
+CREATE TABLE models AS
+SELECT duckboost_import(
+  'catboost',
+  (SELECT content FROM read_text('test/sql/duckboost/data/catboost_stump.json'))
+) AS model;
+SELECT
+  duckboost_predict(model, [1.0]) AS pred_1,
+  duckboost_predict(model, [2.0]) AS pred_2
+FROM models;
+""")
+```
+
+A depth-2 oblivious tree in `catboost_depth2.json` expands to four leaf values. The import test expects 10, 20, 30, and 40 for the four sign combinations of two features:
+
+```{python}
+#| echo: false
+#| output: asis
+from _helpers.duckrun import show
+
+show("""
+LOAD 'build/release/extension/duckboost/duckboost.duckdb_extension';
+CREATE TABLE models AS
+SELECT duckboost_import(
+  'catboost',
+  (SELECT content FROM read_text('test/sql/duckboost/data/catboost_depth2.json'))
+) AS model;
+SELECT
+  duckboost_predict(model, [-1.0, -1.0]) AS nn,
+  duckboost_predict(model, [-1.0, 1.0]) AS np,
+  duckboost_predict(model, [1.0, -1.0]) AS pn,
+  duckboost_predict(model, [1.0, 1.0]) AS pp
+FROM models;
+""")
+```
+
+## Multiclass CatBoost
+
+`catboost_multiclass.json` stores class-blocked `leaf_values`. Import expands each oblivious tree into `n_classes` duckboost trees. `duckboost_predict` returns the argmax class index. The multiclass test expects class 0 at feature 1 and class 1 at feature 2, and the class probabilities sum to 1.
+
+```{python}
+#| echo: false
+#| output: asis
+from _helpers.duckrun import show
+
+show("""
+LOAD 'build/release/extension/duckboost/duckboost.duckdb_extension';
+CREATE TABLE models AS
+SELECT duckboost_import(
+  'catboost',
+  (SELECT content FROM read_text('test/sql/duckboost/data/catboost_multiclass.json'))
+) AS model;
+SELECT
+  duckboost_predict(model, [1.0]) AS class_at_1,
+  duckboost_predict(model, [2.0]) AS class_at_2,
+  duckboost_predict_proba(model, [1.0]) AS proba_at_1
+FROM models;
+""")
+```
+
+## Other fixtures
+
+These files are also covered by `test/sql/duckboost/cat_features.test`. They are real dumps, not snippets invented for the docs:
+
+- `catboost_onehot.json` — `OneHotFeature`
+- `catboost_ctr_counter.json`, `catboost_ctr_float_combo.json`, `catboost_ctr_onehot_combo.json` — `OnlineCtr` (Counter and Borders)
+
+`OnlineCtr` needs `ctr_data` in the dump (`save_model(..., pool=...)`). `duckboost_to_sql` inlines those hash lookups. Categorical values are passed as numbers (CityHash), not as strings.
+
+Optional import map keys, from `ImportOptions::FromMap`: `task` (alias `objective`), `base_score` (alias `bias`), `learning_rate` (aliases `eta`, `lr`, `scale`), `feature_names` (comma-separated), and `n_classes` (aliases `classes_count`, `num_class`, `num_classes`).

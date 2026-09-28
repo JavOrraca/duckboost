@@ -1,0 +1,72 @@
+---
+title: "Getting started"
+---
+
+Build the release shell from a checkout of this repository. The `duckdb` submodule must be the pinned 2.0 alpha. Do not point these examples at a PyPI or CRAN DuckDB: those clients are 1.x and cannot load `duckboost`.
+
+## Build
+
+```bash
+git submodule update --init --recursive
+make
+make test
+```
+
+`make` writes `./build/release/duckdb` (the CLI, with duckboost statically linked) and `./build/release/extension/duckboost/duckboost.duckdb_extension` (the loadable extension). `make test` runs the SQL tests under `test/sql/`.
+
+`GEN=ninja make` uses Ninja when it is installed. The default target is the release build.
+
+## Load an unsigned local build
+
+Open the shell with `-unsigned` so DuckDB accepts an extension that was not signed for a release:
+
+```bash
+./build/release/duckdb -unsigned
+```
+
+```sql
+LOAD 'build/release/extension/duckboost/duckboost.duckdb_extension';
+```
+
+The `make` shell also registers duckboost statically, so `LOAD duckboost;` works in that binary without the path. The path form is what you use when you load the `.duckdb_extension` file into a DuckDB 2.0 shell that was not built with this repository's `Makefile`.
+
+```{python}
+#| echo: false
+#| output: asis
+from _helpers.duckrun import show
+
+show("""
+LOAD 'build/release/extension/duckboost/duckboost.duckdb_extension';
+SELECT backend, training_supported
+FROM duckboost_backends()
+ORDER BY backend;
+""")
+```
+
+`training_supported` is true only for backends this binary can train in-process. A default `make` enables the reference trainer and leaves XGBoost, LightGBM, and CatBoost as import-only.
+
+## Hello world
+
+This is the `hello_world` query from the community-extension descriptor. The default task is regression, so the 0/1 labels are fit as a numeric target. Each block on this site starts a new in-memory database.
+
+```{python}
+#| echo: false
+#| output: asis
+from _helpers.duckrun import show
+
+show("""
+LOAD duckboost;
+CREATE TABLE train AS
+SELECT i % 2 AS y, i * 0.1 AS x1, (i % 3) * 0.2 AS x2
+FROM range(40) t(i);
+CREATE TABLE models AS
+SELECT duckboost_train(
+  y, [x1, x2],
+  MAP {'n_estimators': '20', 'max_depth': '3', 'learning_rate': '0.1', 'feature_names': 'x1,x2'}
+) AS model
+FROM train;
+SELECT duckboost_predict(model, [x1, x2]) AS pred
+FROM models, train
+LIMIT 5;
+""")
+```

@@ -2,6 +2,8 @@
 
 Experimental DuckDB extension for **in-database gradient boosting**: train and evaluate tree ensembles inside DuckDB, then export pure SQL for orbital-style in-database inference.
 
+**Documentation:** <https://javorraca.github.io/duckboost/>
+
 Standalone [extension-template](https://github.com/duckdb/extension-template) repository targeting DuckDB 2.0. The `duckdb` submodule is pinned to `v2.0-cyanoptera`.
 
 ## Motivation
