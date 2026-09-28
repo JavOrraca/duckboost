@@ -13,7 +13,7 @@ The iris column names are snake_case (`sepal_length` rather than R's `Sepal.Leng
 
 The examples read the files with relative paths, so run them from the repository root with `./build/release/duckdb -unsigned`. Each block on this page starts a new in-memory database. Blocks that continue an earlier step silently recreate the tables that step made.
 
-Species is the obvious target for both datasets, but the reference trainer only fits regression and binary tasks today. The examples below use binary and regression targets instead.
+Each dataset gets a multiclass species model, a binary model, and a regression model.
 
 ## Iris
 
@@ -70,6 +70,75 @@ GROUP BY ALL
 ORDER BY ALL;
 """)
 ```
+
+### Multiclass: which species?
+
+A multiclass label must be an integer class index starting at 0, so map the species names with `CASE`. The model has one tree per class per round, `duckboost_predict` returns the class index, and `duckboost_predict_proba` returns one probability per class.
+
+```{python}
+#| echo: false
+#| output: asis
+IRIS_MULTI = IRIS_SPLIT + """
+CREATE TABLE iris_multi AS
+SELECT
+  species,
+  CASE species WHEN 'setosa' THEN 0 WHEN 'versicolor' THEN 1 ELSE 2 END::DOUBLE AS label,
+  [sepal_length, sepal_width, petal_length, petal_width] AS features,
+  split
+FROM iris_split;
+
+CREATE TABLE models AS
+SELECT duckboost_train(
+  label, features,
+  MAP {'task': 'multiclass', 'n_estimators': '30', 'max_depth': '2', 'learning_rate': '0.3'}
+) AS model
+FROM iris_multi
+WHERE split = 'train';
+"""
+
+show(IRIS_MULTI + """
+SELECT
+  round(duckboost_evaluate_agg(model, label, features, MAP {'metric': 'accuracy'}), 3) AS test_accuracy,
+  round(duckboost_evaluate_agg(model, label, features, MAP {'metric': 'logloss'}), 3) AS test_logloss
+FROM models, iris_multi
+WHERE split = 'test';
+""")
+```
+
+A confusion matrix shows which species get mixed up on the test rows. Setosa is always right; the errors, if any, are between versicolor and virginica.
+
+```{python}
+#| echo: false
+#| output: asis
+show(setup=IRIS_MULTI, sql="""
+SELECT
+  species AS actual,
+  count(*) FILTER (WHERE duckboost_predict(model, features) = 0) AS pred_setosa,
+  count(*) FILTER (WHERE duckboost_predict(model, features) = 1) AS pred_versicolor,
+  count(*) FILTER (WHERE duckboost_predict(model, features) = 2) AS pred_virginica
+FROM models, iris_multi
+WHERE split = 'test'
+GROUP BY species
+ORDER BY species;
+""")
+```
+
+```{python}
+#| echo: false
+#| output: asis
+show(setup=IRIS_MULTI, sql="""
+SELECT
+  species,
+  (['setosa', 'versicolor', 'virginica'])[duckboost_predict(model, features)::INTEGER + 1] AS predicted,
+  list_transform(duckboost_predict_proba(model, features), lambda p: round(p, 3)) AS proba
+FROM models, iris_multi
+WHERE split = 'test'
+ORDER BY list_max(duckboost_predict_proba(model, features))
+LIMIT 5;
+""")
+```
+
+These are the five test flowers the model is least sure about.
 
 ### Binary: virginica or versicolor?
 
@@ -264,6 +333,49 @@ SELECT split, count(*) AS n
 FROM penguins_prep
 GROUP BY split
 ORDER BY split;
+""")
+```
+
+### Multiclass: species from measurements
+
+The classic penguins question: which species is a bird, given only its bill, flipper, and body mass measurements? The model is trained on train and validation together, since nothing is tuned here.
+
+```{python}
+#| echo: false
+#| output: asis
+show(setup=PENGUINS_PREP, sql="""
+CREATE TABLE species AS
+SELECT
+  species,
+  CASE species WHEN 'Adelie' THEN 0 WHEN 'Chinstrap' THEN 1 ELSE 2 END::DOUBLE AS label,
+  [bill_length_mm, bill_depth_mm, flipper_length_mm, body_mass_g] AS features,
+  split
+FROM penguins_prep;
+
+CREATE TABLE models AS
+SELECT duckboost_train(
+  label, features,
+  MAP {
+    'task': 'multiclass',
+    'n_estimators': '30',
+    'max_depth': '3',
+    'learning_rate': '0.3',
+    'feature_names': 'bill_length_mm,bill_depth_mm,flipper_length_mm,body_mass_g'
+  }
+) AS model
+FROM species
+WHERE split <> 'test';
+
+SELECT
+  species AS actual,
+  count(*) AS n,
+  count(*) FILTER (WHERE duckboost_predict(model, features) = 0) AS pred_adelie,
+  count(*) FILTER (WHERE duckboost_predict(model, features) = 1) AS pred_chinstrap,
+  count(*) FILTER (WHERE duckboost_predict(model, features) = 2) AS pred_gentoo
+FROM models, species
+WHERE split = 'test'
+GROUP BY species
+ORDER BY species;
 """)
 ```
 

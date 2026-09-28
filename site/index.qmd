@@ -13,13 +13,24 @@ title: "duckboost"
 3. Export the trees with `duckboost_to_sql` (`CASE` expressions, optionally one column per tree).
 4. Score later with `duckboost_predict`, or run the exported SQL in any DuckDB session.
 
-The built-in **reference** backend is a small histogram-style gradient booster (squared error and logistic loss). It is there so the train → evaluate → SQL path works with no extra libraries. It is not a substitute for a production XGBoost, LightGBM, or CatBoost model. Prefer `duckboost_import()` when you already train outside DuckDB.
+The built-in **reference** backend is a small histogram-style gradient booster (squared error, logistic, and softmax loss). It is there so the train → evaluate → SQL path works with no extra libraries. It is not a substitute for a production XGBoost, LightGBM, or CatBoost model. Prefer `duckboost_import()` when you already train outside DuckDB.
+
+## Use cases
+
+duckboost is for people and systems that already have their data in DuckDB and want boosted-tree models without leaving SQL:
+
+- **SQL-first analysts and pipelines** that train, evaluate, and retrain as ordinary queries, including one model per group with `GROUP BY`.
+- **Scoring without an ML runtime**: `duckboost_to_sql` turns a model into a plain `SELECT` for views, dbt models, or any DuckDB session.
+- **Teams that train in Python or R** with XGBoost, LightGBM, or CatBoost and want to score next to the data with `duckboost_import`.
+- **Teaching, prototyping, and tests**, where the built-in trainer gives the same model on every run with no dependencies.
+
+[Use cases and choosing a trainer](use-cases.qmd) goes into more detail, including when duckboost is not the right tool and how the built-in trainer compares with XGBoost or LightGBM inside DuckDB and with training outside DuckDB and importing.
 
 ## What you can do
 
 | Piece | What it does |
 | --- | --- |
-| Reference GBDT | `duckboost_train` with `backend = 'reference'` for regression and binary labels |
+| Reference GBDT | `duckboost_train` with `backend = 'reference'` for regression, binary, and multiclass labels |
 | Dump import | `duckboost_import` for XGBoost `dump_model` JSON, LightGBM `save_model` text, and CatBoost `save_model` JSON |
 | In-process score | `duckboost_predict` and `duckboost_predict_proba` |
 | Metrics | `duckboost_evaluate` (one row) and `duckboost_evaluate_agg` (a whole table) |

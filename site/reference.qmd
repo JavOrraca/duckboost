@@ -24,13 +24,14 @@ duckboost_train(y DOUBLE, features DOUBLE[], options MAP(VARCHAR, VARCHAR)) -> V
 | `learning_rate` | `eta`, `lr` | `0.1` | Must be > 0. |
 | `min_samples_leaf` | `min_data_in_leaf` | `1` | Minimum rows in a leaf. |
 | `max_bins` | | `16` | Histogram bins for the reference splitter. |
+| `n_classes` | `num_class`, `num_classes` | max label + 1 | Multiclass only; ignored for other tasks. Must be >= 2 and greater than every label. Set it when a class is absent from the training rows. |
 | `feature_names` | | `f0,f1,...` | Comma-separated names. The count must match the feature width. |
 
 Unknown keys raise `duckboost: unknown train option`. Values are strings inside the MAP.
 
 Regression uses squared error. Binary uses logistic loss and requires labels in `{0, 1}`. `duckboost_predict` then returns the class probability, not a 0/1 label.
 
-**TODO:** `TrainReference` has no multiclass boosting loop. A `task = 'multiclass'` request falls through into the binary logistic loop while the stored model task stays `multiclass`. Non-0/1 labels error. Multiclass models on this site are CatBoost imports, which is what `test/sql/duckboost/multiclass.test` covers.
+Multiclass uses softmax cross-entropy and requires integer class indices `0, 1, ..., n_classes - 1` as `y`, so map string classes to integers first (for example with `CASE`). Each boosting round fits one tree per class, so a model has `n_estimators * n_classes` trees. Each class's starting score is the log of its share of the training rows. `duckboost_predict` returns the most likely class index and `duckboost_predict_proba` returns one probability per class. The XGBoost and LightGBM trainers apply the same label rules.
 
 ```{python}
 #| echo: false
@@ -49,6 +50,29 @@ FROM (
   ) AS model
   FROM train
 );
+""")
+```
+
+A three-class model: the label is `0`, `1`, or `2`, and the model stores one tree per class per round.
+
+```{python}
+#| echo: false
+#| output: asis
+show("""
+LOAD 'build/release/extension/duckboost/duckboost.duckdb_extension';
+CREATE TABLE train AS
+SELECT (i // 10)::DOUBLE AS y, [i::DOUBLE] AS features FROM range(30) t(i);
+CREATE TABLE models AS
+SELECT duckboost_train(
+  y, features,
+  MAP {'task': 'multiclass', 'n_estimators': '5', 'max_depth': '2'}
+) AS model
+FROM train;
+SELECT
+  x,
+  duckboost_predict(model, [x]) AS class,
+  list_transform(duckboost_predict_proba(model, [x]), lambda p: round(p, 3)) AS proba
+FROM models, (VALUES (3.0), (14.0), (27.0)) v(x);
 """)
 ```
 
