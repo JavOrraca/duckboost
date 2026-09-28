@@ -59,6 +59,12 @@ a:hover > code:not(.sourceCode) {
   background-color: $code-bg;
 }
 
+// Quarto pads inline code by .2em on every side, which makes the yellow box taller than the line.
+main :is(p, li, td, dd) code:not(.sourceCode) {
+  padding: 0.05em 0.3em;
+  border-radius: 3px;
+}
+
 .table {
   --bs-table-border-color: #{$border-color};
 }
