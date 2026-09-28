@@ -4,10 +4,20 @@ project:
 
 website:
   title: "duckboost"
+  description: "Gradient-boosted trees, trained and scored in DuckDB SQL."
   site-url: https://javorraca.github.io/duckboost/
   repo-url: https://github.com/JavOrraca/duckboost
   repo-actions: [edit, issue]
+  favicon: images/favicon.png
+  image: images/duckboost-social.png
+  image-alt: "duckboost: gradient-boosted trees, trained and scored in DuckDB SQL"
+  open-graph: true
+  twitter-card:
+    card-style: summary_large_image
   sidebar:
+    logo: images/duckboost-hex.svg
+    logo-alt: duckboost hex logo
+    title: false
     style: docked
     search: true
     contents:

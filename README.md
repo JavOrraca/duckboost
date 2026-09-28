@@ -1,4 +1,4 @@
-# duckboost
+# duckboost <img src="site/images/duckboost-hex.png" align="right" height="138" alt="duckboost hex logo" />
 
 Experimental DuckDB extension for **in-database gradient boosting**: train and evaluate tree ensembles inside DuckDB, then export pure SQL for orbital-style in-database inference.
 
