@@ -23,7 +23,7 @@ duckboost_train(y DOUBLE, features DOUBLE[], options MAP(VARCHAR, VARCHAR)) -> V
 | `max_depth` | `depth` | `3` | Maximum tree depth. Must be > 0. |
 | `learning_rate` | `eta`, `lr` | `0.1` | Must be > 0. |
 | `min_samples_leaf` | `min_data_in_leaf` | `1` | Minimum rows in a leaf. |
-| `max_bins` | | `16` | Histogram bins for the reference splitter. |
+| `max_bins` | | `256` | Most candidate split thresholds per feature and node. A feature with at most `max_bins + 1` distinct values in a node is split exactly; otherwise thresholds are taken at evenly spaced quantiles of its distinct values. LightGBM receives it as `max_bin`. |
 | `n_classes` | `num_class`, `num_classes` | max label + 1 | Multiclass only; ignored for other tasks. Must be >= 2 and greater than every label. Set it when a class is absent from the training rows. |
 | `feature_names` | | `f0,f1,...` | Comma-separated names. The count must match the feature width. |
 

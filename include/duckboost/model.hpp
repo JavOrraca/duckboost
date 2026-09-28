@@ -104,7 +104,7 @@ struct TrainOptions {
 	idx_t max_depth = 3;
 	double learning_rate = 0.1;
 	idx_t min_samples_leaf = 1;
-	idx_t max_bins = 16;
+	idx_t max_bins = 256;
 	//! Multiclass only. 0 means max(label) + 1.
 	idx_t n_classes = 0;
 	vector<string> feature_names;
