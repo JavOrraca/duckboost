@@ -20,7 +20,9 @@
 #include "duckdb/main/extension/extension_loader.hpp"
 #include "duckdb/parser/parsed_data/create_macro_info.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <numeric>
 
 namespace duckdb {
 namespace duckboost {
@@ -107,6 +109,39 @@ vector<string> ReadVarcharList(Vector &list_vector, idx_t row) {
 		values.push_back(child_data[child_idx].GetString());
 	}
 	return values;
+}
+
+// Total order on doubles with every NaN equal to every other NaN and after all numbers, so std::sort stays well
+// defined when a feature is NaN.
+bool TotalLess(double a, double b) {
+	if (std::isnan(a) || std::isnan(b)) {
+		return !std::isnan(a) && std::isnan(b);
+	}
+	return a < b;
+}
+
+// Parallel aggregation hands rows to an aggregate in thread-dependent order, and both the trainer (tie-breaking,
+// floating-point sums) and the metrics depend on row order. Sorting first makes the result depend only on which
+// rows went in.
+void SortRowsCanonically(vector<double> &y, vector<vector<double>> &x) {
+	vector<idx_t> order(y.size());
+	std::iota(order.begin(), order.end(), idx_t(0));
+	std::sort(order.begin(), order.end(), [&](idx_t a, idx_t b) {
+		if (TotalLess(y[a], y[b]) || TotalLess(y[b], y[a])) {
+			return TotalLess(y[a], y[b]);
+		}
+		return std::lexicographical_compare(x[a].begin(), x[a].end(), x[b].begin(), x[b].end(), TotalLess);
+	});
+	vector<double> sorted_y;
+	vector<vector<double>> sorted_x;
+	sorted_y.reserve(y.size());
+	sorted_x.reserve(x.size());
+	for (auto index : order) {
+		sorted_y.push_back(y[index]);
+		sorted_x.push_back(std::move(x[index]));
+	}
+	y = std::move(sorted_y);
+	x = std::move(sorted_x);
 }
 
 struct TrainDataset {
@@ -210,6 +245,7 @@ void TrainFinalize(Vector &state_vector, AggregateFinalizeInputData &, Vector &r
 			continue;
 		}
 		auto options = state.data->options_set ? state.data->options : TrainOptions();
+		SortRowsCanonically(state.data->y, state.data->x);
 		auto model = TrainModel(state.data->y, state.data->x, options);
 		writer.WriteValue(StringVector::AddString(result, model.ToJSON()));
 	}
@@ -446,6 +482,7 @@ void EvaluateAggFinalize(Vector &state_vector, AggregateFinalizeInputData &, Vec
 		if (options.metric.empty()) {
 			options.metric = "auto";
 		}
+		SortRowsCanonically(state.data->y, state.data->x);
 		writer.WriteValue(EvaluateModel(model, state.data->y, state.data->x, options));
 	}
 }
