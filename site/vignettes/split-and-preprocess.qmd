@@ -1,0 +1,382 @@
+---
+title: "Splitting data and preprocessing"
+---
+
+This page covers the two steps that come before training: splitting the rows into sets with different jobs, and turning raw columns into the numeric features `duckboost_train` accepts. The ideas and names come from the tidymodels packages [rsample](https://rsample.tidymodels.org/) (splits) and [recipes](https://recipes.tidymodels.org/) (preprocessing). The tidymodels [case study](https://www.tidymodels.org/start/case-study/) is a good end-to-end introduction.
+
+duckboost does not try to recreate those packages. It adds a few small SQL macros for the parts that are awkward to write by hand, and everything else stays ordinary SQL.
+
+The examples use the Palmer penguins file in `data/`. Run them from the repository root with `./build/release/duckdb -unsigned`. Each block on this page starts a new in-memory database. Blocks that continue an earlier step silently recreate the tables that step made.
+
+## Why split at all
+
+A model always looks better on the rows it was fitted to than on new rows. To know how it will do on data it has never seen, you have to keep some rows away from every decision you make, and score them once at the end.
+
+"Every decision" is broader than fitting. It also includes choosing hyperparameters, choosing features, and learning preprocessing values such as a median for imputation or the list of categories to encode. If any of those look at the rows you later score, the score is optimistic. This is called *leakage*.
+
+## The three sets
+
+| Set | Its job | How often you look at it |
+| --- | --- | --- |
+| **Training** | Fit the model. Also learn preprocessing values (medians, category levels). | As often as you like. |
+| **Validation** | Compare candidate models or hyperparameter settings and pick one. | Many times, but only to choose. |
+| **Test** | Give one honest estimate of the final, chosen model. | Once, at the very end. |
+
+The words get mixed up because different tools use them differently. scikit-learn's `train_test_split` and Keras's `validation_split` both make one held-out set and leave it to you whether it is used for choosing (validation) or for the final estimate (test). On this page, and in tidymodels, **validation** means "used to choose" and **test** means "used once, to report".
+
+### Which split do you need?
+
+- **Two-way: train / test.** Use this when you are not tuning anything, or when you tune with cross-validation inside the training set (next bullet). Fit on training, score test once.
+- **Two-way plus cross-validation.** Split train / test first, then cut the *training* rows into *v* folds. Each candidate setting is fitted *v* times, each time holding out one fold and scoring it. The average over folds replaces a validation set. It uses the data more efficiently, so it is the usual choice for small datasets like this one (344 penguins).
+- **Three-way: train / validation / test.** Use this when you tune and have enough rows that one validation set gives a stable score. It is simpler and *v* times cheaper than cross-validation.
+
+Whichever you choose, the test set is touched once. After choosing a setting, refit it on all the non-test rows (training plus validation, or the whole training set in cross-validation), then score test.
+
+In cross-validation, rsample calls the two parts of each fold the *analysis* and *assessment* sets, so they are not confused with the outer train and test sets.
+
+## Split helpers
+
+| duckboost | rsample | Adds a column |
+| --- | --- | --- |
+| `duckboost_initial_split` | `initial_split()` | `split`: `'train'` or `'test'` |
+| `duckboost_initial_validation_split` | `initial_validation_split()` | `split`: `'train'`, `'validation'`, or `'test'` |
+| `duckboost_vfold` | `vfold_cv()` | `fold`: an integer from 1 to `v` |
+
+```text
+duckboost_initial_split(source, prop := 0.75, strata := NULL, seed := 42)
+duckboost_initial_validation_split(source, prop := [0.6, 0.2], strata := NULL, seed := 42)
+duckboost_vfold(source, v := 5, strata := NULL, seed := 42)
+```
+
+They are table macros. They return every row of `source` with one extra column.
+
+- **`source`** is a table or view name, as a string.
+- **`prop`** is the training share for the two-way split. For the three-way split, it is `[training, validation]`, and test gets the rest.
+- **`strata`** is a column or expression. When it is set, every value of it is split in the same proportions, so a rare class is not left out of the test set by chance. Stratify on the outcome for classification. A numeric column must be binned first, for example `strata := ntile(4) OVER (ORDER BY body_mass_g)` for quartiles, which is what rsample does for you automatically.
+- **`seed`** plays the role of R's `set.seed()`. The same rows and the same seed always give the same split, whatever order the rows are stored in. A different seed gives a different split.
+
+Each stratum gets `round(prop × n)` training rows, so the proportions are exact per stratum, up to rounding.
+
+The split is computed from a hash of each row's values. Adding a column, or changing a value, changes the split. Save the result as a table once, like saving an rsample split object, and reuse that table.
+
+### Train / test
+
+```{python}
+#| echo: false
+#| output: asis
+from _helpers.duckrun import show
+
+show("""
+LOAD duckboost;
+CREATE TABLE penguins AS FROM read_csv('data/penguins.csv', nullstr = 'NA');
+CREATE TABLE penguins_split AS
+FROM duckboost_initial_split('penguins', prop := 0.75, strata := species);
+
+SELECT species, split, count(*) AS n
+FROM penguins_split
+GROUP BY ALL
+ORDER BY ALL;
+""")
+```
+
+Each species keeps 75% of its rows for training. Downstream queries filter on the new column: `WHERE split = 'train'` to fit, and `WHERE split = 'test'` for the final score.
+
+### Train / validation / test
+
+```{python}
+#| echo: false
+#| output: asis
+show("""
+LOAD duckboost;
+CREATE TABLE penguins AS FROM read_csv('data/penguins.csv', nullstr = 'NA');
+CREATE TABLE penguins_split AS
+FROM duckboost_initial_validation_split('penguins', prop := [0.6, 0.2], strata := species);
+
+SELECT split, count(*) AS n, round(count(*) / sum(count(*)) OVER (), 3) AS share
+FROM penguins_split
+GROUP BY split
+ORDER BY split;
+""")
+```
+
+The [grid search example](datasets.qmd#binary-with-a-grid-search-sex) shows how to use this split: fit each candidate on `'train'`, compare them on `'validation'`, refit the winner on both, and score `'test'` once.
+
+### Cross-validation folds
+
+Folds are cut from the *training* rows only, so split first, then pass a view of the training rows to `duckboost_vfold`:
+
+```{python}
+#| echo: false
+#| output: asis
+show("""
+LOAD duckboost;
+CREATE TABLE penguins AS FROM read_csv('data/penguins.csv', nullstr = 'NA');
+CREATE TABLE penguins_split AS
+FROM duckboost_initial_split('penguins', strata := species);
+CREATE VIEW penguins_train AS
+FROM penguins_split WHERE split = 'train';
+CREATE TABLE penguins_folds AS
+FROM duckboost_vfold('penguins_train', v := 5, strata := species);
+
+SELECT
+  fold,
+  count(*) AS n,
+  count(*) FILTER (WHERE species = 'Adelie') AS adelie,
+  count(*) FILTER (WHERE species = 'Chinstrap') AS chinstrap,
+  count(*) FILTER (WHERE species = 'Gentoo') AS gentoo
+FROM penguins_folds
+GROUP BY fold
+ORDER BY fold;
+""")
+```
+
+Folds differ in size by at most one row, and each species is spread evenly across them.
+
+To cross-validate, fit one model per fold on the other folds, then score each model on the fold it did not see. A table of fold numbers crossed with the training rows does all *v* fits in one `GROUP BY`. Adding a second grid column, here `max_depth`, compares settings the way `tune::tune_grid()` does. To keep this example short, it drops the two birds with no measurements instead of imputing them; [Preprocessing](#preprocessing) shows imputation.
+
+```{python}
+#| echo: false
+#| output: asis
+PENGUINS_FOLDS = """
+LOAD duckboost;
+CREATE TABLE penguins AS FROM read_csv('data/penguins.csv', nullstr = 'NA');
+CREATE TABLE penguins_split AS
+FROM duckboost_initial_split('penguins', strata := species);
+CREATE VIEW penguins_train AS
+FROM penguins_split WHERE split = 'train' AND bill_length_mm IS NOT NULL;
+CREATE TABLE penguins_folds AS
+FROM duckboost_vfold('penguins_train', v := 5, strata := species);
+CREATE TABLE cv AS
+SELECT
+  fold,
+  duckboost_integer(species, ['Adelie', 'Chinstrap', 'Gentoo']) - 1 AS label,
+  [bill_length_mm, bill_depth_mm, flipper_length_mm, body_mass_g] AS features
+FROM penguins_folds;
+"""
+
+show(setup=PENGUINS_FOLDS, sql="""
+CREATE TABLE fold_models AS
+SELECT
+  k.fold AS held_out,
+  d.max_depth,
+  duckboost_train(
+    cv.label, cv.features,
+    MAP {'task': 'multiclass', 'n_estimators': '30', 'max_depth': d.max_depth}
+  ) AS model
+FROM cv, range(1, 6) k(fold), (VALUES ('1'), ('3')) d(max_depth)
+WHERE cv.fold <> k.fold
+GROUP BY k.fold, d.max_depth;
+
+SELECT
+  m.max_depth,
+  round(avg(m.accuracy), 3) AS cv_accuracy,
+  round(min(m.accuracy), 3) AS worst_fold,
+  round(max(m.accuracy), 3) AS best_fold
+FROM (
+  SELECT
+    fm.held_out,
+    fm.max_depth,
+    avg((duckboost_predict(fm.model, cv.features) = cv.label)::INTEGER) AS accuracy
+  FROM fold_models fm, cv
+  WHERE cv.fold = fm.held_out
+  GROUP BY fm.held_out, fm.max_depth
+) m
+GROUP BY m.max_depth
+ORDER BY m.max_depth;
+""")
+```
+
+Both depths have the same mean accuracy here. When settings tie, prefer the simpler one: depth 1 also has the better worst fold, so its score varies less from fold to fold. The test rows play no part in this comparison. Once you have picked a setting, refit it on all the training rows and score the test rows once.
+
+## Preprocessing
+
+### Learn on training, apply everywhere
+
+recipes separates preprocessing into two steps. `prep()` learns values from the training rows, such as each column's median or the list of categories. `bake()` applies those learned values to any rows: training, validation, test, or new data next month.
+
+In SQL this is a one-row table of learned values, computed with `WHERE split = 'train'`, and a query that joins it to every row. Because the values come only from training rows, nothing about the test rows leaks into the model.
+
+| recipes | SQL with duckboost |
+| --- | --- |
+| `recipe()` + `step_*()` | The expressions in the bake query |
+| `prep(training)` | `CREATE TABLE prep AS SELECT median(...), duckboost_levels(...) FROM ... WHERE split = 'train'` |
+| `bake(new_data)` | `SELECT ... FROM data, prep` |
+
+### What tree models need, and what they do not
+
+Gradient-boosted trees split on thresholds, so they are unaffected by any transformation that keeps the order of a column's values. Centering, scaling (`step_normalize()`), and log transforms of *predictors* change nothing, so you can skip them.
+
+What duckboost does need:
+
+- **Numbers only.** Features are a `LIST` of `DOUBLE`, so categorical columns must be encoded as numbers.
+- **No `NULL`s.** `duckboost_train` rejects a `NULL` feature value. Impute it, add an indicator, or drop the row.
+
+### Preprocessing helpers
+
+| duckboost | recipes | What it does |
+| --- | --- | --- |
+| `duckboost_levels` | The levels `prep()` stores for `step_dummy()` / `step_other()` | Aggregate. Sorted list of the distinct non-`NULL` values of `x` that occur at least `min_count` times. |
+| `duckboost_dummy` | `step_dummy()` | A `LIST` of 0/1 `DOUBLE`s, one per level. By default the first level is the reference and gets no column; `one_hot := true` keeps every level. |
+| `duckboost_dummy_names` | The column names `step_dummy()` creates | Matching names such as `island_Dream`, for the `feature_names` option. |
+| `duckboost_integer` | `step_integer()` | The level's position, 1 to *k*, as a `DOUBLE`. `NULL` and values not in `levels` become 0. |
+| `duckboost_other` | `step_other()` | Keeps values that are in `levels` and replaces the rest with `other`. `NULL` stays `NULL`. |
+
+```text
+duckboost_levels(x, min_count := 1)
+duckboost_dummy(x, levels, one_hot := false)
+duckboost_dummy_names(prefix, levels, one_hot := false)
+duckboost_integer(x, levels)
+duckboost_other(x, levels, other := 'other')
+```
+
+These need no helper, because they are one SQL expression each:
+
+| recipes | SQL |
+| --- | --- |
+| `step_impute_median()`, `step_impute_mean()` | `coalesce(x, prep.x_median)`, with `median(x)` or `avg(x)` in the prep table |
+| `step_indicate_na()` | `(x IS NULL)::DOUBLE` as an extra feature |
+| `step_mutate()` | Any expression, such as `bill_length_mm / bill_depth_mm` |
+
+```{python}
+#| echo: false
+#| output: asis
+show("""
+LOAD duckboost;
+SELECT
+  island,
+  duckboost_dummy(island, ['Biscoe', 'Dream', 'Torgersen']) AS dummy,
+  duckboost_dummy(island, ['Biscoe', 'Dream', 'Torgersen'], one_hot := true) AS one_hot,
+  duckboost_integer(island, ['Biscoe', 'Dream', 'Torgersen']) AS integer,
+  duckboost_other(island, ['Biscoe', 'Dream']) AS other
+FROM (VALUES ('Biscoe'), ('Dream'), ('Torgersen'), ('Mars'), (NULL)) v(island);
+""")
+```
+
+### Dummy, one-hot, or integer?
+
+- **Dummy** (the recipes default) makes *k* − 1 columns. Linear models need this, because *k* columns that always sum to 1 are redundant with the intercept. The catch is that the reference level, an unseen value (`'Mars'` in the example), and `NULL` all encode as all zeros, so they look the same to the model.
+- **One-hot** (`one_hot := true`) makes *k* columns. Trees do not need a reference level, and each level can be split on directly. Unseen values and `NULL` still encode as all zeros, but that no longer matches a real level. **This is usually the right choice for duckboost.**
+- **Integer** makes one column. It is compact for columns with many levels, and natural for ordered categories (small < medium < large). For unordered categories the order is alphabetical and meaningless, but trees can still isolate a level with two splits.
+
+To pool rare levels first, like `step_other()`, learn the levels with a minimum count, then apply `duckboost_other` before encoding: `duckboost_dummy(duckboost_other(x, p.x_levels), list_append(p.x_levels, 'other'), one_hot := true)`.
+
+### A complete example
+
+Predict species from all the penguin columns. Two birds have no measurements and eleven have no recorded sex, so the numeric columns get the training median, and `sex` is one-hot encoded (a missing sex becomes all zeros). `island` and `sex` levels are learned from the training rows.
+
+First the split and the prep table, which is everything learned from training:
+
+```{python}
+#| echo: false
+#| output: asis
+PENGUINS_PREP = """
+LOAD duckboost;
+CREATE TABLE penguins AS FROM read_csv('data/penguins.csv', nullstr = 'NA');
+CREATE TABLE penguins_split AS
+FROM duckboost_initial_split('penguins', prop := 0.75, strata := species);
+
+CREATE TABLE prep AS
+SELECT
+  median(bill_length_mm) AS bill_length_mm,
+  median(bill_depth_mm) AS bill_depth_mm,
+  median(flipper_length_mm) AS flipper_length_mm,
+  median(body_mass_g) AS body_mass_g,
+  duckboost_levels(island) AS island_levels,
+  duckboost_levels(sex) AS sex_levels,
+  duckboost_levels(species) AS species_levels
+FROM penguins_split
+WHERE split = 'train';
+"""
+
+show(PENGUINS_PREP + """
+FROM prep;
+""")
+```
+
+This is what the learned values do to the birds with missing values. A missing measurement becomes the training median, and a missing sex becomes all zeros:
+
+```{python}
+#| echo: false
+#| output: asis
+show(setup=PENGUINS_PREP, sql="""
+SELECT
+  s.species,
+  s.bill_length_mm,
+  s.sex,
+  coalesce(s.bill_length_mm, p.bill_length_mm) AS bill_length_baked,
+  duckboost_dummy(s.sex, p.sex_levels, one_hot := true) AS sex_baked
+FROM penguins_split s, prep p
+WHERE s.sex IS NULL
+ORDER BY s.bill_length_mm NULLS FIRST, s.species
+LIMIT 5;
+""")
+```
+
+The bake query applies the prep table to every row. The same query builds the feature list and its names, so the two cannot drift apart:
+
+```{python}
+#| echo: false
+#| output: asis
+PENGUINS_BAKE = """
+CREATE TABLE baked AS
+SELECT
+  s.split,
+  s.species,
+  duckboost_integer(s.species, p.species_levels) - 1 AS label,
+  list_concat(
+    [
+      coalesce(s.bill_length_mm, p.bill_length_mm),
+      coalesce(s.bill_depth_mm, p.bill_depth_mm),
+      coalesce(s.flipper_length_mm, p.flipper_length_mm),
+      coalesce(s.body_mass_g, p.body_mass_g)
+    ],
+    duckboost_dummy(s.island, p.island_levels, one_hot := true),
+    duckboost_dummy(s.sex, p.sex_levels, one_hot := true)
+  ) AS features,
+  array_to_string(list_concat(
+    ['bill_length_mm', 'bill_depth_mm', 'flipper_length_mm', 'body_mass_g'],
+    duckboost_dummy_names('island', p.island_levels, one_hot := true),
+    duckboost_dummy_names('sex', p.sex_levels, one_hot := true)
+  ), ',') AS feature_names
+FROM penguins_split s, prep p;
+"""
+
+show(setup=PENGUINS_PREP, sql=PENGUINS_BAKE + """
+SELECT DISTINCT feature_names FROM baked;
+""")
+```
+
+Train on the training rows and score the test rows once:
+
+```{python}
+#| echo: false
+#| output: asis
+show(setup=PENGUINS_PREP + PENGUINS_BAKE, sql="""
+CREATE TABLE models AS
+SELECT duckboost_train(
+  label, features,
+  MAP {
+    'task': 'multiclass',
+    'n_estimators': '30',
+    'max_depth': '3',
+    'feature_names': feature_names
+  }
+) AS model
+FROM baked
+WHERE split = 'train';
+
+SELECT
+  count(*) AS test_rows,
+  round(duckboost_evaluate_agg(model, label, features, MAP {'metric': 'accuracy'}), 3) AS test_accuracy,
+  round(duckboost_evaluate_agg(model, label, features, MAP {'metric': 'logloss'}), 3) AS test_logloss
+FROM models, baked
+WHERE split = 'test'
+GROUP BY model;
+""")
+```
+
+All 344 penguins are used, including the ones with missing values, and nothing computed from the test rows reaches the model.
+
+To score new penguins later, run the same bake query against the new rows and the saved `prep` table. Keep `prep` next to the model: a model trained on these features is only valid with the medians and level lists it was trained with.
+
+A note on cross-validation: strictly, preprocessing should be learned again inside each fold, from that fold's analysis rows only. The tune package does this for you. With medians and level lists, learning them once from the whole training set changes the fold scores very little, but for heavier steps, such as target encoding, prep per fold.

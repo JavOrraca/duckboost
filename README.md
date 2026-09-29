@@ -150,6 +150,32 @@ FROM (SELECT duckboost_train(y, features, MAP {'task': 'binary'}) AS model FROM 
 
 The [example datasets vignette](https://javorraca.github.io/duckboost/vignettes/datasets.html) walks through train/validation/test splits, one-hot encoding, regression, binary classification, and a SQL grid search on both files.
 
+### Splitting and preprocessing
+
+Small macros borrow the ideas (not the code) of tidymodels' rsample and recipes:
+
+```sql
+-- Split: adds split = 'train' | 'test' (or 'train' | 'validation' | 'test'), or fold = 1 .. v
+CREATE TABLE penguins_split AS
+FROM duckboost_initial_split('penguins', prop := 0.75, strata := species, seed := 42);
+FROM duckboost_initial_validation_split('penguins', prop := [0.6, 0.2], strata := species);
+FROM duckboost_vfold('penguins_train', v := 5, strata := species);
+
+-- Preprocess: learn values on training rows only ("prep") ...
+CREATE TABLE prep AS
+SELECT median(bill_length_mm) AS bill_length_mm, duckboost_levels(island) AS island_levels
+FROM penguins_split WHERE split = 'train';
+
+-- ... then apply them to every row ("bake")
+SELECT list_concat(
+         [coalesce(s.bill_length_mm, p.bill_length_mm)],
+         duckboost_dummy(s.island, p.island_levels, one_hot := true)) AS features,
+       duckboost_dummy_names('island', p.island_levels, one_hot := true) AS island_names
+FROM penguins_split s, prep p;
+```
+
+Also `duckboost_integer(x, levels)` (integer encoding) and `duckboost_other(x, levels)` (pool rare levels). The [splitting and preprocessing vignette](https://javorraca.github.io/duckboost/vignettes/split-and-preprocess.html) explains train/test versus train/validation/test versus cross-validation, and walks through a complete example.
+
 ### Backends
 
 | Backend | Train in this build | Dump import | Predict / evaluate / `to_sql` |
@@ -196,10 +222,12 @@ For `task: "multiclass"`, `n_classes >= 2`, optional `base_scores` holds per-cla
 - **SQL export** mirrors orbital's `separate_trees` idea so DuckDB can evaluate ensemble members as independent columns.
 - **Reference trainer** is a didactic histogram/quantile-split GBDT (squared error, logistic, and softmax for multiclass). It is not a replacement for production XGBoost/LightGBM/CatBoost quality, but it exercises the full train → evaluate → SQL path.
 - **Table macros** `duckboost_fit` / `duckboost_score` wrap `duckboost_train` / `duckboost_predict` with `query_table` for a compact SQL workflow.
+- **Split and preprocessing macros** are plain SQL macros registered by the extension. Splits rank rows by a hash of the row's values mixed with `seed`, so they are reproducible and independent of physical row order.
 
 ## Roadmap
 
 - [x] Native trainer scaffolding behind `DUCKBOOST_WITH_*` / `DUCKBOOST_NATIVE_STUB_ONLY` + `duckboost_build_info()`
 - [x] Vendor C API bridges for XGBoost / LightGBM (train → dump → import into `BoostModel`)
 - [x] Standalone extension-template repository (`Makefile`, `extension_config.cmake`, [`docs/community_extensions_description.yml`](docs/community_extensions_description.yml))
+- [x] Split helpers (train/test, train/validation/test, v-fold) and preprocessing helpers (dummy/one-hot, integer encoding, rare-level pooling)
 - [ ] Submit [`docs/community_extensions_description.yml`](docs/community_extensions_description.yml) to `duckdb/community-extensions` after DuckDB 2.0 is released

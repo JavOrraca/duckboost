@@ -42,7 +42,7 @@ ORDER BY species;
 
 ### Split into train and test
 
-duckboost has no split function; you split with SQL before training. This split is stratified by species and deterministic: within each species, rows are ranked by their measurements and every fifth row is held out. That gives 40 training and 10 test rows per species, and the same split on every run.
+This page splits by hand, so you can see exactly what happens. `duckboost_initial_split` does the same job in one line, with a random-looking but reproducible assignment; see [Splitting data and preprocessing](split-and-preprocess.qmd). This split is stratified by species and deterministic: within each species, rows are ranked by their measurements and every fifth row is held out. That gives 40 training and 10 test rows per species, and the same split on every run.
 
 ```{python}
 #| echo: false
@@ -294,7 +294,7 @@ ORDER BY ALL;
 
 ### Preprocess and split three ways
 
-This step keeps the 333 complete rows, one-hot encodes `species`, `island`, and `sex`, and splits train / validation / test (about 60 / 20 / 20). The split is stratified by species and sex. The validation rows are for choosing hyperparameters, so the test rows only score the final model.
+This step keeps the 333 complete rows, one-hot encodes `species`, `island`, and `sex`, and splits train / validation / test (about 60 / 20 / 20). The split is stratified by species and sex. The validation rows are for choosing hyperparameters, so the test rows only score the final model. It is written out by hand. [Splitting data and preprocessing](split-and-preprocess.qmd) makes the same kind of split with `duckboost_initial_validation_split`, explains when you need a validation set at all, and has a complete example that imputes missing values instead of dropping those rows.
 
 ```{python}
 #| echo: false

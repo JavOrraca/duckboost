@@ -1,0 +1,157 @@
+# name: test/sql/duckboost/split.test
+# description: duckboost_initial_split, duckboost_initial_validation_split, duckboost_vfold
+# group: [duckboost]
+
+require duckboost
+
+statement ok
+CREATE TABLE penguins AS FROM read_csv('data/penguins.csv', nullstr = 'NA');
+
+# Two-way split: every stratum keeps round(0.75 * n) rows for training
+query TTI
+SELECT split, species, count(*)
+FROM duckboost_initial_split('penguins', strata := species)
+GROUP BY ALL
+ORDER BY ALL;
+----
+test	Adelie	38
+test	Chinstrap	17
+test	Gentoo	31
+train	Adelie	114
+train	Chinstrap	51
+train	Gentoo	93
+
+# Unstratified with a custom prop
+query TI
+SELECT split, count(*)
+FROM duckboost_initial_split('penguins', prop := 0.8)
+GROUP BY ALL
+ORDER BY ALL;
+----
+test	69
+train	275
+
+# The source columns come back unchanged, with split appended
+query I
+SELECT count(*) FROM (
+	SELECT * EXCLUDE (split) FROM duckboost_initial_split('penguins')
+	EXCEPT ALL
+	FROM penguins
+);
+----
+0
+
+# The assignment depends on row contents and seed, not physical row order
+statement ok
+CREATE TABLE shuffled AS FROM penguins ORDER BY hash(body_mass_g, island, year);
+
+query I
+SELECT count(*) FROM (
+	FROM duckboost_initial_split('penguins', strata := species)
+	EXCEPT ALL
+	FROM duckboost_initial_split('shuffled', strata := species)
+);
+----
+0
+
+# A different seed gives a different split with the same per-stratum sizes
+query I
+SELECT count(*) > 50 FROM (
+	FROM duckboost_initial_split('penguins', strata := species)
+	EXCEPT ALL
+	FROM duckboost_initial_split('penguins', strata := species, seed := 7)
+);
+----
+true
+
+query TTI
+SELECT split, species, count(*)
+FROM duckboost_initial_split('penguins', strata := species, seed := 7)
+GROUP BY ALL
+ORDER BY ALL;
+----
+test	Adelie	38
+test	Chinstrap	17
+test	Gentoo	31
+train	Adelie	114
+train	Chinstrap	51
+train	Gentoo	93
+
+# Three-way split: prop is [train, validation], test is the rest
+query TTI
+SELECT split, species, count(*)
+FROM duckboost_initial_validation_split('penguins', strata := species)
+GROUP BY ALL
+ORDER BY ALL;
+----
+test	Adelie	30
+test	Chinstrap	14
+test	Gentoo	25
+train	Adelie	91
+train	Chinstrap	41
+train	Gentoo	74
+validation	Adelie	31
+validation	Chinstrap	13
+validation	Gentoo	25
+
+query TI
+SELECT split, count(*)
+FROM duckboost_initial_validation_split('penguins', prop := [0.5, 0.25])
+GROUP BY ALL
+ORDER BY ALL;
+----
+test	86
+train	172
+validation	86
+
+# V-fold: every row lands in exactly one fold, folds differ by at most one row
+query IIII
+SELECT count(DISTINCT fold), min(n), max(n), sum(n)
+FROM (SELECT fold, count(*) AS n FROM duckboost_vfold('penguins', v := 5, strata := species) GROUP BY fold);
+----
+5	68	69	344
+
+# Stratified folds spread each species evenly
+query I
+SELECT max(n) - min(n) <= 1
+FROM (
+	SELECT species, fold, count(*) AS n
+	FROM duckboost_vfold('penguins', v := 5, strata := species)
+	GROUP BY ALL
+)
+GROUP BY species
+ORDER BY species;
+----
+true
+true
+true
+
+# A numeric column can be stratified after binning it
+query TI
+SELECT split, count(*)
+FROM duckboost_initial_split('penguins', strata := ntile(4) OVER (ORDER BY body_mass_g))
+GROUP BY ALL
+ORDER BY ALL;
+----
+test	84
+train	260
+
+statement error
+SELECT split, count(*) FROM duckboost_initial_split('penguins', strata := body_mass_g) GROUP BY ALL;
+----
+bin a numeric column first
+
+statement error
+SELECT split FROM duckboost_initial_split('penguins', prop := 1.5);
+----
+prop must be strictly between 0 and 1
+
+statement error
+SELECT split FROM duckboost_initial_validation_split('penguins', prop := [0.7, 0.4]);
+----
+summing to less than 1
+
+statement error
+SELECT fold FROM duckboost_vfold('penguins', v := 1);
+----
+v must be at least 2

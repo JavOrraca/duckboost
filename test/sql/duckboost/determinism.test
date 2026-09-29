@@ -1,0 +1,66 @@
+# name: test/sql/duckboost/determinism.test
+# description: training and evaluate_agg results do not depend on the order rows reach the aggregate
+# group: [duckboost]
+
+require duckboost
+
+statement ok
+CREATE TABLE penguins AS
+SELECT
+	row_number() OVER () AS id,
+	(sex = 'male')::DOUBLE AS is_male,
+	[bill_length_mm, bill_depth_mm, flipper_length_mm, body_mass_g, (species = 'Gentoo')::DOUBLE] AS features
+FROM read_csv('data/penguins.csv', nullstr = 'NA')
+WHERE sex IS NOT NULL;
+
+statement ok
+CREATE TABLE models AS
+SELECT
+	duckboost_train(is_male, features, MAP {'task': 'binary', 'n_estimators': '50', 'max_depth': '3'} ORDER BY id) AS forward,
+	duckboost_train(is_male, features, MAP {'task': 'binary', 'n_estimators': '50', 'max_depth': '3'} ORDER BY id DESC) AS backward,
+	duckboost_train(is_male, features, MAP {'task': 'binary', 'n_estimators': '50', 'max_depth': '3'} ORDER BY hash(id)) AS shuffled
+FROM penguins;
+
+query II
+SELECT forward = backward, forward = shuffled FROM models;
+----
+true	true
+
+query I
+SELECT
+	duckboost_evaluate_agg(forward, is_male, features, MAP {'metric': 'logloss'} ORDER BY id)
+	= duckboost_evaluate_agg(forward, is_male, features, MAP {'metric': 'logloss'} ORDER BY id DESC)
+FROM models, penguins;
+----
+true
+
+# Many models trained in one parallel GROUP BY match the same models trained one at a time
+statement ok
+SET threads = 4;
+
+statement ok
+CREATE TABLE grid AS
+SELECT d::VARCHAR AS max_depth, lr::VARCHAR AS learning_rate
+FROM (VALUES (1), (2), (3)) a(d), (VALUES (0.1), (0.3)) b(lr);
+
+statement ok
+CREATE TABLE parallel_models AS
+SELECT max_depth, learning_rate,
+	duckboost_train(is_male, features, MAP {'task': 'binary', 'n_estimators': '50', 'max_depth': max_depth, 'learning_rate': learning_rate}) AS model
+FROM penguins, grid
+GROUP BY ALL;
+
+statement ok
+SET threads = 1;
+
+statement ok
+CREATE TABLE serial_models AS
+SELECT max_depth, learning_rate,
+	duckboost_train(is_male, features, MAP {'task': 'binary', 'n_estimators': '50', 'max_depth': max_depth, 'learning_rate': learning_rate}) AS model
+FROM penguins, grid
+GROUP BY ALL;
+
+query I
+SELECT count(*) FROM parallel_models p JOIN serial_models s USING (max_depth, learning_rate) WHERE p.model = s.model;
+----
+6

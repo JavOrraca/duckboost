@@ -3,6 +3,7 @@
 #include "duckboost/model.hpp"
 #include "duckboost/native_train.hpp"
 
+#include "duckdb/catalog/default/default_functions.hpp"
 #include "duckdb/catalog/default/default_table_functions.hpp"
 #include "duckdb/common/constants.hpp"
 #include "duckdb/common/exception.hpp"
@@ -19,7 +20,9 @@
 #include "duckdb/main/extension/extension_loader.hpp"
 #include "duckdb/parser/parsed_data/create_macro_info.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <numeric>
 
 namespace duckdb {
 namespace duckboost {
@@ -106,6 +109,39 @@ vector<string> ReadVarcharList(Vector &list_vector, idx_t row) {
 		values.push_back(child_data[child_idx].GetString());
 	}
 	return values;
+}
+
+// Total order on doubles with every NaN equal to every other NaN and after all numbers, so std::sort stays well
+// defined when a feature is NaN.
+bool TotalLess(double a, double b) {
+	if (std::isnan(a) || std::isnan(b)) {
+		return !std::isnan(a) && std::isnan(b);
+	}
+	return a < b;
+}
+
+// Parallel aggregation hands rows to an aggregate in thread-dependent order, and both the trainer (tie-breaking,
+// floating-point sums) and the metrics depend on row order. Sorting first makes the result depend only on which
+// rows went in.
+void SortRowsCanonically(vector<double> &y, vector<vector<double>> &x) {
+	vector<idx_t> order(y.size());
+	std::iota(order.begin(), order.end(), idx_t(0));
+	std::sort(order.begin(), order.end(), [&](idx_t a, idx_t b) {
+		if (TotalLess(y[a], y[b]) || TotalLess(y[b], y[a])) {
+			return TotalLess(y[a], y[b]);
+		}
+		return std::lexicographical_compare(x[a].begin(), x[a].end(), x[b].begin(), x[b].end(), TotalLess);
+	});
+	vector<double> sorted_y;
+	vector<vector<double>> sorted_x;
+	sorted_y.reserve(y.size());
+	sorted_x.reserve(x.size());
+	for (auto index : order) {
+		sorted_y.push_back(y[index]);
+		sorted_x.push_back(std::move(x[index]));
+	}
+	y = std::move(sorted_y);
+	x = std::move(sorted_x);
 }
 
 struct TrainDataset {
@@ -209,6 +245,7 @@ void TrainFinalize(Vector &state_vector, AggregateFinalizeInputData &, Vector &r
 			continue;
 		}
 		auto options = state.data->options_set ? state.data->options : TrainOptions();
+		SortRowsCanonically(state.data->y, state.data->x);
 		auto model = TrainModel(state.data->y, state.data->x, options);
 		writer.WriteValue(StringVector::AddString(result, model.ToJSON()));
 	}
@@ -445,6 +482,7 @@ void EvaluateAggFinalize(Vector &state_vector, AggregateFinalizeInputData &, Vec
 		if (options.metric.empty()) {
 			options.metric = "auto";
 		}
+		SortRowsCanonically(state.data->y, state.data->x);
 		writer.WriteValue(EvaluateModel(model, state.data->y, state.data->x, options));
 	}
 }
@@ -653,7 +691,102 @@ FROM query_table(source::VARCHAR)
 SELECT *, duckboost_predict(model, features) AS prediction
 FROM query_table(source::VARCHAR)
 )"},
+	// The split macros rank rows by a hash of the whole row mixed with the seed, so the assignment depends only on
+	// row contents and seed, not on physical row order. hash(row, seed) mixes the seed too weakly, hence the xor.
+	{DEFAULT_SCHEMA, "duckboost_initial_split", {"source", nullptr}, {{"prop", "0.75"}, {"strata", "NULL"}, {"seed", "42"}, {nullptr, nullptr}}, R"(
+WITH __duckboost_hashed AS (
+	SELECT __duckboost_row.*,
+		hash(xor(hash(__duckboost_row), hash(seed::BIGINT))) AS __duckboost_hash,
+		strata AS __duckboost_stratum
+	FROM query_table(source::VARCHAR) __duckboost_row
+), __duckboost_ranked AS (
+	SELECT *,
+		row_number() OVER (PARTITION BY __duckboost_stratum ORDER BY __duckboost_hash) AS __duckboost_rank,
+		count(*) OVER (PARTITION BY __duckboost_stratum) AS __duckboost_size,
+		count(DISTINCT __duckboost_stratum) OVER () AS __duckboost_strata,
+		count(*) OVER () AS __duckboost_rows
+	FROM __duckboost_hashed
+)
+SELECT * EXCLUDE (__duckboost_hash, __duckboost_stratum, __duckboost_rank, __duckboost_size, __duckboost_strata, __duckboost_rows),
+	CASE
+		WHEN prop IS NULL OR prop <= 0 OR prop >= 1
+			THEN error('duckboost_initial_split: prop must be strictly between 0 and 1')
+		WHEN __duckboost_strata > 1 AND __duckboost_strata * 5 > __duckboost_rows
+			THEN error('duckboost: strata has fewer than 5 rows per value on average; bin a numeric column first, e.g. strata := ntile(4) OVER (ORDER BY price)')
+		WHEN __duckboost_rank <= round(prop * __duckboost_size) THEN 'train'
+		ELSE 'test'
+	END AS split
+FROM __duckboost_ranked
+)"},
+	{DEFAULT_SCHEMA, "duckboost_initial_validation_split", {"source", nullptr}, {{"prop", "[0.6, 0.2]"}, {"strata", "NULL"}, {"seed", "42"}, {nullptr, nullptr}}, R"(
+WITH __duckboost_hashed AS (
+	SELECT __duckboost_row.*,
+		hash(xor(hash(__duckboost_row), hash(seed::BIGINT))) AS __duckboost_hash,
+		strata AS __duckboost_stratum
+	FROM query_table(source::VARCHAR) __duckboost_row
+), __duckboost_ranked AS (
+	SELECT *,
+		row_number() OVER (PARTITION BY __duckboost_stratum ORDER BY __duckboost_hash) AS __duckboost_rank,
+		count(*) OVER (PARTITION BY __duckboost_stratum) AS __duckboost_size,
+		count(DISTINCT __duckboost_stratum) OVER () AS __duckboost_strata,
+		count(*) OVER () AS __duckboost_rows
+	FROM __duckboost_hashed
+)
+SELECT * EXCLUDE (__duckboost_hash, __duckboost_stratum, __duckboost_rank, __duckboost_size, __duckboost_strata, __duckboost_rows),
+	CASE
+		WHEN len(prop) IS DISTINCT FROM 2 OR prop[1] <= 0 OR prop[2] <= 0 OR prop[1] + prop[2] >= 1
+			THEN error('duckboost_initial_validation_split: prop must be [train, validation], both > 0 and summing to less than 1; the rest is test')
+		WHEN __duckboost_strata > 1 AND __duckboost_strata * 5 > __duckboost_rows
+			THEN error('duckboost: strata has fewer than 5 rows per value on average; bin a numeric column first, e.g. strata := ntile(4) OVER (ORDER BY price)')
+		WHEN __duckboost_rank <= round(prop[1] * __duckboost_size) THEN 'train'
+		WHEN __duckboost_rank <= round((prop[1] + prop[2]) * __duckboost_size) THEN 'validation'
+		ELSE 'test'
+	END AS split
+FROM __duckboost_ranked
+)"},
+	// Rows are dealt round-robin in (stratum, hash) order, so folds differ in size by at most one row and every
+	// stratum is spread evenly across folds.
+	{DEFAULT_SCHEMA, "duckboost_vfold", {"source", nullptr}, {{"v", "5"}, {"strata", "NULL"}, {"seed", "42"}, {nullptr, nullptr}}, R"(
+WITH __duckboost_hashed AS (
+	SELECT __duckboost_row.*,
+		hash(xor(hash(__duckboost_row), hash(seed::BIGINT))) AS __duckboost_hash,
+		strata AS __duckboost_stratum
+	FROM query_table(source::VARCHAR) __duckboost_row
+), __duckboost_ranked AS (
+	SELECT *,
+		row_number() OVER (ORDER BY __duckboost_stratum, __duckboost_hash) AS __duckboost_rank,
+		count(DISTINCT __duckboost_stratum) OVER () AS __duckboost_strata,
+		count(*) OVER () AS __duckboost_rows
+	FROM __duckboost_hashed
+)
+SELECT * EXCLUDE (__duckboost_hash, __duckboost_stratum, __duckboost_rank, __duckboost_strata, __duckboost_rows),
+	CASE
+		WHEN v IS NULL OR v < 2 OR v > __duckboost_rows
+			THEN error('duckboost_vfold: v must be at least 2 and at most the number of rows')
+		WHEN __duckboost_strata > 1 AND __duckboost_strata * 5 > __duckboost_rows
+			THEN error('duckboost: strata has fewer than 5 rows per value on average; bin a numeric column first, e.g. strata := ntile(4) OVER (ORDER BY price)')
+		ELSE ((__duckboost_rank - 1) % v + 1)::INTEGER
+	END AS fold
+FROM __duckboost_ranked
+)"},
 	{nullptr, nullptr, {nullptr}, {{nullptr, nullptr}}, nullptr}
+};
+
+static const DefaultMacro duckboost_scalar_macros[] = {
+	{DEFAULT_SCHEMA, "duckboost_levels", R"((x, min_count := 1) AS
+	list_sort([__duckboost_level.key FOR __duckboost_level IN map_entries(histogram(x)) IF __duckboost_level.value >= min_count]))"},
+	{DEFAULT_SCHEMA, "duckboost_other", R"((x, levels, other := 'other') AS
+	CASE WHEN x IS NULL THEN NULL WHEN list_contains(levels, x) THEN x ELSE other END)"},
+	// Dummy encoding drops the first level as the reference; one_hot keeps every level.
+	{DEFAULT_SCHEMA, "duckboost_dummy", R"((x, levels, one_hot := false) AS
+	[CASE WHEN x = __duckboost_level THEN 1.0::DOUBLE ELSE 0.0::DOUBLE END
+	 FOR __duckboost_level IN levels[CASE WHEN one_hot THEN 1 ELSE 2 END:]])"},
+	{DEFAULT_SCHEMA, "duckboost_dummy_names", R"((prefix, levels, one_hot := false) AS
+	[prefix || '_' || regexp_replace(__duckboost_level::VARCHAR, '[^A-Za-z0-9_]', '_', 'g')
+	 FOR __duckboost_level IN levels[CASE WHEN one_hot THEN 1 ELSE 2 END:]])"},
+	{DEFAULT_SCHEMA, "duckboost_integer", R"((x, levels) AS
+	coalesce(list_position(levels, x), 0)::DOUBLE)"},
+	{nullptr, nullptr, nullptr}
 };
 // clang-format on
 
@@ -661,6 +794,10 @@ void RegisterDuckBoostMacros(ExtensionLoader &loader) {
 	ParserOptions parser_options;
 	for (idx_t index = 0; duckboost_table_macros[index].name != nullptr; index++) {
 		auto info = DefaultTableFunctionGenerator::CreateTableMacroInfo(duckboost_table_macros[index], parser_options);
+		loader.RegisterFunction(*info);
+	}
+	for (idx_t index = 0; duckboost_scalar_macros[index].name != nullptr; index++) {
+		auto info = DefaultFunctionGenerator::CreateInternalMacroInfo(duckboost_scalar_macros[index], parser_options);
 		loader.RegisterFunction(*info);
 	}
 }
