@@ -34,6 +34,8 @@ website:
         contents:
           - text: Train, predict, export
             href: vignettes/train-predict-export.qmd
+          - text: Splitting data and preprocessing
+            href: vignettes/split-and-preprocess.qmd
           - text: "Example datasets: iris and penguins"
             href: vignettes/datasets.qmd
           - text: Import model dumps

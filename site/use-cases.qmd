@@ -65,8 +65,8 @@ ORDER BY species;
 ## When duckboost is not the right tool
 
 - **Data larger than memory.** `duckboost_train` collects every training row in memory before it fits, whichever trainer you use. DuckDB can scan much more than that, but the training step cannot stream.
-- **Advanced training features.** Early stopping, cross-validation, sample weights, monotonic constraints, custom losses, and GPU training are not available through `duckboost_train`. Train with the vendor library directly and import the result.
-- **Missing values in features.** `NULL` feature values are rejected. Impute them or drop those rows in SQL first. Categorical columns must be encoded as numbers (for example, one-hot).
+- **Advanced training features.** Early stopping, sample weights, monotonic constraints, custom losses, and GPU training are not available through `duckboost_train`. Train with the vendor library directly and import the result.
+- **Missing values in features.** `NULL` feature values are rejected. Impute them or drop those rows in SQL first. Categorical columns must be encoded as numbers; `duckboost_dummy` and `duckboost_integer` help (see [Splitting data and preprocessing](vignettes/split-and-preprocess.qmd)).
 - **Model explanation tooling.** There is no SHAP or feature-importance output. Use the vendor library's tools if you need them.
 - **Production-grade accuracy with the built-in trainer.** See below: for important models, use XGBoost or LightGBM (inside or outside DuckDB).
 
@@ -85,9 +85,9 @@ There are three ways to get a model into duckboost. They all produce the same mo
 | Tasks | Regression, binary, multiclass | Regression, binary, multiclass | Anything the vendor supports that duckboost can import |
 | Hyperparameters | `n_estimators`, `max_depth`, `learning_rate`, `min_samples_leaf`, `max_bins` | The same small set, mapped to vendor parameters | The full vendor API |
 | Regularization and sampling | None (no L1/L2 penalty, no row or column subsampling) | Vendor defaults only; not configurable through duckboost | Fully configurable |
-| Early stopping, cross-validation | No (do it in SQL with a validation split) | No | Yes |
+| Early stopping, cross-validation | No early stopping. Cross-validation in SQL with `duckboost_vfold` | No early stopping. Cross-validation in SQL with `duckboost_vfold` | Yes |
 | Speed | Single-threaded sort-and-sweep split search. With 4 features, 50 rounds, and depth 3, regression takes about 4 s for 100,000 rows and 15 s for 300,000 on a 4-core VM; a 3-class model builds three trees per round and takes about 13 s for 100,000 rows | Fast, multithreaded histogram algorithms | Fast |
-| Determinism | Always deterministic | Repeatable in practice: duckboost passes no subsampling settings | Depends on your seeds and settings |
+| Determinism | Always deterministic: the same rows give the same model, whatever order they arrive in and however many threads run | Repeatable in practice: duckboost passes no subsampling settings | Depends on your seeds and settings |
 | Numeric precision | Trains and exports in `DOUBLE` | XGBoost trains in 32-bit floats | Vendor-dependent |
 | CatBoost | No | No (CatBoost has no public training C API) | Yes, including categorical features |
 

@@ -2,7 +2,7 @@
 title: "SQL reference"
 ---
 
-Signatures below match `SELECT * FROM duckdb_functions() WHERE function_name LIKE 'duckboost%'` on `build/release/duckdb`, including parameter names. MAP keys come from the parsers in `src/model.cpp` and `src/import.cpp`. Table-macro argument types are NULL in `duckdb_functions()`; the types stated for `duckboost_fit` and `duckboost_score` are taken from the macro body in `src/duckboost_functions.cpp`.
+Signatures below match `SELECT * FROM duckdb_functions() WHERE function_name LIKE 'duckboost%'` on `build/release/duckdb`, including parameter names. MAP keys come from the parsers in `src/model.cpp` and `src/import.cpp`. Table-macro argument types are NULL in `duckdb_functions()`; the types stated for the table macros are taken from their bodies in `src/duckboost_functions.cpp`.
 
 Every example is a new in-memory database. `LOAD` uses the unsigned extension path relative to the repository root.
 
@@ -372,5 +372,167 @@ SELECT duckboost_train(
 FROM train;
 SELECT * FROM duckboost_score((SELECT model FROM models), 'train', [x])
 WHERE x = 4;
+""")
+```
+
+## `duckboost_initial_split`
+
+Table macro. Adds a `split` column, `'train'` or `'test'`, to every row of `source`. The rsample equivalent is `initial_split()`.
+
+```text
+duckboost_initial_split(source, prop := 0.75, strata := NULL, seed := 42)
+```
+
+- `source` is a table or view name, as a string.
+- `prop` is the training share, strictly between 0 and 1.
+- `strata` is a column or expression; each of its values is split in the same proportions, with `round(prop × n)` training rows per value. It must average at least 5 rows per value, so bin numeric columns first, for example `strata := ntile(4) OVER (ORDER BY price)`.
+- `seed` picks the split. The same rows and seed give the same split regardless of physical row order.
+
+The assignment is a hash of each row's values, so adding a column or changing a value changes it. Save the result with `CREATE TABLE ... AS`. See [Splitting data and preprocessing](vignettes/split-and-preprocess.qmd).
+
+```{python}
+#| echo: false
+#| output: asis
+from _helpers.duckrun import show
+
+show("""
+LOAD 'build/release/extension/duckboost/duckboost.duckdb_extension';
+CREATE TABLE t AS SELECT i, i % 2 AS grp FROM range(20) r(i);
+SELECT grp, split, count(*) AS n
+FROM duckboost_initial_split('t', prop := 0.8, strata := grp)
+GROUP BY ALL
+ORDER BY ALL;
+""")
+```
+
+## `duckboost_initial_validation_split`
+
+Table macro. Adds a `split` column, `'train'`, `'validation'`, or `'test'`. The rsample equivalent is `initial_validation_split()`.
+
+```text
+duckboost_initial_validation_split(source, prop := [0.6, 0.2], strata := NULL, seed := 42)
+```
+
+`prop` is `[training share, validation share]`. Both must be positive and sum to less than 1; test gets the rest. Per stratum, the first `round(prop[1] × n)` rows are training and the rows up to `round((prop[1] + prop[2]) × n)` are validation. The other arguments behave as in `duckboost_initial_split`.
+
+```{python}
+#| echo: false
+#| output: asis
+from _helpers.duckrun import show
+
+show("""
+LOAD 'build/release/extension/duckboost/duckboost.duckdb_extension';
+CREATE TABLE t AS SELECT i FROM range(20) r(i);
+SELECT split, count(*) AS n
+FROM duckboost_initial_validation_split('t', prop := [0.5, 0.25])
+GROUP BY ALL
+ORDER BY ALL;
+""")
+```
+
+## `duckboost_vfold`
+
+Table macro. Adds an `INTEGER` `fold` column from 1 to `v`, for v-fold cross-validation. The rsample equivalent is `vfold_cv()`.
+
+```text
+duckboost_vfold(source, v := 5, strata := NULL, seed := 42)
+```
+
+Rows are dealt to folds in turn, ordered by stratum and then by the seeded hash, so fold sizes differ by at most one row and each stratum is spread evenly. `v` must be between 2 and the number of rows. For fold *k*, fit on `fold <> k` and score `fold = k`. Pass only the training rows, never the test rows.
+
+```{python}
+#| echo: false
+#| output: asis
+from _helpers.duckrun import show
+
+show("""
+LOAD 'build/release/extension/duckboost/duckboost.duckdb_extension';
+CREATE TABLE t AS SELECT i FROM range(11) r(i);
+SELECT fold, count(*) AS n
+FROM duckboost_vfold('t', v := 3)
+GROUP BY fold
+ORDER BY fold;
+""")
+```
+
+## `duckboost_levels`
+
+Scalar macro that wraps an aggregate, so use it like `min` or `avg`.
+
+```text
+duckboost_levels(x, min_count := 1)
+```
+
+Returns the sorted list of distinct non-`NULL` values of `x` that occur at least `min_count` times. Compute it on the training rows and pass the list to the encoding macros below.
+
+## `duckboost_dummy`
+
+Scalar macro. The recipes equivalent is `step_dummy()`.
+
+```text
+duckboost_dummy(x, levels, one_hot := false) -> DOUBLE[]
+```
+
+Returns one 0/1 value per level, in the order of `levels`. By default the first level is the reference and gets no entry (*k* − 1 values). `one_hot := true` returns all *k*. Values not in `levels` and `NULL` return all zeros.
+
+## `duckboost_dummy_names`
+
+Scalar macro.
+
+```text
+duckboost_dummy_names(prefix, levels, one_hot := false) -> VARCHAR[]
+```
+
+The names matching `duckboost_dummy(x, levels, one_hot)`: `prefix || '_' || level`, with characters other than letters, digits, and `_` replaced by `_`. Join them with `array_to_string(..., ',')` for the `feature_names` option.
+
+## `duckboost_integer`
+
+Scalar macro. The recipes equivalent is `step_integer()`.
+
+```text
+duckboost_integer(x, levels) -> DOUBLE
+```
+
+The 1-based position of `x` in `levels`. `NULL` and values not in `levels` return 0.
+
+## `duckboost_other`
+
+Scalar macro. The recipes equivalent is `step_other()`.
+
+```text
+duckboost_other(x, levels, other := 'other')
+```
+
+Returns `x` if it is in `levels`, `NULL` if `x` is `NULL`, and `other` otherwise.
+
+```{python}
+#| echo: false
+#| output: asis
+from _helpers.duckrun import show
+
+show("""
+LOAD 'build/release/extension/duckboost/duckboost.duckdb_extension';
+CREATE TABLE t AS FROM (VALUES ('a'), ('a'), ('a'), ('b'), ('b'), ('c'), (NULL)) v(x);
+CREATE TABLE prep AS SELECT duckboost_levels(x) AS lv, duckboost_levels(x, min_count := 2) AS common FROM t;
+SELECT
+  x,
+  duckboost_dummy(x, lv) AS dummy,
+  duckboost_dummy(x, lv, one_hot := true) AS one_hot,
+  duckboost_integer(x, lv) AS integer,
+  duckboost_other(x, common) AS pooled
+FROM t, prep;
+""")
+```
+
+```{python}
+#| echo: false
+#| output: asis
+from _helpers.duckrun import show
+
+show("""
+LOAD 'build/release/extension/duckboost/duckboost.duckdb_extension';
+SELECT
+  duckboost_dummy_names('island', ['Biscoe', 'Dream', 'Torgersen']) AS dummy_names,
+  duckboost_dummy_names('island', ['Biscoe', 'Dream', 'Torgersen'], one_hot := true) AS one_hot_names;
 """)
 ```
