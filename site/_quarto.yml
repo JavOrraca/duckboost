@@ -3,7 +3,7 @@ project:
   execute-dir: project
   post-render: _helpers/og_url.py
   resources:
-    - images/duckboost-card.png
+    - images/duckboost-banner.png
     - images/apple-touch-icon.png
 
 website:
@@ -14,7 +14,7 @@ website:
   repo-url: https://github.com/JavOrraca/duckboost
   repo-actions: [edit, issue]
   favicon: images/favicon.png
-  image: /images/duckboost-card.png
+  image: /images/duckboost-banner.png
   image-alt: "duckboost: gradient-boosted trees, trained and scored in DuckDB SQL"
   open-graph: true
   twitter-card:

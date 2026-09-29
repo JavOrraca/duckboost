@@ -149,26 +149,32 @@ def hex_sticker(sans):
     return svg(round(w, 2), h, body)
 
 
-def social_card(sans, sans_regular):
-    # iOS crops link previews toward a square, so everything sits inside the
-    # centred 630x630 region.
+def social_card(sans, sans_regular, mono):
     w, h = 1200, 630
-    cx = w / 2
-    hex_r = 225
+    hex_r = 215
+    hex_w = 2 * hex_r * math.cos(math.radians(30))
+    hx, hy = 80 + hex_w / 2, h / 2
     k = hex_r / 100
     sticker = (
-        f'<g transform="translate({cx - 86.6 * k:.2f} {40:.2f}) scale({k:.4f})">'
+        f'<g transform="translate({hx - 86.6 * k:.2f} {hy - 100 * k:.2f}) scale({k:.4f})">'
         + hex_frame(86.6, 100, 100, 7)
         + family_tree(86.6, 27, 0.88)
         + sans.path("duckboost", 19, 86.6, 164, anchor="middle")
         + "</g>"
     )
-    tagline = "gradient boosting in DuckDB SQL"
+    tx = 530
+    code = "SELECT duckboost_predict(model, ...)"
+    code_size = 24
+    code_w = mono.width(code, code_size)
     body = "\n".join(
         [
             f'<rect width="{w}" height="{h}" fill="{BLACK}"/>',
             sticker,
-            sans_regular.path(tagline, 30, cx, 588, anchor="middle", fill=GREY),
+            sans.path("duckboost", 96, tx - 5, 280),
+            sans_regular.path("Gradient-boosted trees,", 34, tx, 346, fill=GREY),
+            sans_regular.path("trained and scored in DuckDB SQL", 34, tx, 390, fill=GREY),
+            f'<rect x="{tx - 10}" y="428" width="{code_w + 20:.1f}" height="42" rx="5" fill="{YELLOW}"/>',
+            mono.path(code, code_size, tx, 457, fill=BLACK),
         ]
     )
     return svg(w, h, body)
@@ -228,12 +234,14 @@ def main():
 
     sans = TextOutliner(font_file("Inter:style=SemiBold"))
     sans_regular = TextOutliner(font_file("Inter:style=Regular"))
+    mono = TextOutliner(font_file("JetBrains Mono:style=Medium"))
+
     OUT.mkdir(exist_ok=True)
     assets = {
         "duckboost-hex.svg": hex_sticker(sans),
         "duckboost-icon.svg": icon(),
         "duckboost-touch-icon.svg": touch_icon(),
-        "duckboost-card.svg": social_card(sans, sans_regular),
+        "duckboost-banner.svg": social_card(sans, sans_regular, mono),
     }
     for name, text in assets.items():
         (OUT / name).write_text(text)
@@ -242,7 +250,7 @@ def main():
     rasterize(args.chrome, OUT / "duckboost-icon.svg", OUT / "favicon.png", 64, 64, True)
     rasterize(args.chrome, OUT / "duckboost-touch-icon.svg", OUT / "apple-touch-icon.png", 180, 180, False)
     # 2400 wide: iOS only draws the full-width preview for images at least 2400x1256
-    rasterize(args.chrome, OUT / "duckboost-card.svg", OUT / "duckboost-card.png", 2400, 1260, False)
+    rasterize(args.chrome, OUT / "duckboost-banner.svg", OUT / "duckboost-banner.png", 2400, 1260, False)
 
 
 if __name__ == "__main__":
