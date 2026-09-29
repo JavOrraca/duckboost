@@ -1,7 +1,7 @@
 ---
 title: "duckboost"
 # otherwise Quarto uses the first image on the page (the SVG hex) as the link preview
-image: /images/duckboost-card.png
+image: /images/duckboost-banner.png
 image-alt: "duckboost: gradient-boosted trees, trained and scored in DuckDB SQL"
 ---
 
