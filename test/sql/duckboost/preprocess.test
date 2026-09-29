@@ -1,0 +1,106 @@
+# name: test/sql/duckboost/preprocess.test
+# description: duckboost_levels, duckboost_other, duckboost_dummy, duckboost_dummy_names, duckboost_integer
+# group: [duckboost]
+
+require duckboost
+
+statement ok
+CREATE TABLE penguins AS FROM read_csv('data/penguins.csv', nullstr = 'NA');
+
+query TT
+SELECT duckboost_levels(island), duckboost_levels(island, min_count := 60) FROM penguins;
+----
+[Biscoe, Dream, Torgersen]	[Biscoe, Dream]
+
+# NULLs are not a level
+query T
+SELECT duckboost_levels(sex) FROM penguins;
+----
+[female, male]
+
+statement ok
+CREATE TABLE islands AS FROM (VALUES (1, 'Biscoe'), (2, 'Dream'), (3, 'Torgersen'), (4, 'Mars'), (5, NULL)) v(id, island);
+
+# Dummy drops the first (reference) level; unseen values and NULL encode as all zeros
+query TTTRT
+SELECT
+	island,
+	duckboost_dummy(island, ['Biscoe', 'Dream', 'Torgersen']),
+	duckboost_dummy(island, ['Biscoe', 'Dream', 'Torgersen'], one_hot := true),
+	duckboost_integer(island, ['Biscoe', 'Dream', 'Torgersen']),
+	duckboost_other(island, ['Biscoe', 'Dream'])
+FROM islands
+ORDER BY id;
+----
+Biscoe	[0.0, 0.0]	[1.0, 0.0, 0.0]	1.0	Biscoe
+Dream	[1.0, 0.0]	[0.0, 1.0, 0.0]	2.0	Dream
+Torgersen	[0.0, 1.0]	[0.0, 0.0, 1.0]	3.0	other
+Mars	[0.0, 0.0]	[0.0, 0.0, 0.0]	0.0	other
+NULL	[0.0, 0.0]	[0.0, 0.0, 0.0]	0.0	NULL
+
+query T
+SELECT duckboost_other('Mars', ['Biscoe'], other := 'rare');
+----
+rare
+
+query TT
+SELECT
+	duckboost_dummy_names('island', ['Biscoe', 'Dream', 'Torgersen']),
+	duckboost_dummy_names('sex', ['female', 'not sure'], one_hot := true);
+----
+[island_Dream, island_Torgersen]	[sex_female, sex_not_sure]
+
+# End to end: split, learn preprocessing on training rows only, apply it to every row, train, evaluate on test
+statement ok
+CREATE TABLE penguins_split AS FROM duckboost_initial_split('penguins', strata := species);
+
+statement ok
+CREATE TABLE prep AS
+SELECT
+	median(bill_length_mm) AS bill_length_mm,
+	median(flipper_length_mm) AS flipper_length_mm,
+	duckboost_levels(island) AS island_levels,
+	duckboost_levels(sex) AS sex_levels,
+	duckboost_levels(species) AS species_levels
+FROM penguins_split
+WHERE split = 'train';
+
+statement ok
+CREATE TABLE baked AS
+SELECT
+	s.split,
+	duckboost_integer(s.species, p.species_levels) - 1 AS y,
+	list_concat(
+		[coalesce(s.bill_length_mm, p.bill_length_mm), coalesce(s.flipper_length_mm, p.flipper_length_mm)],
+		duckboost_dummy(s.island, p.island_levels, one_hot := true),
+		duckboost_dummy(s.sex, p.sex_levels, one_hot := true)
+	) AS x,
+	array_to_string(list_concat(
+		['bill_length_mm', 'flipper_length_mm'],
+		duckboost_dummy_names('island', p.island_levels, one_hot := true),
+		duckboost_dummy_names('sex', p.sex_levels, one_hot := true)
+	), ',') AS feature_names
+FROM penguins_split s, prep p;
+
+query II
+SELECT count(*), count(*) FILTER (WHERE len(x) = 7 AND len(list_filter(x, lambda v: v IS NULL)) = 0) FROM baked;
+----
+344	344
+
+statement ok
+CREATE TABLE fit AS
+SELECT duckboost_train(y, x, MAP {'task': 'multiclass', 'n_estimators': '30', 'max_depth': '3', 'feature_names': feature_names}) AS model
+FROM baked
+WHERE split = 'train';
+
+query I
+SELECT model LIKE '%"feature_names":["bill_length_mm","flipper_length_mm","island_Biscoe","island_Dream","island_Torgersen","sex_female","sex_male"]%' FROM fit;
+----
+true
+
+query I
+SELECT avg((duckboost_predict(f.model, b.x) = b.y)::INTEGER) > 0.9
+FROM baked b, fit f
+WHERE b.split = 'test';
+----
+true
