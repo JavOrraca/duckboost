@@ -9,6 +9,7 @@
 #include <cmath>
 #include <limits>
 #include <numeric>
+#include <utility>
 
 namespace duckdb {
 namespace duckboost {
@@ -444,16 +445,123 @@ double WeightedMean(const vector<double> &y, const vector<double> &weights, cons
 	return wsum > 0 ? sum / wsum : 0;
 }
 
+double WeightedQuantile(const vector<double> &values, const vector<double> &weights, const vector<idx_t> &rows,
+                        double alpha) {
+	vector<std::pair<double, double>> ordered;
+	ordered.reserve(rows.size());
+	double total_weight = 0;
+	for (auto row : rows) {
+		if (weights[row] <= 0) {
+			continue;
+		}
+		ordered.emplace_back(values[row], weights[row]);
+		total_weight += weights[row];
+	}
+	if (ordered.empty() || total_weight <= 0) {
+		return 0;
+	}
+	std::sort(ordered.begin(), ordered.end(),
+	          [](const std::pair<double, double> &a, const std::pair<double, double> &b) { return a.first < b.first; });
+	double cumulative = 0;
+	const double target = alpha * total_weight;
+	for (auto &entry : ordered) {
+		cumulative += entry.second;
+		if (cumulative >= target) {
+			return entry.first;
+		}
+	}
+	return ordered.back().first;
+}
+
+double WeightedExpectile(const vector<double> &values, const vector<double> &weights, const vector<idx_t> &rows,
+                         double tau) {
+	if (tau == 0.5) {
+		return WeightedMean(values, weights, rows);
+	}
+	bool found = false;
+	double lower = 0;
+	double upper = 0;
+	double total_weight = 0;
+	for (auto row : rows) {
+		if (weights[row] <= 0) {
+			continue;
+		}
+		if (!found) {
+			lower = values[row];
+			upper = values[row];
+			found = true;
+		} else {
+			lower = MinValue(lower, values[row]);
+			upper = MaxValue(upper, values[row]);
+		}
+		total_weight += weights[row];
+	}
+	if (!found || total_weight <= 0) {
+		return 0;
+	}
+	for (idx_t iteration = 0; iteration < 100; iteration++) {
+		auto candidate = 0.5 * (lower + upper);
+		double gradient = 0;
+		for (auto row : rows) {
+			auto asymmetry = values[row] >= candidate ? tau : 1.0 - tau;
+			gradient += weights[row] * asymmetry * (candidate - values[row]);
+		}
+		if (gradient > 0) {
+			upper = candidate;
+		} else {
+			lower = candidate;
+		}
+	}
+	return 0.5 * (lower + upper);
+}
+
+void RenewQuantileLeaves(BoostTree &tree, const vector<vector<double>> &x, const vector<double> &y,
+                         const vector<double> &prediction, const vector<double> &weights, const vector<idx_t> &rows,
+                         double alpha) {
+	vector<vector<idx_t>> leaf_rows(tree.nodes.size());
+	vector<double> residuals(y.size());
+	for (auto row : rows) {
+		idx_t node_idx = 0;
+		while (!tree.nodes[node_idx].is_leaf) {
+			auto &node = tree.nodes[node_idx];
+			node_idx = NodeGoesLeft(node, x[row][node.feature]) ? node.left : node.right;
+		}
+		leaf_rows[node_idx].push_back(row);
+		residuals[row] = y[row] - prediction[row];
+	}
+	for (idx_t node_idx = 0; node_idx < tree.nodes.size(); node_idx++) {
+		if (tree.nodes[node_idx].is_leaf) {
+			tree.nodes[node_idx].value = WeightedQuantile(residuals, weights, leaf_rows[node_idx], alpha);
+		}
+	}
+}
+
+double RegressionLossValue(RegressionLoss loss, double alpha, double y, double prediction) {
+	auto error = prediction - y;
+	switch (loss) {
+	case RegressionLoss::ABSOLUTE_ERROR:
+		return std::fabs(error);
+	case RegressionLoss::QUANTILE:
+		return error >= 0 ? (1.0 - alpha) * error : -alpha * error;
+	case RegressionLoss::EXPECTILE: {
+		auto asymmetry = y >= prediction ? alpha : 1.0 - alpha;
+		return asymmetry * error * error;
+	}
+	case RegressionLoss::SQUARED_ERROR:
+	default:
+		return error * error;
+	}
+}
+
 double EvalValidRegression(const vector<double> &y, const vector<double> &prediction, const vector<idx_t> &rows,
-                           const vector<double> &weights) {
-	double sse = 0;
+                           const vector<double> &weights, RegressionLoss loss, double alpha) {
+	double total_loss = 0;
 	double wsum = 0;
 	for (auto row : rows) {
-		auto err = prediction[row] - y[row];
-		sse += weights[row] * err * err;
+		total_loss += weights[row] * RegressionLossValue(loss, alpha, y[row], prediction[row]);
 		wsum += weights[row];
 	}
-	return wsum > 0 ? sse / wsum : std::numeric_limits<double>::infinity();
+	return wsum > 0 ? total_loss / wsum : std::numeric_limits<double>::infinity();
 }
 
 double EvalValidBinaryLogloss(const vector<double> &y, const vector<double> &prediction, const vector<idx_t> &rows,
@@ -544,6 +652,8 @@ BoostModel TrainReference(const vector<double> &y, const vector<vector<double>> 
 	BoostModel model;
 	model.backend = BoostBackend::REFERENCE;
 	model.task = options.task;
+	model.loss = options.loss;
+	model.objective_alpha = options.objective_alpha;
 	model.learning_rate = options.learning_rate;
 	model.n_features = n_features;
 	model.n_raw_features = n_features;
@@ -672,7 +782,21 @@ BoostModel TrainReference(const vector<double> &y, const vector<vector<double>> 
 		if (!options.class_weight.empty()) {
 			throw InvalidInputException("duckboost: class_weight is only supported for binary and multiclass tasks");
 		}
-		model.base_score = WeightedMean(y, weights, train_rows);
+		switch (options.loss) {
+		case RegressionLoss::ABSOLUTE_ERROR:
+			model.base_score = WeightedQuantile(y, weights, train_rows, 0.5);
+			break;
+		case RegressionLoss::QUANTILE:
+			model.base_score = WeightedQuantile(y, weights, train_rows, options.objective_alpha);
+			break;
+		case RegressionLoss::EXPECTILE:
+			model.base_score = WeightedExpectile(y, weights, train_rows, options.objective_alpha);
+			break;
+		case RegressionLoss::SQUARED_ERROR:
+		default:
+			model.base_score = WeightedMean(y, weights, train_rows);
+			break;
+		}
 	}
 	model.n_classes = 1;
 
@@ -686,23 +810,50 @@ BoostModel TrainReference(const vector<double> &y, const vector<vector<double>> 
 				gradients[i] = weights[i] * (p - y[i]);
 				hessians[i] = weights[i] * std::max(p * (1.0 - p), 1e-6);
 			} else {
-				gradients[i] = weights[i] * (prediction[i] - y[i]);
-				hessians[i] = weights[i];
+				switch (options.loss) {
+				case RegressionLoss::ABSOLUTE_ERROR:
+					gradients[i] = weights[i] * ((prediction[i] > y[i]) - (prediction[i] < y[i]));
+					hessians[i] = weights[i];
+					break;
+				case RegressionLoss::QUANTILE:
+					gradients[i] =
+					    weights[i] * (prediction[i] >= y[i] ? 1.0 - options.objective_alpha : -options.objective_alpha);
+					hessians[i] = weights[i];
+					break;
+				case RegressionLoss::EXPECTILE: {
+					auto asymmetry =
+					    y[i] >= prediction[i] ? 2.0 * options.objective_alpha : 2.0 * (1.0 - options.objective_alpha);
+					gradients[i] = weights[i] * asymmetry * (prediction[i] - y[i]);
+					hessians[i] = weights[i] * asymmetry;
+					break;
+				}
+				case RegressionLoss::SQUARED_ERROR:
+				default:
+					gradients[i] = weights[i] * (prediction[i] - y[i]);
+					hessians[i] = weights[i];
+					break;
+				}
 			}
 		}
 		auto grow_rows = SampleRows(train_rows, options.subsample, rng);
 		auto feature_subset = SampleFeatures(n_features, options.colsample_bytree, rng);
 		BoostTree tree;
 		BuildTree(tree, x, gradients, hessians, grow_rows, feature_subset, categorical_features, 0, options);
+		if (options.task == BoostTask::REGRESSION &&
+		    (options.loss == RegressionLoss::ABSOLUTE_ERROR || options.loss == RegressionLoss::QUANTILE)) {
+			auto alpha = options.loss == RegressionLoss::ABSOLUTE_ERROR ? 0.5 : options.objective_alpha;
+			RenewQuantileLeaves(tree, x, y, prediction, weights, grow_rows, alpha);
+		}
 		for (idx_t i = 0; i < y.size(); i++) {
 			prediction[i] += options.learning_rate * ApplyTree(tree, x[i]);
 		}
 		model.trees.push_back(std::move(tree));
 
 		if (!valid_rows.empty()) {
-			double metric = options.task == BoostTask::BINARY
-			                    ? EvalValidBinaryLogloss(y, prediction, valid_rows, weights)
-			                    : EvalValidRegression(y, prediction, valid_rows, weights);
+			double metric =
+			    options.task == BoostTask::BINARY
+			        ? EvalValidBinaryLogloss(y, prediction, valid_rows, weights)
+			        : EvalValidRegression(y, prediction, valid_rows, weights, options.loss, options.objective_alpha);
 			if (metric < best_valid - 1e-12) {
 				best_valid = metric;
 				best_rounds = model.trees.size();
@@ -753,6 +904,10 @@ BoostModel TrainModel(const vector<double> &y, const vector<vector<double>> &x, 
 	if (options.backend == BoostBackend::REFERENCE) {
 		return TrainReference(y, x, options, weights);
 	}
+	if (options.loss != RegressionLoss::SQUARED_ERROR || options.objective_alpha_set) {
+		throw NotImplementedException("duckboost: objective '%s' is supported by the reference backend only",
+		                              RegressionLossToString(options.loss));
+	}
 	if (!options.categorical_features.empty()) {
 		throw NotImplementedException("duckboost: categorical_features is supported by the reference backend only");
 	}
@@ -780,7 +935,21 @@ double EvaluateModel(const BoostModel &model, const vector<double> &y, const vec
 		if (model.task == BoostTask::BINARY || model.task == BoostTask::MULTICLASS) {
 			metric = "accuracy";
 		} else {
-			metric = "rmse";
+			switch (model.loss) {
+			case RegressionLoss::ABSOLUTE_ERROR:
+				metric = "mae";
+				break;
+			case RegressionLoss::QUANTILE:
+				metric = "pinball";
+				break;
+			case RegressionLoss::EXPECTILE:
+				metric = "expectile";
+				break;
+			case RegressionLoss::SQUARED_ERROR:
+			default:
+				metric = "rmse";
+				break;
+			}
 		}
 	}
 
@@ -798,6 +967,20 @@ double EvaluateModel(const BoostModel &model, const vector<double> &y, const vec
 			sae += std::fabs(model.Predict(x[i]) - y[i]);
 		}
 		return sae / static_cast<double>(y.size());
+	}
+	if (metric == "pinball" || metric == "quantile") {
+		double loss = 0;
+		for (idx_t i = 0; i < y.size(); i++) {
+			loss += RegressionLossValue(RegressionLoss::QUANTILE, model.objective_alpha, y[i], model.Predict(x[i]));
+		}
+		return loss / static_cast<double>(y.size());
+	}
+	if (metric == "expectile") {
+		double loss = 0;
+		for (idx_t i = 0; i < y.size(); i++) {
+			loss += RegressionLossValue(RegressionLoss::EXPECTILE, model.objective_alpha, y[i], model.Predict(x[i]));
+		}
+		return loss / static_cast<double>(y.size());
 	}
 	if (metric == "accuracy") {
 		idx_t correct = 0;
@@ -835,8 +1018,9 @@ double EvaluateModel(const BoostModel &model, const vector<double> &y, const vec
 		}
 		return loss / static_cast<double>(y.size());
 	}
-	throw InvalidInputException("duckboost: unknown metric '%s' (expected auto, rmse, mae, accuracy, logloss)",
-	                            options.metric);
+	throw InvalidInputException(
+	    "duckboost: unknown metric '%s' (expected auto, rmse, mae, pinball, quantile, expectile, accuracy, logloss)",
+	    options.metric);
 }
 
 } // namespace duckboost

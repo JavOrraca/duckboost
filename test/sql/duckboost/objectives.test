@@ -1,0 +1,164 @@
+# name: test/sql/duckboost/objectives.test
+# description: Quantile, absolute-error, and expectile objectives
+# group: [duckboost]
+
+require duckboost
+
+statement ok
+CREATE TABLE objective_train AS
+SELECT i::DOUBLE AS x, i::DOUBLE AS y
+FROM range(1, 101) t(i);
+
+statement ok
+CREATE TABLE quantile_models AS
+SELECT
+	duckboost_train(
+		y, [0.0],
+		MAP {'objective': 'quantile', 'quantile_alpha': '0.9', 'n_estimators': '5'}
+	) AS q90,
+	duckboost_train(
+		y, [0.0],
+		MAP {'loss': 'pinball', 'tau': '0.1', 'n_estimators': '5'}
+	) AS q10
+FROM objective_train;
+
+# Constant-feature quantiles should attain their requested empirical coverage.
+query RR
+SELECT
+	round(avg((t.y <= duckboost_predict(m.q90, [0.0]))::INTEGER), 2),
+	round(avg((t.y <= duckboost_predict(m.q10, [0.0]))::INTEGER), 2)
+FROM quantile_models m, objective_train t;
+----
+0.90	0.10
+
+query I
+SELECT avg((duckboost_predict(q90, [x]) > duckboost_predict(q10, [x]))::INTEGER) > 0.95
+FROM quantile_models, objective_train;
+----
+true
+
+# Non-default objectives persist their metadata and metric=auto follows it.
+query IIII
+SELECT
+	q90 LIKE '%"objective":"quantile"%',
+	q90 LIKE '%"objective_alpha":0.9%',
+	abs(
+		duckboost_evaluate_agg(q90, y, [0.0]) -
+		duckboost_evaluate_agg(q90, y, [0.0], MAP {'metric': 'pinball'})
+	) < 1e-12,
+	abs(
+		duckboost_evaluate_agg(q90, y, [0.0], MAP {'metric': 'quantile'}) -
+		duckboost_evaluate_agg(q90, y, [0.0], MAP {'metric': 'pinball'})
+	) < 1e-12
+FROM quantile_models, objective_train
+GROUP BY q90;
+----
+true	true	true	true
+
+statement ok
+CREATE TABLE skewed AS
+SELECT i::DOUBLE AS x, CASE WHEN i = 9 THEN 100.0 ELSE 0.0 END AS y
+FROM range(10) t(i);
+
+statement ok
+CREATE TABLE robust_models AS
+SELECT
+	duckboost_train(y, [0.0], MAP {'objective': 'absolute_error', 'n_estimators': '5'}) AS mae_model,
+	duckboost_train(y, [0.0], MAP {'objective': 'squared_error', 'n_estimators': '5'}) AS l2_model
+FROM skewed;
+
+# MAE starts at the weighted median, while squared error starts at the mean.
+query RR
+SELECT
+	duckboost_predict(mae_model, [0.0]),
+	duckboost_predict(l2_model, [0.0])
+FROM robust_models;
+----
+0.0	10.0
+
+query I
+SELECT
+	duckboost_evaluate_agg(mae_model, y, [0.0], MAP {'metric': 'mae'}) <
+	duckboost_evaluate_agg(l2_model, y, [0.0], MAP {'metric': 'mae'})
+FROM robust_models, skewed
+GROUP BY mae_model, l2_model;
+----
+true
+
+query II
+SELECT
+	mae_model LIKE '%"objective":"absolute_error"%',
+	l2_model NOT LIKE '%"objective"%' AND l2_model NOT LIKE '%"objective_alpha"%'
+FROM robust_models;
+----
+true	true
+
+statement ok
+CREATE TABLE expectile_models AS
+SELECT
+	duckboost_train(y, [x], MAP {'objective': 'squared_error', 'n_estimators': '8', 'max_depth': '2'}) AS l2,
+	duckboost_train(
+		y, [x],
+		MAP {'objective': 'expectile', 'expectile_alpha': '0.5', 'n_estimators': '8', 'max_depth': '2'}
+	) AS e50,
+	duckboost_train(
+		y, [x],
+		MAP {'objective': 'expectile', 'tau': '0.9', 'n_estimators': '8', 'max_depth': '2'}
+	) AS e90
+FROM objective_train;
+
+query II
+SELECT
+	max(abs(duckboost_predict(l2, [x]) - duckboost_predict(e50, [x]))) < 1e-10,
+	avg(duckboost_predict(e90, [x])) > avg(duckboost_predict(e50, [x]))
+FROM expectile_models, objective_train
+GROUP BY l2, e50, e90;
+----
+true	true
+
+query I
+SELECT abs(
+	duckboost_evaluate_agg(e90, y, [x]) -
+	duckboost_evaluate_agg(e90, y, [x], MAP {'metric': 'expectile'})
+) < 1e-12
+FROM expectile_models, objective_train
+GROUP BY e90;
+----
+true
+
+# objective remains backward compatible as a task alias.
+query I
+SELECT model LIKE '%"task":"binary"%'
+FROM (
+	SELECT duckboost_train(
+		(i >= 50)::DOUBLE, [i::DOUBLE],
+		MAP {'objective': 'binary', 'n_estimators': '2'}
+	) AS model
+	FROM range(100) t(i)
+);
+----
+true
+
+statement error
+SELECT duckboost_train(y, [x], MAP {'task': 'binary', 'objective': 'quantile'})
+FROM objective_train;
+----
+<REGEX>:.*objective 'quantile' requires task=regression.*
+
+statement error
+SELECT duckboost_train(y, [x], MAP {'objective': 'quantile', 'quantile_alpha': '1.5'})
+FROM objective_train;
+----
+<REGEX>:.*objective alpha must be in \(0, 1\).*
+
+statement error
+SELECT duckboost_train(y, [x], MAP {'objective': 'squared_error', 'tau': '0.9'})
+FROM objective_train;
+----
+<REGEX>:.*only valid with quantile or expectile.*
+
+statement error
+SELECT duckboost_train(y, [x], MAP {'objective': 'not_a_loss'})
+FROM objective_train;
+----
+<REGEX>:.*unknown task 'not_a_loss'.*

@@ -20,7 +20,9 @@ duckboost_train(y DOUBLE, features DOUBLE[], weight DOUBLE, options MAP(VARCHAR,
 | Option | Aliases | Default | Meaning |
 | --- | --- | --- | --- |
 | `backend` | | `reference` | `reference`, `xgboost` / `xgb`, `lightgbm` / `lgbm` / `lgb`, `catboost` / `cb`. Also accepts `duckboost` and `gbdt` for the reference backend. |
-| `task` | `objective` | `regression` | `regression` (`regressor`, `mse`), `binary` (`classification`, `logistic`, `binomial`), `multiclass` (`multi_class`, `multi-class`, `softmax`) |
+| `task` | | `regression` | `regression` (`regressor`, `mse`), `binary` (`classification`, `logistic`, `binomial`), `multiclass` (`multi_class`, `multi-class`, `softmax`) |
+| `objective` | `loss` | `squared_error` | Regression loss: `squared_error` (`l2`, `mse`, `reg:squarederror`), `absolute_error` (`mae`, `l1`, `regression_l1`, `reg:absoluteerror`), `quantile` (`pinball`, `reg:quantileerror`), or `expectile`. Legacy task names such as `binary` remain accepted. Non-squared objectives require the reference backend and `task=regression`. |
+| `quantile_alpha` | `expectile_alpha`, `tau` | `0.5` | Quantile or expectile level in `(0, 1)`. Only valid with those objectives. `alpha` remains an alias for `reg_alpha`. |
 | `n_estimators` | `num_boost_round`, `iterations` | `10` | Number of boosting rounds. Must be > 0. |
 | `max_depth` | `depth` | `3` | Maximum tree depth. Must be > 0. |
 | `learning_rate` | `eta`, `lr` | `0.1` | Must be > 0. |
@@ -44,7 +46,7 @@ Unknown keys raise `duckboost: unknown train option`. Values are strings inside 
 
 Feature `NULL`s become NaN and the reference trainer learns a per-split `default_left` missing direction (same idea as XGBoost). Sample `weight` must be non-NULL and `>= 0`.
 
-Regression uses squared error. Binary uses logistic loss and requires labels in `{0, 1}`. `duckboost_predict` then returns the class probability, not a 0/1 label.
+Regression supports squared-error, absolute-error, quantile, and expectile objectives in the reference trainer. Absolute-error and quantile trees renew each grown leaf to the weighted median or requested weighted residual quantile. Binary uses logistic loss and requires labels in `{0, 1}`. `duckboost_predict` then returns the class probability, not a 0/1 label.
 
 Multiclass uses softmax cross-entropy and requires integer class indices `0, 1, ..., n_classes - 1` as `y`, so map string classes to integers first (for example with `CASE`). Each boosting round fits one tree per class, so a model has `n_estimators * n_classes` trees. Each class's starting score is the log of its share of the training rows. `duckboost_predict` returns the most likely class index and `duckboost_predict_proba` returns one probability per class. The XGBoost and LightGBM trainers apply the same label rules.
 
@@ -159,18 +161,20 @@ duckboost_evaluate(model VARCHAR, y DOUBLE, features DOUBLE[]) -> DOUBLE
 duckboost_evaluate(model VARCHAR, y DOUBLE, features DOUBLE[], options MAP(VARCHAR, VARCHAR)) -> DOUBLE
 ```
 
-The only option is `metric` (`auto`, `rmse`, `mae`, `accuracy`, `logloss`). Unknown keys raise `duckboost: unknown evaluate option`.
+The only option is `metric` (`auto`, `rmse`, `mae`, `pinball` / `quantile`, `expectile`, `accuracy`, `logloss`). Unknown keys raise `duckboost: unknown evaluate option`.
 
 What the scalar function returns for each metric:
 
 | `metric` | Result on that row |
 | --- | --- |
 | `mae` | Absolute error |
+| `pinball`, `quantile` | Pinball loss at the model's objective alpha. |
+| `expectile` | Asymmetric squared loss at the model's objective alpha. |
 | `accuracy` | `1` if the classification is correct, else `0`. Binary treats probability `>= 0.5` as class 1. Multiclass compares the argmax index. |
 | `logloss` | Row log loss. Multiclass uses the probability of the integer label. |
-| anything else, including `auto` and `rmse` | Squared error |
+| `rmse` | Squared-error contribution; take the square root after averaging rows. |
 
-**TODO:** For regression, the `auto` branch that would select MAE is guarded by `&& false`, so it never runs. `metric = 'auto'` therefore returns squared error, not MAE and not RMSE. Dataset RMSE is `duckboost_evaluate_agg`.
+`auto` selects accuracy for classification and the matching regression loss for regression models.
 
 ```{python}
 #| echo: false
@@ -203,7 +207,7 @@ duckboost_evaluate_agg(model VARCHAR, y DOUBLE, features DOUBLE[]) -> DOUBLE
 duckboost_evaluate_agg(model VARCHAR, y DOUBLE, features DOUBLE[], options MAP(VARCHAR, VARCHAR)) -> DOUBLE
 ```
 
-`metric` defaults to `auto`: RMSE for regression, accuracy for binary and multiclass. `rmse`, `mae`, and `logloss` are means (RMSE is the square root of the mean squared error). `accuracy` is the fraction of correct rows. `model` and `y` cannot be NULL.
+`metric` defaults to `auto`: the model's training loss for regression, and accuracy for binary and multiclass. `rmse`, `mae`, `pinball` / `quantile`, `expectile`, and `logloss` are dataset means (RMSE is the square root of the mean squared error). `accuracy` is the fraction of correct rows. Pinball and expectile use the alpha stored in the model. `model` and `y` cannot be NULL.
 
 ```{python}
 #| echo: false

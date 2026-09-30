@@ -321,6 +321,40 @@ BoostTask TaskFromString(const string &name) {
 	throw InvalidInputException("duckboost: unknown task '%s' (expected regression, binary, or multiclass)", name);
 }
 
+string RegressionLossToString(RegressionLoss loss) {
+	switch (loss) {
+	case RegressionLoss::ABSOLUTE_ERROR:
+		return "absolute_error";
+	case RegressionLoss::QUANTILE:
+		return "quantile";
+	case RegressionLoss::EXPECTILE:
+		return "expectile";
+	case RegressionLoss::SQUARED_ERROR:
+	default:
+		return "squared_error";
+	}
+}
+
+RegressionLoss RegressionLossFromString(const string &name) {
+	auto lower = StringUtil::Lower(name);
+	if (lower == "squared_error" || lower == "l2" || lower == "mse" || lower == "reg:squarederror") {
+		return RegressionLoss::SQUARED_ERROR;
+	}
+	if (lower == "absolute_error" || lower == "mae" || lower == "l1" || lower == "regression_l1" ||
+	    lower == "reg:absoluteerror") {
+		return RegressionLoss::ABSOLUTE_ERROR;
+	}
+	if (lower == "quantile" || lower == "pinball" || lower == "reg:quantileerror") {
+		return RegressionLoss::QUANTILE;
+	}
+	if (lower == "expectile") {
+		return RegressionLoss::EXPECTILE;
+	}
+	throw InvalidInputException("duckboost: unknown regression objective '%s' "
+	                            "(expected squared_error, absolute_error, quantile, or expectile)",
+	                            name);
+}
+
 bool BackendTrainingSupported(BoostBackend backend) {
 	if (backend == BoostBackend::REFERENCE) {
 		return true;
@@ -365,9 +399,18 @@ TrainOptions TrainOptions::FromMap(const unordered_map<string, string> &options)
 		auto &value = entry.second;
 		if (key == "backend") {
 			result.backend = BackendFromString(value);
-		} else if (key == "task" || key == "objective") {
-			// Legacy: objective doubled as task name (regression/binary/multiclass).
+		} else if (key == "task") {
 			result.task = TaskFromString(value);
+		} else if (key == "objective" || key == "loss") {
+			// Legacy objective values (binary/multiclass/regression) remain task aliases.
+			try {
+				result.loss = RegressionLossFromString(value);
+			} catch (const InvalidInputException &) {
+				result.task = TaskFromString(value);
+			}
+		} else if (key == "quantile_alpha" || key == "expectile_alpha" || key == "tau") {
+			result.objective_alpha = std::stod(value);
+			result.objective_alpha_set = true;
 		} else if (key == "n_estimators" || key == "num_boost_round" || key == "iterations") {
 			result.n_estimators = static_cast<idx_t>(std::stoull(value));
 		} else if (key == "max_depth" || key == "depth") {
@@ -446,6 +489,19 @@ TrainOptions TrainOptions::FromMap(const unordered_map<string, string> &options)
 	}
 	if (result.early_stopping_rounds > 0 && result.validation_fraction == 0) {
 		result.validation_fraction = 0.2;
+	}
+	if (result.loss != RegressionLoss::SQUARED_ERROR && result.task != BoostTask::REGRESSION) {
+		throw InvalidInputException("duckboost: objective '%s' requires task=regression",
+		                            RegressionLossToString(result.loss));
+	}
+	if (result.objective_alpha_set && result.loss != RegressionLoss::QUANTILE &&
+	    result.loss != RegressionLoss::EXPECTILE) {
+		throw InvalidInputException("duckboost: quantile_alpha/expectile_alpha/tau is only valid with quantile or "
+		                            "expectile objectives");
+	}
+	if ((result.loss == RegressionLoss::QUANTILE || result.loss == RegressionLoss::EXPECTILE) &&
+	    (!(result.objective_alpha > 0 && result.objective_alpha < 1) || !std::isfinite(result.objective_alpha))) {
+		throw InvalidInputException("duckboost: objective alpha must be in (0, 1)");
 	}
 	return result;
 }
@@ -655,6 +711,10 @@ string BoostModel::ToJSON() const {
 	out << "{\"duckboost_version\":" << duckboost_version;
 	out << ",\"backend\":\"" << EscapeJSON(BackendToString(backend)) << "\"";
 	out << ",\"task\":\"" << EscapeJSON(TaskToString(task)) << "\"";
+	if (loss != RegressionLoss::SQUARED_ERROR) {
+		out << ",\"objective\":\"" << EscapeJSON(RegressionLossToString(loss)) << "\"";
+		out << ",\"objective_alpha\":" << FormatDouble(objective_alpha);
+	}
 	out << ",\"base_score\":" << FormatDouble(base_score);
 	if (!base_scores.empty()) {
 		out << ",\"base_scores\":[";
@@ -806,6 +866,10 @@ BoostModel BoostModel::FromJSON(const string &json) {
 			model.backend = BackendFromString(p.ParseString());
 		} else if (key == "task") {
 			model.task = TaskFromString(p.ParseString());
+		} else if (key == "objective") {
+			model.loss = RegressionLossFromString(p.ParseString());
+		} else if (key == "objective_alpha") {
+			model.objective_alpha = p.ParseNumber();
 		} else if (key == "base_score") {
 			model.base_score = p.ParseNumber();
 		} else if (key == "base_scores") {

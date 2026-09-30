@@ -128,6 +128,15 @@ FROM mc_train;
 -- predict returns argmax class index; predict_proba returns softmax LIST
 SELECT duckboost_predict(model, features), duckboost_predict_proba(model, features) FROM mc_models, mc_test;
 
+-- Robust and asymmetric regression losses (reference backend)
+SELECT duckboost_train(y, features, MAP {'objective': 'absolute_error'}) AS mae_model FROM train;
+SELECT duckboost_train(
+	y, features, MAP {'objective': 'quantile', 'quantile_alpha': '0.9'}
+) AS q90_model FROM train;
+SELECT duckboost_train(
+	y, features, MAP {'objective': 'expectile', 'tau': '0.9'}
+) AS e90_model FROM train;
+
 -- Sample weights / class_weight, early stopping, and feature importance
 SELECT duckboost_train(y, features, weight, MAP {
 	'task': 'binary',
@@ -237,7 +246,7 @@ Split nodes may use `"compare":"equal"` with `threshold`, or `"compare":"in"` wi
 
 - **Layout**: standalone community extension ([extension-template](https://github.com/duckdb/extension-template)) so optional vendor ML libraries stay out of core DuckDB builds. The `duckdb` submodule tracks DuckDB 2.0 (`v2.0-cyanoptera`).
 - **SQL export** mirrors orbital's `separate_trees` idea so DuckDB can evaluate ensemble members as independent columns.
-- **Reference trainer** is a didactic histogram/quantile-split GBDT (squared error, logistic, and softmax for multiclass) with missing-value defaults, L1/L2/`gamma`, sample weights, and early stopping. Set `categorical_features` to comma-separated feature names or zero-based indices to train exact one-vs-rest equality splits on numeric category values. It is not a replacement for production XGBoost/LightGBM/CatBoost quality, but it exercises the full train → evaluate → inspect → SQL path.
+- **Reference trainer** is a didactic histogram/quantile-split GBDT (squared-error, absolute-error, quantile, expectile, logistic, and softmax losses) with missing-value defaults, L1/L2/`gamma`, sample weights, and early stopping. Set `categorical_features` to comma-separated feature names or zero-based indices to train exact one-vs-rest equality splits on numeric category values. It is not a replacement for production XGBoost/LightGBM/CatBoost quality, but it exercises the full train → evaluate → inspect → SQL path.
 - **Table macros** `duckboost_fit` / `duckboost_score` wrap `duckboost_train` / `duckboost_predict` with `query_table` for a compact SQL workflow.
 - **Split and preprocessing macros** are plain SQL macros registered by the extension. Splits rank rows by a hash of the row's values mixed with `seed`, so they are reproducible and independent of physical row order.
 

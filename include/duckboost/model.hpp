@@ -21,6 +21,8 @@ enum class BoostBackend : uint8_t { REFERENCE = 0, XGBOOST = 1, LIGHTGBM = 2, CA
 
 enum class BoostTask : uint8_t { REGRESSION = 0, BINARY = 1, MULTICLASS = 2 };
 
+enum class RegressionLoss : uint8_t { SQUARED_ERROR = 0, ABSOLUTE_ERROR = 1, QUANTILE = 2, EXPECTILE = 3 };
+
 //! LESS: feature < threshold → left. EQUAL/IN: matching values → right, all others → left.
 enum class SplitCompare : uint8_t { LESS = 0, EQUAL = 1, IN = 2 };
 
@@ -85,6 +87,8 @@ struct BoostModel {
 	idx_t duckboost_version = 1;
 	BoostBackend backend = BoostBackend::REFERENCE;
 	BoostTask task = BoostTask::REGRESSION;
+	RegressionLoss loss = RegressionLoss::SQUARED_ERROR;
+	double objective_alpha = 0.5;
 	double base_score = 0;
 	//! Per-class biases for multiclass; empty means use base_score for every class.
 	vector<double> base_scores;
@@ -115,6 +119,9 @@ struct BoostModel {
 struct TrainOptions {
 	BoostBackend backend = BoostBackend::REFERENCE;
 	BoostTask task = BoostTask::REGRESSION;
+	RegressionLoss loss = RegressionLoss::SQUARED_ERROR;
+	double objective_alpha = 0.5;
+	bool objective_alpha_set = false;
 	idx_t n_estimators = 10;
 	idx_t max_depth = 3;
 	double learning_rate = 0.1;
@@ -152,7 +159,7 @@ struct TrainOptions {
 idx_t ResolveClassCount(const vector<double> &y, const TrainOptions &options);
 
 struct EvalOptions {
-	string metric = "auto"; // auto | rmse | mae | accuracy | logloss
+	string metric = "auto"; // auto | rmse | mae | pinball | expectile | accuracy | logloss
 	static EvalOptions FromMap(const unordered_map<string, string> &options);
 };
 
@@ -191,6 +198,8 @@ string BackendToString(BoostBackend backend);
 BoostBackend BackendFromString(const string &name);
 string TaskToString(BoostTask task);
 BoostTask TaskFromString(const string &name);
+string RegressionLossToString(RegressionLoss loss);
+RegressionLoss RegressionLossFromString(const string &name);
 
 bool BackendTrainingSupported(BoostBackend backend);
 string BackendCapabilityNote(BoostBackend backend);
