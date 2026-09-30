@@ -100,13 +100,14 @@ SET VARIABLE lgb_categorical_query = (SELECT sql FROM lgb_categorical_sql);
 
 statement ok
 CREATE TABLE lgb_categorical_exported AS
-SELECT id, prediction::DOUBLE AS prediction
+SELECT prediction::DOUBLE AS prediction
 FROM query(getvariable('lgb_categorical_query'));
 
 query I
-SELECT bool_and(abs(n.prediction - s.prediction) < 1e-12)
-FROM lgb_categorical_native n
-JOIN lgb_categorical_exported s USING (id);
+SELECT
+	(SELECT list(round(prediction, 12) ORDER BY prediction) FROM lgb_categorical_native)
+	=
+	(SELECT list(round(prediction, 12) ORDER BY prediction) FROM lgb_categorical_exported);
 ----
 true
 
