@@ -1,0 +1,87 @@
+# name: test/sql/duckboost/lgb_missing.test
+# description: LightGBM numerical default directions and missing types
+# group: [duckboost]
+
+require duckboost
+
+statement ok
+CREATE TABLE lgb_missing_model AS
+SELECT duckboost_import(
+	'lightgbm',
+	(SELECT content FROM read_text('test/sql/duckboost/data/lgb_numeric_missing.txt'))
+) AS model;
+
+# NaN: explicit NaN missing, zero missing, and None (NaN-as-zero) respectively.
+query IIIIII
+SELECT
+	duckboost_predict(model, [NULL]),
+	duckboost_predict(model, ['nan'::DOUBLE]),
+	duckboost_predict(model, [0.0]),
+	duckboost_predict(model, [0.5]),
+	duckboost_predict(model, [-2.0]),
+	duckboost_predict(model, [2.0])
+FROM lgb_missing_model;
+----
+61.0	61.0	61.0	43.0	7.0	70.0
+
+query I
+SELECT
+	model LIKE '%"default_left":true%'
+	AND model LIKE '%"default_left":false,"missing_type":"zero"%'
+	AND model LIKE '%"missing_type":"none"%'
+FROM lgb_missing_model;
+----
+true
+
+# The missing-type metadata survives native JSON import.
+statement ok
+CREATE TABLE lgb_missing_roundtrip AS
+SELECT duckboost_import('reference', model) AS model
+FROM lgb_missing_model;
+
+query III
+SELECT
+	duckboost_predict(model, [NULL]),
+	duckboost_predict(model, [0.0]),
+	duckboost_predict(model, [0.5])
+FROM lgb_missing_roundtrip;
+----
+61.0	61.0	43.0
+
+statement ok
+CREATE TABLE lgb_missing_score(id, x) AS
+VALUES
+	(1, NULL::DOUBLE),
+	(2, 'nan'::DOUBLE),
+	(3, 0.0),
+	(4, 0.5),
+	(5, -2.0),
+	(6, 2.0);
+
+statement ok
+CREATE TABLE lgb_missing_native AS
+SELECT id, duckboost_predict(model, [x]) AS prediction
+FROM lgb_missing_model, lgb_missing_score;
+
+statement ok
+SET VARIABLE lgb_missing_sql = (
+	SELECT duckboost_to_sql(
+		model,
+		'lgb_missing_score',
+		['x'],
+		MAP {'separate_trees': 'false', 'prediction_alias': 'prediction'}
+	)
+	FROM lgb_missing_model
+);
+
+statement ok
+CREATE TABLE lgb_missing_exported AS
+SELECT id, prediction::DOUBLE AS prediction
+FROM query(getvariable('lgb_missing_sql'));
+
+query I
+SELECT bool_and(abs(n.prediction - s.prediction) < 1e-12)
+FROM lgb_missing_native n
+JOIN lgb_missing_exported s USING (id);
+----
+true

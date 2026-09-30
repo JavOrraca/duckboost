@@ -235,11 +235,33 @@ vector<int64_t> ParseIntList(const string &value) {
 
 idx_t ConvertLGBNode(idx_t internal_idx, const vector<int64_t> &split_feature, const vector<double> &threshold,
                      const vector<int64_t> &left_child, const vector<int64_t> &right_child,
-                     const vector<double> &leaf_value, double shrinkage, BoostTree &tree) {
+                     const vector<int64_t> &decision_type, const vector<double> &leaf_value, double shrinkage,
+                     BoostTree &tree) {
+	if (internal_idx >= split_feature.size()) {
+		throw InvalidInputException("duckboost: lightgbm internal node index out of range");
+	}
 	TreeNode node;
 	node.is_leaf = false;
 	node.feature = static_cast<idx_t>(split_feature[internal_idx]);
 	node.threshold = ThresholdForLessEqual(threshold[internal_idx]);
+	auto decision = decision_type.empty() ? int64_t(0) : decision_type[internal_idx];
+	if (decision < 0 || decision > std::numeric_limits<uint8_t>::max()) {
+		throw InvalidInputException("duckboost: invalid lightgbm decision_type");
+	}
+	node.default_left = (decision & 2) != 0;
+	switch ((decision >> 2) & 3) {
+	case 0:
+		node.missing_type = SplitMissingType::NONE;
+		break;
+	case 1:
+		node.missing_type = SplitMissingType::ZERO;
+		break;
+	case 2:
+		node.missing_type = SplitMissingType::NAN;
+		break;
+	default:
+		throw InvalidInputException("duckboost: invalid lightgbm missing_type");
+	}
 	auto idx = tree.nodes.size();
 	tree.nodes.push_back(node);
 
@@ -255,8 +277,8 @@ idx_t ConvertLGBNode(idx_t internal_idx, const vector<int64_t> &split_feature, c
 			tree.nodes.push_back(leaf);
 			return tree.nodes.size() - 1;
 		}
-		return ConvertLGBNode(static_cast<idx_t>(child), split_feature, threshold, left_child, right_child, leaf_value,
-		                      shrinkage, tree);
+		return ConvertLGBNode(static_cast<idx_t>(child), split_feature, threshold, left_child, right_child,
+		                      decision_type, leaf_value, shrinkage, tree);
 	};
 
 	tree.nodes[idx].left = attach(left_child[internal_idx]);
@@ -414,13 +436,17 @@ BoostModel ImportLightGBMText(const string &dump, const ImportOptions &options) 
 			    left_child.size() != num_leaves - 1 || right_child.size() != num_leaves - 1) {
 				throw InvalidInputException("duckboost: lightgbm split array size mismatch");
 			}
+			if (!decision_type.empty() && decision_type.size() != num_leaves - 1) {
+				throw InvalidInputException("duckboost: lightgbm decision_type size mismatch");
+			}
 			for (auto f : split_feature) {
 				if (f < 0) {
 					throw InvalidInputException("duckboost: lightgbm split_feature must be non-negative");
 				}
 				model.n_features = MaxValue<idx_t>(model.n_features, static_cast<idx_t>(f) + 1);
 			}
-			ConvertLGBNode(0, split_feature, threshold, left_child, right_child, leaf_value, shrinkage, tree);
+			ConvertLGBNode(0, split_feature, threshold, left_child, right_child, decision_type, leaf_value, shrinkage,
+			               tree);
 		}
 		model.trees.push_back(std::move(tree));
 		tree_fields.clear();

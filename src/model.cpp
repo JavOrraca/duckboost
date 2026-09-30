@@ -15,11 +15,20 @@ namespace duckdb {
 namespace duckboost {
 
 bool NodeGoesLeft(const TreeNode &node, double value) {
-	if (std::isnan(value)) {
+	if (node.compare != SplitCompare::LESS && std::isnan(value)) {
 		return node.default_left;
 	}
 	if (node.compare == SplitCompare::EQUAL) {
 		return value != node.threshold;
+	}
+	if (node.missing_type == SplitMissingType::ZERO && (std::isnan(value) || value == 0.0)) {
+		return node.default_left;
+	}
+	if (node.missing_type == SplitMissingType::NAN && std::isnan(value)) {
+		return node.default_left;
+	}
+	if (node.missing_type == SplitMissingType::NONE && std::isnan(value)) {
+		value = 0.0;
 	}
 	return value < node.threshold;
 }
@@ -50,8 +59,14 @@ string TreeToSQL(const BoostTree &tree, const vector<string> &feature_columns, i
 		return "CASE WHEN " + feature + " IS NULL OR isnan(" + feature + ") THEN " + missing_branch + " WHEN " +
 		       feature + " = " + FormatDouble(node.threshold) + " THEN " + right + " ELSE " + left + " END";
 	}
-	return "CASE WHEN " + feature + " IS NULL OR isnan(" + feature + ") THEN " + missing_branch + " WHEN " + feature +
-	       " < " + FormatDouble(node.threshold) + " THEN " + left + " ELSE " + right + " END";
+	auto missing_test = feature + " IS NULL OR isnan(" + feature + ")";
+	if (node.missing_type == SplitMissingType::ZERO) {
+		missing_test += " OR " + feature + " = 0";
+	} else if (node.missing_type == SplitMissingType::NONE) {
+		missing_branch = 0.0 < node.threshold ? left : right;
+	}
+	return "CASE WHEN " + missing_test + " THEN " + missing_branch + " WHEN " + feature + " < " +
+	       FormatDouble(node.threshold) + " THEN " + left + " ELSE " + right + " END";
 }
 
 static constexpr uint64_t CTR_MAGIC_MULT = 0x4906ba494954cb65ULL;
@@ -666,6 +681,11 @@ string BoostModel::ToJSON() const {
 			}
 			if (!node.is_leaf) {
 				out << ",\"default_left\":" << (node.default_left ? "true" : "false");
+				if (node.missing_type == SplitMissingType::ZERO) {
+					out << ",\"missing_type\":\"zero\"";
+				} else if (node.missing_type == SplitMissingType::NONE) {
+					out << ",\"missing_type\":\"none\"";
+				}
 				if (node.gain > 0) {
 					out << ",\"gain\":" << FormatDouble(node.gain);
 				}
@@ -844,6 +864,17 @@ BoostModel BoostModel::FromJSON(const string &json) {
 								                                                              : SplitCompare::LESS;
 							} else if (node_key == "default_left") {
 								node.default_left = p.ParseBool();
+							} else if (node_key == "missing_type") {
+								auto missing = StringUtil::Lower(p.ParseString());
+								if (missing == "nan") {
+									node.missing_type = SplitMissingType::NAN;
+								} else if (missing == "zero") {
+									node.missing_type = SplitMissingType::ZERO;
+								} else if (missing == "none") {
+									node.missing_type = SplitMissingType::NONE;
+								} else {
+									throw InvalidInputException("duckboost: unknown split missing_type '%s'", missing);
+								}
 							} else if (node_key == "gain") {
 								node.gain = p.ParseNumber();
 							} else if (node_key == "cover") {

@@ -24,6 +24,9 @@ enum class BoostTask : uint8_t { REGRESSION = 0, BINARY = 1, MULTICLASS = 2 };
 //! LESS: feature < threshold → left (default). EQUAL: feature == threshold → right (CatBoost OneHot).
 enum class SplitCompare : uint8_t { LESS = 0, EQUAL = 1 };
 
+//! How a numerical split recognizes missing values. NONE follows LightGBM's NaN-as-zero behavior.
+enum class SplitMissingType : uint8_t { NAN = 0, ZERO = 1, NONE = 2 };
+
 struct TreeNode {
 	idx_t feature = 0;
 	double threshold = 0;
@@ -32,8 +35,9 @@ struct TreeNode {
 	double value = 0;
 	bool is_leaf = true;
 	SplitCompare compare = SplitCompare::LESS;
-	//! When feature is NaN/missing, take left if true else right (XGBoost-style learned default).
+	//! When the split recognizes a missing value, take left if true else right.
 	bool default_left = true;
+	SplitMissingType missing_type = SplitMissingType::NAN;
 	//! Loss reduction from this split (reference trainer); 0 for imports without stats.
 	double gain = 0;
 	//! Parent hessian mass covered by this split (reference trainer); 0 if unknown.
