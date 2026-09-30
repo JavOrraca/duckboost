@@ -1,0 +1,106 @@
+# Vendor parity fixtures (test/sql/duckboost/data/parity/) come from
+# scripts/vendor_parity/generate.py. The generator re-scores every probe with an
+# independent Python evaluator of the dump and fails if it disagrees with the vendor.
+#
+# fixtures-reproducible: on PRs that touch the generator or fixtures, regenerate
+#   with the pinned vendors and require the committed probes to match.
+# latest-vendors: weekly, regenerate with the newest XGBoost / LightGBM. A generator
+#   failure means vendor prediction semantics drifted from what duckboost imports.
+name: Vendor parity
+on:
+  pull_request:
+    paths:
+      - 'scripts/vendor_parity/**'
+      - 'test/sql/duckboost/data/parity/**'
+      - '.github/workflows/vendor-parity.yml'
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fixtures-reproducible:
+    name: Fixtures reproduce with pinned vendors
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: scripts/vendor_parity/requirements.txt
+
+      - name: Install pinned vendors
+        run: python -m pip install -r scripts/vendor_parity/requirements.txt
+
+      - name: Regenerate fixtures
+        run: python scripts/vendor_parity/generate.py --strict-versions --out "$RUNNER_TEMP/parity"
+
+      - name: Compare committed fixtures within tolerance
+        run: python scripts/vendor_parity/compare.py test/sql/duckboost/data/parity "$RUNNER_TEMP/parity"
+
+      - name: Upload regenerated fixtures
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vendor-parity-regenerated
+          path: ${{ runner.temp }}/parity
+
+  latest-vendors:
+    name: Latest XGBoost / LightGBM
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install latest vendors
+        run: |
+          python -m pip install --upgrade xgboost lightgbm numpy pandas
+          python -c "import xgboost, lightgbm, numpy, pandas; print('xgboost', xgboost.__version__, 'lightgbm', lightgbm.__version__, 'numpy', numpy.__version__, 'pandas', pandas.__version__)"
+
+      # Fails if the reference evaluator no longer reproduces the latest vendor
+      # predictions from the dumps. Newer vendors may grow the dumps, so the size
+      # budget is relaxed here.
+      - name: Regenerate fixtures with latest vendors
+        run: python scripts/vendor_parity/generate.py --max-bytes 1000000 --out "$RUNNER_TEMP/parity-latest"
+
+      # Newer vendors may train different trees, so differences are informational.
+      - name: Report differences against committed fixtures
+        run: python scripts/vendor_parity/compare.py --report-only test/sql/duckboost/data/parity "$RUNNER_TEMP/parity-latest"
+
+      - name: Upload latest fixtures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vendor-parity-latest
+          path: ${{ runner.temp }}/parity-latest
+
+      # Optional: a native duckboost build (DuckDB + extension, roughly an hour on
+      # hosted runners) to score the latest fixtures in SQL. vendor_parity.test pins
+      # probe counts and base scores of the committed fixtures, so this needs the
+      # regenerated fixtures copied over the committed ones and the test updated.
+      #
+      # - name: Check out submodules
+      #   run: git submodule update --init --recursive
+      # - name: Build duckboost
+      #   run: GEN=ninja make release
+      # - name: Score latest fixtures in SQL
+      #   run: |
+      #     cp "$RUNNER_TEMP"/parity-latest/* test/sql/duckboost/data/parity/
+      #     ./build/release/test/unittest "test/sql/duckboost/vendor_parity.test"
