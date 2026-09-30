@@ -91,10 +91,10 @@ jobs:
           name: vendor-parity-latest
           path: ${{ runner.temp }}/parity-latest
 
-      # Optional: a native duckboost build (DuckDB + extension, roughly an hour on
-      # hosted runners) to score the latest fixtures in SQL. vendor_parity.test pins
-      # probe counts and base scores of the committed fixtures, so this needs the
-      # regenerated fixtures copied over the committed ones and the test updated.
+      # Optional and heavy: a full DuckDB + duckboost build to score the latest
+      # fixtures in SQL. vendor_parity.test pins probe counts and base scores of
+      # the committed fixtures, so this needs the regenerated fixtures copied over
+      # the committed ones and the test updated.
       #
       # - name: Check out submodules
       #   run: git submodule update --init --recursive

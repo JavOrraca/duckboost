@@ -3,8 +3,8 @@
 
 Checks that both manifests list the same cases and that every probe CSV has
 the same rows, kinds, and feature values, with expected / proba / margin
-columns inside each case's manifest tolerance. Dump hash differences are
-reported but only fail with --strict-dumps.
+columns inside each case's manifest tolerance. Byte differences in dumps and
+configs are reported but only fail with --strict-dumps.
 
 Usage:
   python scripts/vendor_parity/compare.py BASELINE_DIR CANDIDATE_DIR [--report-only]
@@ -77,7 +77,7 @@ def main(argv=None) -> int:
     parser.add_argument("baseline", type=Path)
     parser.add_argument("candidate", type=Path)
     parser.add_argument("--report-only", action="store_true", help="print differences but exit 0")
-    parser.add_argument("--strict-dumps", action="store_true", help="fail when dump hashes differ")
+    parser.add_argument("--strict-dumps", action="store_true", help="fail when dump or config bytes differ")
     parser.add_argument("--tolerance-scale", type=float, default=1.0,
                         help="multiply every case tolerance by this factor")
     args = parser.parse_args(argv)
@@ -96,8 +96,12 @@ def main(argv=None) -> int:
     notes = []
     for name in [c["name"] for c in base_manifest["cases"] if c["name"] in cand_cases]:
         base, cand = base_cases[name], cand_cases[name]
-        if base["dump_sha256"] != cand["dump_sha256"]:
-            (problems if args.strict_dumps else notes).append(f"{name}: dump bytes differ")
+        for kind, filename in base["files"].items():
+            if kind == "probes":
+                continue
+            base_file, cand_file = args.baseline / filename, args.candidate / cand["files"].get(kind, filename)
+            if not cand_file.exists() or base_file.read_bytes() != cand_file.read_bytes():
+                (problems if args.strict_dumps else notes).append(f"{name}: {kind} file {filename} differs")
         problems += compare_case(name, args.baseline, args.candidate, base, cand, args.tolerance_scale)
 
     for note in notes:
