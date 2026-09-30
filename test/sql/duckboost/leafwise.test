@@ -1,0 +1,260 @@
+# name: test/sql/duckboost/leafwise.test
+# description: loss-guided leaf-wise growth in the reference trainer
+# group: [duckboost]
+
+require duckboost
+
+statement ok
+CREATE TABLE leafwise_train AS
+SELECT
+	i::DOUBLE AS x,
+	CASE
+		WHEN i < 16 THEN 0.0
+		WHEN i < 32 THEN 10.0
+		WHEN i < 48 THEN 20.0
+		ELSE 30.0
+	END AS y
+FROM range(64) t(i);
+
+statement ok
+CREATE TABLE four_leaf_models AS
+SELECT
+	duckboost_train(
+		y, [x],
+		MAP {
+			'n_estimators': '1',
+			'learning_rate': '1',
+			'growth_policy': 'lossguide',
+			'max_leaves': '4',
+			'feature_names': 'x'
+		}
+	) AS leafwise,
+	duckboost_train(
+		y, [x],
+		MAP {
+			'n_estimators': '1',
+			'learning_rate': '1',
+			'growth_policy': 'depthwise',
+			'max_depth': '2',
+			'feature_names': 'x'
+		}
+	) AS depthwise
+FROM leafwise_train;
+
+# The leaf budget is exact when enough positive-gain splits exist, and growth settings are not serialized.
+query III
+SELECT
+	length(regexp_extract_all(leafwise, '"is_leaf":true')),
+	leafwise NOT LIKE '%growth_policy%',
+	leafwise NOT LIKE '%max_leaves%'
+FROM four_leaf_models;
+----
+4	true	true
+
+# A complete depth-2 tree and a four-leaf loss-guided tree are prediction-equivalent here.
+query I
+SELECT max(abs(
+	duckboost_predict(leafwise, [x]) -
+	duckboost_predict(depthwise, [x])
+)) < 1e-12
+FROM four_leaf_models, leafwise_train;
+----
+true
+
+# Most useful splits are concentrated in the high tail. Leaf-wise growth can spend the
+# fourth leaf there, while depth-wise max_depth=2 stops after the root and one useful child.
+statement ok
+CREATE TABLE skewed_steps AS
+SELECT
+	i::DOUBLE AS x,
+	CASE
+		WHEN i < 80 THEN 0.0
+		WHEN i < 90 THEN 10.0
+		WHEN i < 95 THEN 20.0
+		ELSE 100.0
+	END AS y
+FROM range(100) t(i);
+
+statement ok
+CREATE TABLE skewed_models AS
+SELECT
+	duckboost_train(
+		y, [x],
+		MAP {
+			'n_estimators': '1',
+			'learning_rate': '1',
+			'grow_policy': 'leafwise',
+			'num_leaves': '4'
+		}
+	) AS leafwise,
+	duckboost_train(
+		y, [x],
+		MAP {
+			'n_estimators': '1',
+			'learning_rate': '1',
+			'max_depth': '2'
+		}
+	) AS depthwise
+FROM skewed_steps;
+
+query I
+SELECT
+	duckboost_evaluate_agg(leafwise, y, [x], MAP {'metric': 'rmse'}) <
+	duckboost_evaluate_agg(depthwise, y, [x], MAP {'metric': 'rmse'})
+FROM skewed_models, skewed_steps
+GROUP BY leafwise, depthwise;
+----
+true
+
+# SQL export follows node indices rather than assuming preorder storage.
+statement ok
+CREATE TABLE leafwise_score AS SELECT x FROM skewed_steps;
+
+statement ok
+CREATE TABLE native_leafwise_pred AS
+SELECT duckboost_predict(model, [x]) AS prediction
+FROM (SELECT leafwise AS model FROM skewed_models), leafwise_score;
+
+statement ok
+SET VARIABLE leafwise_sql = (
+	SELECT duckboost_to_sql(
+		leafwise,
+		'leafwise_score',
+		['x'],
+		MAP {'separate_trees': 'false', 'prediction_alias': 'prediction'}
+	)
+	FROM skewed_models
+);
+
+statement ok
+CREATE TABLE exported_leafwise_pred AS
+SELECT * FROM query(getvariable('leafwise_sql'));
+
+query I
+SELECT
+	(SELECT list(round(prediction, 10) ORDER BY prediction) FROM native_leafwise_pred)
+	=
+	(SELECT list(round(prediction, 10) ORDER BY prediction) FROM exported_leafwise_pred);
+----
+true
+
+# Categorical equality splits, NULL routing, and quantile leaf renewal combine with leaf-wise growth.
+statement ok
+CREATE TABLE leafwise_combo AS
+SELECT
+	CASE WHEN i % 11 = 0 THEN NULL ELSE (i % 4)::DOUBLE END AS cat,
+	i::DOUBLE AS x,
+	(CASE WHEN i % 4 = 3 THEN 20.0 ELSE 0.0 END + CASE WHEN i >= 30 THEN 5.0 ELSE 0.0 END) AS y
+FROM range(60) t(i);
+
+statement ok
+CREATE TABLE leafwise_combo_models AS
+SELECT
+	duckboost_train(
+		y, [cat, x],
+		MAP {
+			'n_estimators': '2',
+			'learning_rate': '0.5',
+			'growth_policy': 'best_first',
+			'max_leaf_nodes': '4',
+			'feature_names': 'cat,x',
+			'categorical_features': 'cat'
+		}
+	) AS categorical_model,
+	duckboost_train(
+		y, [cat, x],
+		MAP {
+			'objective': 'quantile',
+			'quantile_alpha': '0.8',
+			'n_estimators': '2',
+			'growth_policy': 'leaf_wise',
+			'max_leaves': '4'
+		}
+	) AS quantile_model
+FROM leafwise_combo;
+
+query III
+SELECT
+	categorical_model LIKE '%"compare":"equal"%',
+	duckboost_predict(categorical_model, [NULL, 10.0]) IS NOT NULL,
+	duckboost_predict(quantile_model, [NULL, 10.0]) IS NOT NULL
+FROM leafwise_combo_models;
+----
+true	true	true
+
+# Early stopping uses the same GrowTree dispatch.
+statement ok
+SELECT duckboost_train(
+	y, [cat, x],
+	MAP {
+		'n_estimators': '12',
+		'growth_policy': 'lossguide',
+		'max_leaves': '4',
+		'early_stopping_rounds': '2',
+		'validation_fraction': '0.25',
+		'seed': '9'
+	}
+)
+FROM leafwise_combo;
+
+# Candidate selection is deterministic across aggregate input orders.
+statement ok
+CREATE TABLE leafwise_order_models AS
+SELECT
+	duckboost_train(
+		y, [x],
+		MAP {'n_estimators': '3', 'growth_policy': 'lossguide', 'max_leaves': '4'}
+		ORDER BY x
+	) AS forward,
+	duckboost_train(
+		y, [x],
+		MAP {'n_estimators': '3', 'growth_policy': 'lossguide', 'max_leaves': '4'}
+		ORDER BY x DESC
+	) AS backward
+FROM skewed_steps;
+
+query I
+SELECT forward = backward FROM leafwise_order_models;
+----
+true
+
+# max_depth=0 is the explicit unlimited spelling for loss-guided growth.
+statement ok
+SELECT duckboost_train(
+	y, [x],
+	MAP {'n_estimators': '1', 'growth_policy': 'lossguide', 'max_leaves': '3', 'max_depth': '0'}
+)
+FROM skewed_steps;
+
+statement error
+SELECT duckboost_train(y, [x], MAP {'growth_policy': 'lossguide', 'max_leaves': '1'})
+FROM skewed_steps;
+----
+<REGEX>:.*max_leaves must be >= 2.*
+
+statement error
+SELECT duckboost_train(y, [x], MAP {'growth_policy': 'sideways'})
+FROM skewed_steps;
+----
+<REGEX>:.*unknown growth policy 'sideways'.*
+
+statement error
+SELECT duckboost_train(y, [x], MAP {'max_leaves': '4'})
+FROM skewed_steps;
+----
+<REGEX>:.*max_leaves is only valid with growth_policy=lossguide.*
+
+statement error
+SELECT duckboost_train(y, [x], MAP {'growth_policy': 'depthwise', 'max_depth': '0'})
+FROM skewed_steps;
+----
+<REGEX>:.*max_depth=0 \(unlimited\) is only supported with growth_policy=lossguide.*
+
+statement error
+SELECT duckboost_train(
+	y, [x],
+	MAP {'backend': 'xgboost', 'growth_policy': 'lossguide', 'max_leaves': '4'}
+)
+FROM skewed_steps;
+----
+<REGEX>:.*growth_policy and max_leaves are supported by the reference backend only.*

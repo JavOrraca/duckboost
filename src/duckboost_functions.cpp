@@ -413,17 +413,36 @@ void EvaluateFunction(DataChunk &args, ExpressionState &, Vector &result) {
 		// Per-row absolute/squared error helpers for streaming metrics.
 		auto pred = model.Predict(features);
 		auto y = y_data[y_idx];
-		if (options.metric == "mae" || (options.metric == "auto" && model.task == BoostTask::REGRESSION && false)) {
+		auto metric = options.metric;
+		if (metric.empty() || metric == "auto") {
+			if (model.task == BoostTask::BINARY || model.task == BoostTask::MULTICLASS) {
+				metric = "accuracy";
+			} else if (model.loss == RegressionLoss::ABSOLUTE_ERROR) {
+				metric = "mae";
+			} else if (model.loss == RegressionLoss::QUANTILE) {
+				metric = "pinball";
+			} else if (model.loss == RegressionLoss::EXPECTILE) {
+				metric = "expectile";
+			} else {
+				metric = "rmse";
+			}
+		}
+		if (metric == "mae") {
 			writer.WriteValue(std::fabs(pred - y));
-		} else if (options.metric == "accuracy" ||
-		           (options.metric == "auto" &&
-		            (model.task == BoostTask::BINARY || model.task == BoostTask::MULTICLASS))) {
+		} else if (metric == "pinball" || metric == "quantile") {
+			auto error = pred - y;
+			writer.WriteValue(error >= 0 ? (1.0 - model.objective_alpha) * error : -model.objective_alpha * error);
+		} else if (metric == "expectile") {
+			auto error = pred - y;
+			auto asymmetry = y >= pred ? model.objective_alpha : 1.0 - model.objective_alpha;
+			writer.WriteValue(asymmetry * error * error);
+		} else if (metric == "accuracy") {
 			if (model.task == BoostTask::MULTICLASS) {
 				writer.WriteValue(pred == y ? 1.0 : 0.0);
 			} else {
 				writer.WriteValue((pred >= 0.5 ? 1.0 : 0.0) == y ? 1.0 : 0.0);
 			}
-		} else if (options.metric == "logloss") {
+		} else if (metric == "logloss") {
 			if (model.task == BoostTask::MULTICLASS) {
 				auto proba = model.PredictProba(features);
 				auto label = static_cast<idx_t>(y);
@@ -436,10 +455,12 @@ void EvaluateFunction(DataChunk &args, ExpressionState &, Vector &result) {
 				auto p = std::min(1.0 - 1e-15, std::max(1e-15, pred));
 				writer.WriteValue(-(y * std::log(p) + (1.0 - y) * std::log(1.0 - p)));
 			}
-		} else {
-			// default: squared error contribution (mean externally for RMSE)
+		} else if (metric == "rmse") {
+			// Squared error contribution; take the square root after averaging rows.
 			auto err = pred - y;
 			writer.WriteValue(err * err);
+		} else {
+			throw InvalidInputException("duckboost: unknown metric '%s'", options.metric);
 		}
 	}
 }

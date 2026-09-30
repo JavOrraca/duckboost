@@ -14,6 +14,28 @@
 namespace duckdb {
 namespace duckboost {
 
+bool NodeGoesLeft(const TreeNode &node, double value) {
+	if (node.compare != SplitCompare::LESS && std::isnan(value)) {
+		return node.default_left;
+	}
+	if (node.compare == SplitCompare::EQUAL) {
+		return value != node.threshold;
+	}
+	if (node.compare == SplitCompare::IN) {
+		return !std::binary_search(node.categories.begin(), node.categories.end(), value);
+	}
+	if (node.missing_type == SplitMissingType::ZERO && (std::isnan(value) || value == 0.0)) {
+		return node.default_left;
+	}
+	if (node.missing_type == SplitMissingType::NAN_VALUE && std::isnan(value)) {
+		return node.default_left;
+	}
+	if (node.missing_type == SplitMissingType::NONE && std::isnan(value)) {
+		value = 0.0;
+	}
+	return value < node.threshold;
+}
+
 namespace {
 
 string QuoteIdent(const string &name) {
@@ -35,13 +57,34 @@ string TreeToSQL(const BoostTree &tree, const vector<string> &feature_columns, i
 	auto left = TreeToSQL(tree, feature_columns, node.left);
 	auto right = TreeToSQL(tree, feature_columns, node.right);
 	auto missing_branch = node.default_left ? left : right;
+	if (node.compare == SplitCompare::IN) {
+		if (node.categories.empty()) {
+			return "CASE WHEN " + feature + " IS NULL OR isnan(" + feature + ") THEN " + missing_branch + " ELSE " +
+			       left + " END";
+		}
+		std::ostringstream categories;
+		for (idx_t i = 0; i < node.categories.size(); i++) {
+			if (i > 0) {
+				categories << ',';
+			}
+			categories << FormatDouble(node.categories[i]);
+		}
+		return "CASE WHEN " + feature + " IS NULL OR isnan(" + feature + ") THEN " + missing_branch + " WHEN " +
+		       feature + " IN (" + categories.str() + ") THEN " + right + " ELSE " + left + " END";
+	}
 	if (node.compare == SplitCompare::EQUAL) {
 		// OneHot True (equal) → right; NULL/NaN follow learned default_left.
 		return "CASE WHEN " + feature + " IS NULL OR isnan(" + feature + ") THEN " + missing_branch + " WHEN " +
 		       feature + " = " + FormatDouble(node.threshold) + " THEN " + right + " ELSE " + left + " END";
 	}
-	return "CASE WHEN " + feature + " IS NULL OR isnan(" + feature + ") THEN " + missing_branch + " WHEN " + feature +
-	       " < " + FormatDouble(node.threshold) + " THEN " + left + " ELSE " + right + " END";
+	auto missing_test = feature + " IS NULL OR isnan(" + feature + ")";
+	if (node.missing_type == SplitMissingType::ZERO) {
+		missing_test += " OR " + feature + " = 0";
+	} else if (node.missing_type == SplitMissingType::NONE) {
+		missing_branch = 0.0 < node.threshold ? left : right;
+	}
+	return "CASE WHEN " + missing_test + " THEN " + missing_branch + " WHEN " + feature + " < " +
+	       FormatDouble(node.threshold) + " THEN " + left + " ELSE " + right + " END";
 }
 
 static constexpr uint64_t CTR_MAGIC_MULT = 0x4906ba494954cb65ULL;
@@ -278,6 +321,51 @@ BoostTask TaskFromString(const string &name) {
 	throw InvalidInputException("duckboost: unknown task '%s' (expected regression, binary, or multiclass)", name);
 }
 
+string RegressionLossToString(RegressionLoss loss) {
+	switch (loss) {
+	case RegressionLoss::ABSOLUTE_ERROR:
+		return "absolute_error";
+	case RegressionLoss::QUANTILE:
+		return "quantile";
+	case RegressionLoss::EXPECTILE:
+		return "expectile";
+	case RegressionLoss::SQUARED_ERROR:
+	default:
+		return "squared_error";
+	}
+}
+
+RegressionLoss RegressionLossFromString(const string &name) {
+	auto lower = StringUtil::Lower(name);
+	if (lower == "squared_error" || lower == "l2" || lower == "mse" || lower == "reg:squarederror") {
+		return RegressionLoss::SQUARED_ERROR;
+	}
+	if (lower == "absolute_error" || lower == "mae" || lower == "l1" || lower == "regression_l1" ||
+	    lower == "reg:absoluteerror") {
+		return RegressionLoss::ABSOLUTE_ERROR;
+	}
+	if (lower == "quantile" || lower == "pinball" || lower == "reg:quantileerror") {
+		return RegressionLoss::QUANTILE;
+	}
+	if (lower == "expectile") {
+		return RegressionLoss::EXPECTILE;
+	}
+	throw InvalidInputException("duckboost: unknown regression objective '%s' "
+	                            "(expected squared_error, absolute_error, quantile, or expectile)",
+	                            name);
+}
+
+static GrowthPolicy GrowthPolicyFromString(const string &name) {
+	auto lower = StringUtil::Lower(name);
+	if (lower == "depthwise" || lower == "depth_wise" || lower == "levelwise") {
+		return GrowthPolicy::DEPTHWISE;
+	}
+	if (lower == "lossguide" || lower == "leafwise" || lower == "leaf_wise" || lower == "best_first") {
+		return GrowthPolicy::LOSSGUIDE;
+	}
+	throw InvalidInputException("duckboost: unknown growth policy '%s' (expected depthwise or lossguide)", name);
+}
+
 bool BackendTrainingSupported(BoostBackend backend) {
 	if (backend == BoostBackend::REFERENCE) {
 		return true;
@@ -322,13 +410,29 @@ TrainOptions TrainOptions::FromMap(const unordered_map<string, string> &options)
 		auto &value = entry.second;
 		if (key == "backend") {
 			result.backend = BackendFromString(value);
-		} else if (key == "task" || key == "objective") {
-			// Legacy: objective doubled as task name (regression/binary/multiclass).
+		} else if (key == "task") {
 			result.task = TaskFromString(value);
+		} else if (key == "objective" || key == "loss") {
+			// Legacy objective values (binary/multiclass/regression) remain task aliases.
+			try {
+				result.loss = RegressionLossFromString(value);
+			} catch (const InvalidInputException &) {
+				result.task = TaskFromString(value);
+			}
+		} else if (key == "quantile_alpha" || key == "expectile_alpha" || key == "tau") {
+			result.objective_alpha = std::stod(value);
+			result.objective_alpha_set = true;
 		} else if (key == "n_estimators" || key == "num_boost_round" || key == "iterations") {
 			result.n_estimators = static_cast<idx_t>(std::stoull(value));
 		} else if (key == "max_depth" || key == "depth") {
 			result.max_depth = static_cast<idx_t>(std::stoull(value));
+			result.max_depth_set = true;
+		} else if (key == "growth_policy" || key == "grow_policy") {
+			result.growth_policy = GrowthPolicyFromString(value);
+			result.growth_policy_set = true;
+		} else if (key == "max_leaves" || key == "num_leaves" || key == "max_leaf_nodes") {
+			result.max_leaves = static_cast<idx_t>(std::stoull(value));
+			result.max_leaves_set = true;
 		} else if (key == "learning_rate" || key == "eta" || key == "lr") {
 			result.learning_rate = std::stod(value);
 		} else if (key == "min_samples_leaf" || key == "min_data_in_leaf") {
@@ -365,6 +469,11 @@ TrainOptions TrainOptions::FromMap(const unordered_map<string, string> &options)
 			for (auto &name : result.feature_names) {
 				StringUtil::Trim(name);
 			}
+		} else if (key == "categorical_features" || key == "cat_features" || key == "categorical_feature") {
+			result.categorical_features = StringUtil::Split(value, ',');
+			for (auto &feature : result.categorical_features) {
+				StringUtil::Trim(feature);
+			}
 		} else {
 			throw InvalidInputException("duckboost: unknown train option '%s'", entry.first);
 		}
@@ -372,8 +481,25 @@ TrainOptions TrainOptions::FromMap(const unordered_map<string, string> &options)
 	if (result.n_estimators == 0) {
 		throw InvalidInputException("duckboost: n_estimators must be > 0");
 	}
-	if (result.max_depth == 0) {
-		throw InvalidInputException("duckboost: max_depth must be > 0");
+	if (result.backend != BoostBackend::REFERENCE && (result.growth_policy_set || result.max_leaves_set)) {
+		throw NotImplementedException(
+		    "duckboost: growth_policy and max_leaves are supported by the reference backend only");
+	}
+	if (result.growth_policy == GrowthPolicy::DEPTHWISE) {
+		if (result.max_depth == 0) {
+			throw InvalidInputException(
+			    "duckboost: max_depth=0 (unlimited) is only supported with growth_policy=lossguide");
+		}
+		if (result.max_leaves_set) {
+			throw InvalidInputException("duckboost: max_leaves is only valid with growth_policy=lossguide");
+		}
+	} else {
+		if (!result.max_depth_set) {
+			result.max_depth = 0;
+		}
+		if (result.max_leaves < 2) {
+			throw InvalidInputException("duckboost: max_leaves must be >= 2");
+		}
 	}
 	if (!(result.learning_rate > 0)) {
 		throw InvalidInputException("duckboost: learning_rate must be > 0");
@@ -398,6 +524,19 @@ TrainOptions TrainOptions::FromMap(const unordered_map<string, string> &options)
 	}
 	if (result.early_stopping_rounds > 0 && result.validation_fraction == 0) {
 		result.validation_fraction = 0.2;
+	}
+	if (result.loss != RegressionLoss::SQUARED_ERROR && result.task != BoostTask::REGRESSION) {
+		throw InvalidInputException("duckboost: objective '%s' requires task=regression",
+		                            RegressionLossToString(result.loss));
+	}
+	if (result.objective_alpha_set && result.loss != RegressionLoss::QUANTILE &&
+	    result.loss != RegressionLoss::EXPECTILE) {
+		throw InvalidInputException("duckboost: quantile_alpha/expectile_alpha/tau is only valid with quantile or "
+		                            "expectile objectives");
+	}
+	if ((result.loss == RegressionLoss::QUANTILE || result.loss == RegressionLoss::EXPECTILE) &&
+	    (!(result.objective_alpha > 0 && result.objective_alpha < 1) || !std::isfinite(result.objective_alpha))) {
+		throw InvalidInputException("duckboost: objective alpha must be in (0, 1)");
 	}
 	return result;
 }
@@ -607,6 +746,10 @@ string BoostModel::ToJSON() const {
 	out << "{\"duckboost_version\":" << duckboost_version;
 	out << ",\"backend\":\"" << EscapeJSON(BackendToString(backend)) << "\"";
 	out << ",\"task\":\"" << EscapeJSON(TaskToString(task)) << "\"";
+	if (loss != RegressionLoss::SQUARED_ERROR) {
+		out << ",\"objective\":\"" << EscapeJSON(RegressionLossToString(loss)) << "\"";
+		out << ",\"objective_alpha\":" << FormatDouble(objective_alpha);
+	}
 	out << ",\"base_score\":" << FormatDouble(base_score);
 	if (!base_scores.empty()) {
 		out << ",\"base_scores\":[";
@@ -648,9 +791,23 @@ string BoostModel::ToJSON() const {
 			out << ",\"value\":" << FormatDouble(node.value);
 			if (node.compare == SplitCompare::EQUAL) {
 				out << ",\"compare\":\"equal\"";
+			} else if (node.compare == SplitCompare::IN) {
+				out << ",\"compare\":\"in\",\"categories\":[";
+				for (idx_t i = 0; i < node.categories.size(); i++) {
+					if (i > 0) {
+						out << ',';
+					}
+					out << FormatDouble(node.categories[i]);
+				}
+				out << ']';
 			}
 			if (!node.is_leaf) {
 				out << ",\"default_left\":" << (node.default_left ? "true" : "false");
+				if (node.missing_type == SplitMissingType::ZERO) {
+					out << ",\"missing_type\":\"zero\"";
+				} else if (node.missing_type == SplitMissingType::NONE) {
+					out << ",\"missing_type\":\"none\"";
+				}
 				if (node.gain > 0) {
 					out << ",\"gain\":" << FormatDouble(node.gain);
 				}
@@ -744,6 +901,10 @@ BoostModel BoostModel::FromJSON(const string &json) {
 			model.backend = BackendFromString(p.ParseString());
 		} else if (key == "task") {
 			model.task = TaskFromString(p.ParseString());
+		} else if (key == "objective") {
+			model.loss = RegressionLossFromString(p.ParseString());
+		} else if (key == "objective_alpha") {
+			model.objective_alpha = p.ParseNumber();
 		} else if (key == "base_score") {
 			model.base_score = p.ParseNumber();
 		} else if (key == "base_scores") {
@@ -825,10 +986,38 @@ BoostModel BoostModel::FromJSON(const string &json) {
 								node.value = p.ParseNumber();
 							} else if (node_key == "compare") {
 								auto cmp = StringUtil::Lower(p.ParseString());
-								node.compare = (cmp == "equal" || cmp == "eq" || cmp == "==") ? SplitCompare::EQUAL
-								                                                              : SplitCompare::LESS;
+								if (cmp == "less" || cmp == "lt" || cmp == "<") {
+									node.compare = SplitCompare::LESS;
+								} else if (cmp == "equal" || cmp == "eq" || cmp == "==") {
+									node.compare = SplitCompare::EQUAL;
+								} else if (cmp == "in" || cmp == "set") {
+									node.compare = SplitCompare::IN;
+								} else {
+									throw InvalidInputException("duckboost: unknown split compare '%s'", cmp);
+								}
+							} else if (node_key == "categories") {
+								p.Expect('[');
+								bool first_category = true;
+								while (!p.TryConsume(']')) {
+									if (!first_category) {
+										p.Expect(',');
+									}
+									first_category = false;
+									node.categories.push_back(p.ParseNumber());
+								}
 							} else if (node_key == "default_left") {
 								node.default_left = p.ParseBool();
+							} else if (node_key == "missing_type") {
+								auto missing = StringUtil::Lower(p.ParseString());
+								if (missing == "nan") {
+									node.missing_type = SplitMissingType::NAN_VALUE;
+								} else if (missing == "zero") {
+									node.missing_type = SplitMissingType::ZERO;
+								} else if (missing == "none") {
+									node.missing_type = SplitMissingType::NONE;
+								} else {
+									throw InvalidInputException("duckboost: unknown split missing_type '%s'", missing);
+								}
 							} else if (node_key == "gain") {
 								node.gain = p.ParseNumber();
 							} else if (node_key == "cover") {
@@ -836,6 +1025,11 @@ BoostModel BoostModel::FromJSON(const string &json) {
 							} else {
 								p.SkipValue();
 							}
+						}
+						if (node.compare == SplitCompare::IN) {
+							std::sort(node.categories.begin(), node.categories.end());
+							node.categories.erase(std::unique(node.categories.begin(), node.categories.end()),
+							                      node.categories.end());
 						}
 						tree.nodes.push_back(node);
 					}
@@ -1021,14 +1215,7 @@ double BoostModel::EvalTree(const BoostTree &tree, const vector<double> &feature
 		if (node.feature >= features.size()) {
 			throw InvalidInputException("duckboost: feature index out of range during prediction");
 		}
-		auto value = features[node.feature];
-		if (std::isnan(value)) {
-			node_idx = node.default_left ? node.left : node.right;
-		} else if (node.compare == SplitCompare::EQUAL) {
-			node_idx = value == node.threshold ? node.right : node.left;
-		} else {
-			node_idx = value < node.threshold ? node.left : node.right;
-		}
+		node_idx = NodeGoesLeft(node, features[node.feature]) ? node.left : node.right;
 	}
 }
 

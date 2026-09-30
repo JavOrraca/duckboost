@@ -235,11 +235,64 @@ vector<int64_t> ParseIntList(const string &value) {
 
 idx_t ConvertLGBNode(idx_t internal_idx, const vector<int64_t> &split_feature, const vector<double> &threshold,
                      const vector<int64_t> &left_child, const vector<int64_t> &right_child,
-                     const vector<double> &leaf_value, double shrinkage, BoostTree &tree) {
+                     const vector<int64_t> &decision_type, const vector<idx_t> &cat_boundaries,
+                     const vector<uint32_t> &cat_threshold, const vector<double> &leaf_value, BoostTree &tree) {
+	if (internal_idx >= split_feature.size()) {
+		throw InvalidInputException("duckboost: lightgbm internal node index out of range");
+	}
 	TreeNode node;
 	node.is_leaf = false;
 	node.feature = static_cast<idx_t>(split_feature[internal_idx]);
-	node.threshold = ThresholdForLessEqual(threshold[internal_idx]);
+	auto decision = decision_type.empty() ? int64_t(0) : decision_type[internal_idx];
+	if (decision < 0 || decision > std::numeric_limits<uint8_t>::max()) {
+		throw InvalidInputException("duckboost: invalid lightgbm decision_type");
+	}
+	auto categorical = (decision & 1) != 0;
+	if (categorical) {
+		auto raw_cat_idx = threshold[internal_idx];
+		if (!std::isfinite(raw_cat_idx) || raw_cat_idx < 0 || std::floor(raw_cat_idx) != raw_cat_idx ||
+		    raw_cat_idx >= static_cast<double>(cat_boundaries.size() - 1)) {
+			throw InvalidInputException("duckboost: lightgbm categorical threshold index out of range");
+		}
+		auto cat_idx = static_cast<idx_t>(raw_cat_idx);
+		auto begin = cat_boundaries[cat_idx];
+		auto end = cat_boundaries[cat_idx + 1];
+		for (idx_t word_idx = begin; word_idx < end; word_idx++) {
+			auto word = cat_threshold[word_idx];
+			for (idx_t bit = 0; bit < 32; bit++) {
+				if ((word & (uint32_t(1) << bit)) != 0) {
+					node.categories.push_back(static_cast<double>(32 * (word_idx - begin) + bit));
+				}
+			}
+		}
+		if (node.categories.empty()) {
+			throw InvalidInputException("duckboost: lightgbm categorical split has no categories");
+		}
+		node.default_left = true;
+		if (node.categories.size() == 1) {
+			node.compare = SplitCompare::EQUAL;
+			node.threshold = node.categories[0];
+			node.categories.clear();
+		} else {
+			node.compare = SplitCompare::IN;
+		}
+	} else {
+		node.threshold = ThresholdForLessEqual(threshold[internal_idx]);
+		node.default_left = (decision & 2) != 0;
+		switch ((decision >> 2) & 3) {
+		case 0:
+			node.missing_type = SplitMissingType::NONE;
+			break;
+		case 1:
+			node.missing_type = SplitMissingType::ZERO;
+			break;
+		case 2:
+			node.missing_type = SplitMissingType::NAN_VALUE;
+			break;
+		default:
+			throw InvalidInputException("duckboost: invalid lightgbm missing_type");
+		}
+	}
 	auto idx = tree.nodes.size();
 	tree.nodes.push_back(node);
 
@@ -251,16 +304,17 @@ idx_t ConvertLGBNode(idx_t internal_idx, const vector<int64_t> &split_feature, c
 			if (leaf_idx >= leaf_value.size()) {
 				throw InvalidInputException("duckboost: lightgbm leaf index out of range");
 			}
-			leaf.value = leaf_value[leaf_idx] * shrinkage;
+			leaf.value = leaf_value[leaf_idx];
 			tree.nodes.push_back(leaf);
 			return tree.nodes.size() - 1;
 		}
-		return ConvertLGBNode(static_cast<idx_t>(child), split_feature, threshold, left_child, right_child, leaf_value,
-		                      shrinkage, tree);
+		return ConvertLGBNode(static_cast<idx_t>(child), split_feature, threshold, left_child, right_child,
+		                      decision_type, cat_boundaries, cat_threshold, leaf_value, tree);
 	};
 
-	tree.nodes[idx].left = attach(left_child[internal_idx]);
-	tree.nodes[idx].right = attach(right_child[internal_idx]);
+	// LightGBM categorical matches go left. Duckboost EQUAL/IN matches go right.
+	tree.nodes[idx].left = attach(categorical ? right_child[internal_idx] : left_child[internal_idx]);
+	tree.nodes[idx].right = attach(categorical ? left_child[internal_idx] : right_child[internal_idx]);
 	return idx;
 }
 
@@ -391,28 +445,68 @@ BoostModel ImportLightGBMText(const string &dump, const ImportOptions &options) 
 		auto right_child = ParseIntList(tree_fields["right_child"]);
 		auto leaf_value = ParseDoubleList(tree_fields["leaf_value"]);
 		auto decision_type = ParseIntList(tree_fields.count("decision_type") ? tree_fields["decision_type"] : "");
-		double shrinkage = 1.0;
-		if (tree_fields.count("shrinkage")) {
-			shrinkage = std::stod(tree_fields["shrinkage"]);
+		auto num_cat = tree_fields.count("num_cat") ? static_cast<idx_t>(std::stoull(tree_fields["num_cat"])) : 0;
+		auto raw_cat_boundaries =
+		    ParseIntList(tree_fields.count("cat_boundaries") ? tree_fields["cat_boundaries"] : "");
+		auto raw_cat_threshold = ParseIntList(tree_fields.count("cat_threshold") ? tree_fields["cat_threshold"] : "");
+		vector<idx_t> cat_boundaries;
+		vector<uint32_t> cat_threshold;
+		if (num_cat == 0) {
+			if ((!raw_cat_boundaries.empty() && (raw_cat_boundaries.size() != 1 || raw_cat_boundaries[0] != 0)) ||
+			    !raw_cat_threshold.empty()) {
+				throw InvalidInputException("duckboost: lightgbm categorical arrays present with num_cat=0");
+			}
+			cat_boundaries.push_back(0);
+		} else {
+			if (raw_cat_boundaries.size() != num_cat + 1) {
+				throw InvalidInputException("duckboost: lightgbm cat_boundaries size does not match num_cat");
+			}
+			for (idx_t i = 0; i < raw_cat_boundaries.size(); i++) {
+				auto boundary = raw_cat_boundaries[i];
+				if (boundary < 0 || (i == 0 && boundary != 0) || (i > 0 && boundary <= raw_cat_boundaries[i - 1]) ||
+				    static_cast<uint64_t>(boundary) > raw_cat_threshold.size()) {
+					throw InvalidInputException("duckboost: malformed lightgbm cat_boundaries");
+				}
+				cat_boundaries.push_back(static_cast<idx_t>(boundary));
+			}
+			if (cat_boundaries.back() != raw_cat_threshold.size()) {
+				throw InvalidInputException("duckboost: lightgbm cat_boundaries do not cover cat_threshold");
+			}
+			for (auto word : raw_cat_threshold) {
+				if (word < 0 || static_cast<uint64_t>(word) > std::numeric_limits<uint32_t>::max()) {
+					throw InvalidInputException("duckboost: invalid lightgbm cat_threshold word");
+				}
+				cat_threshold.push_back(static_cast<uint32_t>(word));
+			}
 		}
 		if (leaf_value.size() != num_leaves) {
 			throw InvalidInputException("duckboost: lightgbm leaf_value size mismatch");
 		}
-		for (auto dt : decision_type) {
-			if (dt & 1) {
-				throw NotImplementedException("duckboost: lightgbm categorical splits are not supported");
-			}
+		if (num_cat > num_leaves - 1) {
+			throw InvalidInputException("duckboost: lightgbm num_cat exceeds split count");
 		}
 		BoostTree tree;
 		if (num_leaves == 1) {
 			TreeNode leaf;
 			leaf.is_leaf = true;
-			leaf.value = leaf_value[0] * shrinkage;
+			leaf.value = leaf_value[0];
 			tree.nodes.push_back(leaf);
 		} else {
 			if (split_feature.size() != num_leaves - 1 || threshold.size() != num_leaves - 1 ||
 			    left_child.size() != num_leaves - 1 || right_child.size() != num_leaves - 1) {
 				throw InvalidInputException("duckboost: lightgbm split array size mismatch");
+			}
+			if (!decision_type.empty() && decision_type.size() != num_leaves - 1) {
+				throw InvalidInputException("duckboost: lightgbm decision_type size mismatch");
+			}
+			idx_t categorical_count = 0;
+			for (auto dt : decision_type) {
+				if (dt & 1) {
+					categorical_count++;
+				}
+			}
+			if (categorical_count != num_cat) {
+				throw InvalidInputException("duckboost: lightgbm num_cat does not match categorical splits");
 			}
 			for (auto f : split_feature) {
 				if (f < 0) {
@@ -420,7 +514,8 @@ BoostModel ImportLightGBMText(const string &dump, const ImportOptions &options) 
 				}
 				model.n_features = MaxValue<idx_t>(model.n_features, static_cast<idx_t>(f) + 1);
 			}
-			ConvertLGBNode(0, split_feature, threshold, left_child, right_child, leaf_value, shrinkage, tree);
+			ConvertLGBNode(0, split_feature, threshold, left_child, right_child, decision_type, cat_boundaries,
+			               cat_threshold, leaf_value, tree);
 		}
 		model.trees.push_back(std::move(tree));
 		tree_fields.clear();

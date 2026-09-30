@@ -21,8 +21,15 @@ enum class BoostBackend : uint8_t { REFERENCE = 0, XGBOOST = 1, LIGHTGBM = 2, CA
 
 enum class BoostTask : uint8_t { REGRESSION = 0, BINARY = 1, MULTICLASS = 2 };
 
-//! LESS: feature < threshold → left (default). EQUAL: feature == threshold → right (CatBoost OneHot).
-enum class SplitCompare : uint8_t { LESS = 0, EQUAL = 1 };
+enum class RegressionLoss : uint8_t { SQUARED_ERROR = 0, ABSOLUTE_ERROR = 1, QUANTILE = 2, EXPECTILE = 3 };
+
+enum class GrowthPolicy : uint8_t { DEPTHWISE = 0, LOSSGUIDE = 1 };
+
+//! LESS: feature < threshold → left. EQUAL/IN: matching values → right, all others → left.
+enum class SplitCompare : uint8_t { LESS = 0, EQUAL = 1, IN = 2 };
+
+//! How a numerical split recognizes missing values. NONE follows LightGBM's NaN-as-zero behavior.
+enum class SplitMissingType : uint8_t { NAN_VALUE = 0, ZERO = 1, NONE = 2 };
 
 struct TreeNode {
 	idx_t feature = 0;
@@ -32,8 +39,11 @@ struct TreeNode {
 	double value = 0;
 	bool is_leaf = true;
 	SplitCompare compare = SplitCompare::LESS;
-	//! When feature is NaN/missing, take left if true else right (XGBoost-style learned default).
+	//! Sorted unique membership values for IN nodes.
+	vector<double> categories;
+	//! When the split recognizes a missing value, take left if true else right.
 	bool default_left = true;
+	SplitMissingType missing_type = SplitMissingType::NAN_VALUE;
 	//! Loss reduction from this split (reference trainer); 0 for imports without stats.
 	double gain = 0;
 	//! Parent hessian mass covered by this split (reference trainer); 0 if unknown.
@@ -43,6 +53,9 @@ struct TreeNode {
 struct BoostTree {
 	vector<TreeNode> nodes;
 };
+
+//! Return true when a value follows a node's left branch.
+bool NodeGoesLeft(const TreeNode &node, double value);
 
 enum class CtrElementKind : uint8_t { CAT_FEATURE_VALUE = 0, FLOAT_FEATURE = 1, CAT_FEATURE_EXACT_VALUE = 2 };
 
@@ -76,6 +89,8 @@ struct BoostModel {
 	idx_t duckboost_version = 1;
 	BoostBackend backend = BoostBackend::REFERENCE;
 	BoostTask task = BoostTask::REGRESSION;
+	RegressionLoss loss = RegressionLoss::SQUARED_ERROR;
+	double objective_alpha = 0.5;
 	double base_score = 0;
 	//! Per-class biases for multiclass; empty means use base_score for every class.
 	vector<double> base_scores;
@@ -106,8 +121,16 @@ struct BoostModel {
 struct TrainOptions {
 	BoostBackend backend = BoostBackend::REFERENCE;
 	BoostTask task = BoostTask::REGRESSION;
+	RegressionLoss loss = RegressionLoss::SQUARED_ERROR;
+	double objective_alpha = 0.5;
+	bool objective_alpha_set = false;
 	idx_t n_estimators = 10;
 	idx_t max_depth = 3;
+	bool max_depth_set = false;
+	GrowthPolicy growth_policy = GrowthPolicy::DEPTHWISE;
+	bool growth_policy_set = false;
+	idx_t max_leaves = 31;
+	bool max_leaves_set = false;
 	double learning_rate = 0.1;
 	idx_t min_samples_leaf = 1;
 	//! Min sum of hessians in a child (XGBoost min_child_weight). 0 = disabled beyond min_samples_leaf.
@@ -133,6 +156,8 @@ struct TrainOptions {
 	//! "balanced" or comma-separated per-class multipliers; empty = none.
 	string class_weight;
 	vector<string> feature_names;
+	//! Comma-separated feature names or zero-based indices; reference backend only.
+	vector<string> categorical_features;
 
 	static TrainOptions FromMap(const unordered_map<string, string> &options);
 };
@@ -141,7 +166,7 @@ struct TrainOptions {
 idx_t ResolveClassCount(const vector<double> &y, const TrainOptions &options);
 
 struct EvalOptions {
-	string metric = "auto"; // auto | rmse | mae | accuracy | logloss
+	string metric = "auto"; // auto | rmse | mae | pinball | expectile | accuracy | logloss
 	static EvalOptions FromMap(const unordered_map<string, string> &options);
 };
 
@@ -180,6 +205,8 @@ string BackendToString(BoostBackend backend);
 BoostBackend BackendFromString(const string &name);
 string TaskToString(BoostTask task);
 BoostTask TaskFromString(const string &name);
+string RegressionLossToString(RegressionLoss loss);
+RegressionLoss RegressionLossFromString(const string &name);
 
 bool BackendTrainingSupported(BoostBackend backend);
 string BackendCapabilityNote(BoostBackend backend);

@@ -128,6 +128,20 @@ FROM mc_train;
 -- predict returns argmax class index; predict_proba returns softmax LIST
 SELECT duckboost_predict(model, features), duckboost_predict_proba(model, features) FROM mc_models, mc_test;
 
+-- Robust and asymmetric regression losses (reference backend)
+SELECT duckboost_train(y, features, MAP {'objective': 'absolute_error'}) AS mae_model FROM train;
+SELECT duckboost_train(
+	y, features, MAP {'objective': 'quantile', 'quantile_alpha': '0.9'}
+) AS q90_model FROM train;
+SELECT duckboost_train(
+	y, features, MAP {'objective': 'expectile', 'tau': '0.9'}
+) AS e90_model FROM train;
+
+-- Loss-guided (leaf-wise) growth spends a fixed leaf budget on the best available split
+SELECT duckboost_train(
+	y, features, MAP {'growth_policy': 'lossguide', 'max_leaves': '31'}
+) AS leafwise_model FROM train;
+
 -- Sample weights / class_weight, early stopping, and feature importance
 SELECT duckboost_train(y, features, weight, MAP {
 	'task': 'binary',
@@ -204,8 +218,8 @@ Native XGBoost / LightGBM linking is opt-in via `DUCKBOOST_WITH_*`. Linked build
 
 ### Dump import notes
 
-- Imported models set `learning_rate = 1.0` and bake vendor shrinkage/scale into leaf values (XGBoost dump leaves already include η; LightGBM `shrinkage` and CatBoost `scale_and_bias` are applied at import).
-- LightGBM numerical `<=` splits are converted to duckboost `<` via `nextafter(threshold, +∞)`.
+- Imported models set `learning_rate = 1.0`. XGBoost and LightGBM dump leaf values already include their learning-rate shrinkage, so they are imported unchanged; CatBoost `scale_and_bias` is applied at import.
+- LightGBM numerical `<=` splits preserve `default_left` and `missing_type` (`None`, `Zero`, or `NaN`) while converting to duckboost `<` via `nextafter(threshold, +∞)`. Categorical bitsets import as `IN` set-membership nodes (single-category sets remain `EQUAL`).
 - CatBoost support: `FloatFeature`, `OneHotFeature`, and `OnlineCtr` (Counter/Borders). CTR combinations may include `cat_feature_value`, `float_feature`, and `cat_feature_exact_value`. Pass categorical CityHash values as numeric features.
 - Multiclass CatBoost JSON uses class-blocked `leaf_values` (`2^depth` values per class). Import expands each oblivious tree into `n_classes` duckboost trees (layout `[round][class]`).
 - OnlineCtr requires `ctr_data` in the dump (`save_model(..., pool=...)`). `duckboost_to_sql` inlines CTR hash lookups via `UHUGEINT` modular arithmetic.
@@ -231,11 +245,13 @@ Models are opaque `VARCHAR` JSON documents:
 
 For `task: "multiclass"`, `n_classes >= 2`, optional `base_scores` holds per-class bias, and trees are stored as `round * n_classes + class`. `duckboost_predict` returns the argmax class index; `duckboost_to_sql` exports an argmax over per-class score expressions.
 
+Split nodes may use `"compare":"equal"` with `threshold`, or `"compare":"in"` with a sorted, unique `categories` array. Equality and membership matches route right; non-matches route left.
+
 ## Design notes
 
 - **Layout**: standalone community extension ([extension-template](https://github.com/duckdb/extension-template)) so optional vendor ML libraries stay out of core DuckDB builds. The `duckdb` submodule tracks DuckDB 2.0 (`v2.0-cyanoptera`).
 - **SQL export** mirrors orbital's `separate_trees` idea so DuckDB can evaluate ensemble members as independent columns.
-- **Reference trainer** is a didactic histogram/quantile-split GBDT (squared error, logistic, and softmax for multiclass) with missing-value defaults, L1/L2/`gamma`, sample weights, and early stopping. It is not a replacement for production XGBoost/LightGBM/CatBoost quality, but it exercises the full train → evaluate → inspect → SQL path.
+- **Reference trainer** is a didactic histogram/quantile-split GBDT (squared-error, absolute-error, quantile, expectile, logistic, and softmax losses) with depth-wise or loss-guided leaf-wise growth, missing-value defaults, L1/L2/`gamma`, sample weights, and early stopping. Set `categorical_features` to comma-separated feature names or zero-based indices to train exact one-vs-rest equality splits on numeric category values. It is not a replacement for production XGBoost/LightGBM/CatBoost quality, but it exercises the full train → evaluate → inspect → SQL path.
 - **Table macros** `duckboost_fit` / `duckboost_score` wrap `duckboost_train` / `duckboost_predict` with `query_table` for a compact SQL workflow.
 - **Split and preprocessing macros** are plain SQL macros registered by the extension. Splits rank rows by a hash of the row's values mixed with `seed`, so they are reproducible and independent of physical row order.
 

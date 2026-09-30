@@ -1,0 +1,189 @@
+# name: test/sql/duckboost/cat_train.test
+# description: reference trainer learns one-vs-rest equality splits for categorical features
+# group: [duckboost]
+
+require duckboost
+
+statement ok
+CREATE TABLE cat_train AS
+SELECT
+	(i % 5)::DOUBLE AS cat,
+	CASE WHEN i % 5 = 3 THEN 10.0 ELSE 0.0 END AS y
+FROM range(50) t(i);
+
+statement ok
+CREATE TABLE named_model AS
+SELECT duckboost_train(
+	y,
+	[cat],
+	MAP {
+		'backend': 'reference',
+		'n_estimators': '1',
+		'max_depth': '1',
+		'learning_rate': '1',
+		'max_bins': '1',
+		'feature_names': 'cat',
+		'categorical_features': 'cat'
+	}
+) AS model
+FROM cat_train;
+
+# A non-monotone category target needs an equality split; matching values go right.
+query I
+SELECT model LIKE '%"compare":"equal"%' FROM named_model;
+----
+true
+
+query III
+SELECT
+	round(duckboost_predict(model, [3.0]))::BIGINT,
+	round(duckboost_predict(model, [0.0]))::BIGINT,
+	round(duckboost_predict(model, [4.0]))::BIGINT
+FROM named_model;
+----
+10	0	0
+
+# A zero-based index and the cat_features alias identify the same feature.
+statement ok
+CREATE TABLE indexed_model AS
+SELECT duckboost_train(
+	y,
+	[cat],
+	MAP {
+		'n_estimators': '1',
+		'max_depth': '1',
+		'learning_rate': '1',
+		'max_bins': '1',
+		'feature_names': 'cat',
+		'cat_features': '0'
+	}
+) AS model
+FROM cat_train;
+
+query I
+SELECT max(abs(
+	duckboost_predict(n.model, [v.cat])
+	- duckboost_predict(i.model, [v.cat])
+)) < 1e-12
+FROM named_model n, indexed_model i, (VALUES (0.0), (1.0), (3.0), (4.0), (9.0)) v(cat);
+----
+true
+
+# Missing categories participate in training and learn the rest/left default.
+statement ok
+CREATE TABLE cat_missing AS
+SELECT cat, y
+FROM range(4), (VALUES
+	(3.0, 10.0),
+	(3.0, 10.0),
+	(0.0, 0.0),
+	(1.0, 0.0),
+	(NULL::DOUBLE, 0.0)
+) v(cat, y);
+
+statement ok
+CREATE TABLE missing_model AS
+SELECT duckboost_train(
+	y,
+	[cat],
+	MAP {
+		'n_estimators': '1',
+		'max_depth': '1',
+		'learning_rate': '1',
+		'feature_names': 'cat',
+		'categorical_feature': 'cat'
+	}
+) AS model
+FROM cat_missing;
+
+query II
+SELECT
+	model LIKE '%"compare":"equal","default_left":true%',
+	round(duckboost_predict(model, [NULL]))::BIGINT
+FROM missing_model;
+----
+true	0
+
+# Unseen categories follow the left/rest branch.
+query I
+SELECT round(duckboost_predict(model, [9.0]))::BIGINT FROM named_model;
+----
+0
+
+# Exported SQL uses the same equality and missing-value routing as predict.
+statement ok
+CREATE TABLE cat_score AS
+SELECT * FROM (VALUES (3.0), (0.0), (4.0), (NULL::DOUBLE), (9.0)) v(cat);
+
+statement ok
+CREATE TABLE native_pred AS
+SELECT duckboost_predict(model, [cat]) AS prediction
+FROM named_model, cat_score;
+
+statement ok
+CREATE TABLE sql_text AS
+SELECT duckboost_to_sql(
+	model,
+	'cat_score',
+	['cat'],
+	MAP {'separate_trees': 'false', 'prediction_alias': 'prediction'}
+) AS q
+FROM named_model;
+
+statement ok
+SET VARIABLE cat_sql = (SELECT q FROM sql_text);
+
+statement ok
+CREATE TABLE sql_pred AS
+SELECT * FROM query(getvariable('cat_sql'));
+
+query I
+SELECT
+	(SELECT list(round(prediction, 8) ORDER BY prediction) FROM native_pred)
+	=
+	(SELECT list(round(prediction, 8) ORDER BY prediction) FROM sql_pred);
+----
+true
+
+# The categorical split contributes normal feature importance.
+statement ok
+SET VARIABLE named_cat_model = (SELECT model FROM named_model);
+
+query I
+SELECT frequency > 0 AND gain > 0
+FROM duckboost_importance(getvariable('named_cat_model'))
+WHERE variable = 'cat';
+----
+true
+
+# Categorical selectors are validated after feature names are known.
+statement error
+SELECT duckboost_train(
+	y,
+	[cat],
+	MAP {'feature_names': 'cat', 'categorical_features': 'missing_feature'}
+)
+FROM cat_train;
+----
+unknown categorical feature 'missing_feature'
+
+statement error
+SELECT duckboost_train(
+	y,
+	[cat],
+	MAP {'feature_names': 'cat', 'categorical_features': '1'}
+)
+FROM cat_train;
+----
+categorical feature index '1' is out of range
+
+# Native backends do not silently reinterpret this reference-only option.
+statement error
+SELECT duckboost_train(
+	y,
+	[cat],
+	MAP {'backend': 'xgboost', 'feature_names': 'cat', 'categorical_features': 'cat'}
+)
+FROM cat_train;
+----
+categorical_features is supported by the reference backend only
