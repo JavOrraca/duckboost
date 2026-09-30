@@ -82,7 +82,7 @@ SELECT duckboost_import(
 query I
 SELECT duckboost_predict(model, []) FROM lgb_shrink;
 ----
-0.2
+2.0
 
 # --- CatBoost save_model JSON (True when feature > border) ---
 statement ok

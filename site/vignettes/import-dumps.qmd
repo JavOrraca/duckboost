@@ -4,7 +4,7 @@ title: "Import XGBoost, LightGBM, and CatBoost dumps"
 
 `duckboost_import(backend, dump)` turns a vendor dump into the same JSON model that `duckboost_predict` and `duckboost_to_sql` already understand. These examples use the fixtures under `test/sql/duckboost/data/` that `test/sql/duckboost/import_dumps.test` and `multiclass.test` load with `read_text`. A default `make` build can import these dumps; it does not link the vendor training libraries.
 
-Imported models set `learning_rate` to 1 and fold vendor shrinkage or scale into the leaf values. LightGBM `<=` splits become duckboost `<` splits via `nextafter` toward `+∞`.
+Imported models set `learning_rate` to 1. XGBoost and LightGBM dump leaf values already include learning-rate shrinkage and are imported unchanged, while CatBoost scale and bias are applied during import. LightGBM `<=` splits become duckboost `<` splits via `nextafter` toward `+∞`.
 
 ## XGBoost JSON
 
@@ -55,7 +55,7 @@ FROM models;
 """)
 ```
 
-`test/sql/duckboost/data/lgb_shrink.txt` is a second fixture whose `shrinkage` is baked into the leaf. The import test expects `duckboost_predict(model, []) = 0.2` for that file.
+`test/sql/duckboost/data/lgb_shrink.txt` is a second fixture with `leaf_value=2.0` and `shrinkage=0.1`. Because LightGBM already stores the shrunken value in `leaf_value`, the import test expects `duckboost_predict(model, []) = 2.0` without applying `shrinkage` again.
 
 ## CatBoost JSON
 

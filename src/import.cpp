@@ -236,8 +236,7 @@ vector<int64_t> ParseIntList(const string &value) {
 idx_t ConvertLGBNode(idx_t internal_idx, const vector<int64_t> &split_feature, const vector<double> &threshold,
                      const vector<int64_t> &left_child, const vector<int64_t> &right_child,
                      const vector<int64_t> &decision_type, const vector<idx_t> &cat_boundaries,
-                     const vector<uint32_t> &cat_threshold, const vector<double> &leaf_value, double shrinkage,
-                     BoostTree &tree) {
+                     const vector<uint32_t> &cat_threshold, const vector<double> &leaf_value, BoostTree &tree) {
 	if (internal_idx >= split_feature.size()) {
 		throw InvalidInputException("duckboost: lightgbm internal node index out of range");
 	}
@@ -305,12 +304,12 @@ idx_t ConvertLGBNode(idx_t internal_idx, const vector<int64_t> &split_feature, c
 			if (leaf_idx >= leaf_value.size()) {
 				throw InvalidInputException("duckboost: lightgbm leaf index out of range");
 			}
-			leaf.value = leaf_value[leaf_idx] * shrinkage;
+			leaf.value = leaf_value[leaf_idx];
 			tree.nodes.push_back(leaf);
 			return tree.nodes.size() - 1;
 		}
 		return ConvertLGBNode(static_cast<idx_t>(child), split_feature, threshold, left_child, right_child,
-		                      decision_type, cat_boundaries, cat_threshold, leaf_value, shrinkage, tree);
+		                      decision_type, cat_boundaries, cat_threshold, leaf_value, tree);
 	};
 
 	// LightGBM categorical matches go left. Duckboost EQUAL/IN matches go right.
@@ -482,10 +481,6 @@ BoostModel ImportLightGBMText(const string &dump, const ImportOptions &options) 
 				cat_threshold.push_back(static_cast<uint32_t>(word));
 			}
 		}
-		double shrinkage = 1.0;
-		if (tree_fields.count("shrinkage")) {
-			shrinkage = std::stod(tree_fields["shrinkage"]);
-		}
 		if (leaf_value.size() != num_leaves) {
 			throw InvalidInputException("duckboost: lightgbm leaf_value size mismatch");
 		}
@@ -496,7 +491,7 @@ BoostModel ImportLightGBMText(const string &dump, const ImportOptions &options) 
 		if (num_leaves == 1) {
 			TreeNode leaf;
 			leaf.is_leaf = true;
-			leaf.value = leaf_value[0] * shrinkage;
+			leaf.value = leaf_value[0];
 			tree.nodes.push_back(leaf);
 		} else {
 			if (split_feature.size() != num_leaves - 1 || threshold.size() != num_leaves - 1 ||
@@ -522,7 +517,7 @@ BoostModel ImportLightGBMText(const string &dump, const ImportOptions &options) 
 				model.n_features = MaxValue<idx_t>(model.n_features, static_cast<idx_t>(f) + 1);
 			}
 			ConvertLGBNode(0, split_feature, threshold, left_child, right_child, decision_type, cat_boundaries,
-			               cat_threshold, leaf_value, shrinkage, tree);
+			               cat_threshold, leaf_value, tree);
 		}
 		model.trees.push_back(std::move(tree));
 		tree_fields.clear();
