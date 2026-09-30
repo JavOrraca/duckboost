@@ -1,0 +1,321 @@
+# name: test/sql/duckboost/import_errors.test
+# description: Vendor imports fail loudly on dumps and configs duckboost cannot score exactly
+# group: [duckboost]
+
+require duckboost
+
+# --- XGBoost dump structure ---
+
+statement error
+SELECT duckboost_import('xgboost', '[{"nodeid":0,"split":"f0","split_condition":1.5,"yes":1,"no":2,"missing":1}]');
+----
+<REGEX>:.*needs split, split_condition, yes, no, and two children.*
+
+statement error
+SELECT duckboost_import(
+	'xgboost',
+	'[{"nodeid":0,"split":"f0","split_condition":1.5,"yes":1,"no":2,"missing":7,"children":[{"nodeid":1,"leaf":1},{"nodeid":2,"leaf":2}]}]'
+);
+----
+<REGEX>:.*missing=7 matches neither yes nor no.*
+
+statement error
+SELECT duckboost_import(
+	'xgboost',
+	'[{"nodeid":0,"leaf":1.0,"split":"f0"}]'
+);
+----
+<REGEX>:.*mixes leaf and split fields.*
+
+statement error
+SELECT duckboost_import('xgboost', '[{"nodeid":0.5,"leaf":1.0}]');
+----
+<REGEX>:.*'nodeid' must be a non-negative integer.*
+
+statement error
+SELECT duckboost_import('xgboost', '[{"nodeid":"0","leaf":1.0}]');
+----
+<REGEX>:.*'nodeid' must be a non-negative integer.*
+
+statement error
+SELECT duckboost_import('xgboost', '[{"nodeid":0,"leaf":[1.0,2.0]}]');
+----
+<REGEX>:.*multi-output trees not supported.*
+
+statement error
+SELECT duckboost_import('xgboost', '[{"nodeid":0,"leaf":1.0}] trailing');
+----
+<REGEX>:.*unexpected content after the xgboost dump array.*
+
+statement error
+SELECT duckboost_import('xgboost', '[]');
+----
+<REGEX>:.*no trees found in xgboost dump.*
+
+# Positional f<i> names index feature_names; anything else must be listed.
+statement error
+SELECT duckboost_import(
+	'xgboost',
+	'[{"nodeid":0,"split":"f2","split_condition":1.5,"yes":1,"no":2,"missing":1,"children":[{"nodeid":1,"leaf":1},{"nodeid":2,"leaf":2}]}]',
+	MAP {'feature_names': 'a,b'}
+);
+----
+<REGEX>:.*feature 'f2' is out of range for 2 feature_names.*
+
+statement error
+SELECT duckboost_import(
+	'xgboost',
+	'[{"nodeid":0,"split":"c","split_condition":1.5,"yes":1,"no":2,"missing":1,"children":[{"nodeid":1,"leaf":1},{"nodeid":2,"leaf":2}]}]',
+	MAP {'feature_names': 'a,b'}
+);
+----
+<REGEX>:.*feature 'c' is not in feature_names.*
+
+statement error
+SELECT duckboost_import('xgboost', '[{"nodeid":0,"leaf":1.0}]', MAP {'feature_names': 'a,a'});
+----
+<REGEX>:.*duplicate feature name 'a'.*
+
+query II
+SELECT
+	duckboost_predict(model, [0.0, 1.0]),
+	duckboost_predict(model, [0.0, 2.0])
+FROM (
+	SELECT duckboost_import(
+		'xgboost',
+		'[{"nodeid":0,"split":"f1","split_condition":1.5,"yes":1,"no":2,"missing":1,"children":[{"nodeid":1,"leaf":1},{"nodeid":2,"leaf":2}]}]',
+		MAP {'feature_names': 'a,b', 'base_score': '0'}
+	) AS model
+);
+----
+1.0	2.0
+
+# --- XGBoost save_config() handling ---
+
+statement ok
+CREATE MACRO xgb_config(objective, base_score, num_class, extra_model, extra_booster) AS
+	'{"learner":{"gradient_booster":{"name":"gbtree","gbtree_model_param":{"num_parallel_tree":"1"}' || extra_booster ||
+	'},"learner_model_param":{"base_score":"' || base_score || '","num_class":"' || num_class || '","num_target":"1"' ||
+	extra_model || '},"learner_train_param":{"booster":"gbtree","multi_strategy":"one_output_per_tree","objective":"' ||
+	objective || '"},"objective":{"name":"' || objective || '"}},"version":[3,0,0]}';
+
+statement ok
+CREATE TABLE xgb_stump AS
+SELECT '[{"nodeid":0,"split":"f0","split_condition":1.5,"yes":1,"no":2,"missing":1,"children":[{"nodeid":1,"leaf":0.5},{"nodeid":2,"leaf":-0.25}]}]' AS dump;
+
+# binary:logistic stores the intercept as a probability.
+query I
+SELECT abs(duckboost_predict(
+	duckboost_import('xgboost', dump, MAP {'config': xgb_config('binary:logistic', '[7.310586E-1]', '0', '', '')}),
+	[1.0]) - 1.0 / (1.0 + exp(-1.5))) < 1e-6
+FROM xgb_stump;
+----
+true
+
+statement error
+SELECT duckboost_import('xgboost', dump, MAP {'config': xgb_config('binary:logistic', '[5E-1]', '0', '', ''), 'base_score': '0'})
+FROM xgb_stump;
+----
+<REGEX>:.*pass either base_score or config, not both.*
+
+statement error
+SELECT duckboost_import('xgboost', dump, MAP {'config': xgb_config('binary:logistic', '[5E-1]', '0', '', ''), 'task': 'regression'})
+FROM xgb_stump;
+----
+<REGEX>:.*import task 'regression' contradicts xgboost config objective 'binary:logistic'.*
+
+statement error
+SELECT duckboost_import('xgboost', dump, MAP {'config': xgb_config('binary:logitraw', '[0E0]', '0', '', '')})
+FROM xgb_stump;
+----
+<REGEX>:.*'binary:logitraw' is not supported.*
+
+statement error
+SELECT duckboost_import('xgboost', dump, MAP {'config': xgb_config('reg:gamma', '[1E0]', '0', '', '')})
+FROM xgb_stump;
+----
+<REGEX>:.*objective 'reg:gamma' is not supported.*
+
+statement error
+SELECT duckboost_import('xgboost', dump, MAP {'config': xgb_config('reg:squarederror', '[0E0]', '0', '', ',"dart_train_param":{"rate_drop":"0.1","one_drop":"0"}')})
+FROM xgb_stump;
+----
+<REGEX>:.*dropout \(DART\) are not supported.*
+
+statement error
+SELECT duckboost_import('xgboost', dump, MAP {'config': replace(xgb_config('reg:squarederror', '[0E0]', '0', '', ''), '"booster":"gbtree"', '"booster":"gblinear"')})
+FROM xgb_stump;
+----
+<REGEX>:.*booster 'gblinear' is not supported.*
+
+statement error
+SELECT duckboost_import('xgboost', dump, MAP {'config': replace(xgb_config('reg:squarederror', '[0E0,1E0]', '0', '', ''), '"num_target":"1"', '"num_target":"2"')})
+FROM xgb_stump;
+----
+<REGEX>:.*multi-output models \(num_target > 1\) are not supported.*
+
+statement error
+SELECT duckboost_import('xgboost', dump, MAP {'config': '{"objective":"reg:squarederror"}'})
+FROM xgb_stump;
+----
+<REGEX>:.*config must be the Booster.save_config\(\) JSON document.*
+
+# reg:quantileerror reads its single alpha from quantile_loss_param.
+statement ok
+CREATE MACRO xgb_quantile_config(alphas) AS
+	replace(xgb_config('reg:quantileerror', '[2E0]', '0', '', ''), '"objective":{"name":"reg:quantileerror"}',
+	        '"objective":{"name":"reg:quantileerror","quantile_loss_param":{"quantile_alpha":"' || alphas || '"}}');
+
+query II
+SELECT model LIKE '%"objective":"quantile"%' AND model LIKE '%"objective_alpha":0.9%', duckboost_predict(model, [1.0])
+FROM (SELECT duckboost_import('xgboost', dump, MAP {'config': xgb_quantile_config('[9E-1]')}) AS model FROM xgb_stump);
+----
+true	2.5
+
+statement error
+SELECT duckboost_import('xgboost', dump, MAP {'config': xgb_quantile_config('[1E-1,9E-1]')})
+FROM xgb_stump;
+----
+<REGEX>:.*needs exactly one quantile_alpha.*
+
+# Multiclass: per-class margins, num_class consistency, and round-major tree layout.
+statement error
+SELECT duckboost_import('xgboost', dump, MAP {'config': xgb_config('multi:softprob', '[0E0,1E0]', '3', '', '')})
+FROM xgb_stump;
+----
+<REGEX>:.*base_score has 2 values for num_class=3.*
+
+statement error
+SELECT duckboost_import('xgboost', dump, MAP {'config': xgb_config('multi:softprob', '[0E0]', '3', '', '')})
+FROM xgb_stump;
+----
+<REGEX>:.*xgboost dump has 1 trees, which is not a multiple of n_classes=3.*
+
+statement error
+SELECT duckboost_import('xgboost', dump, MAP {'config': xgb_config('multi:softprob', '[0E0]', '3', '', ''), 'n_classes': '4'})
+FROM xgb_stump;
+----
+<REGEX>:.*import n_classes=4 contradicts xgboost config num_class=3.*
+
+statement error
+SELECT duckboost_import('xgboost', dump, MAP {'config': replace(xgb_config('multi:softprob', '[0E0]', '3', '', ''), '"num_parallel_tree":"1"', '"num_parallel_tree":"2"')})
+FROM xgb_stump;
+----
+<REGEX>:.*num_parallel_tree > 1 with multiclass is not supported.*
+
+statement error
+SELECT duckboost_import('xgboost', dump, MAP {'task': 'multiclass', 'n_classes': '3', 'base_scores': '[0,1]'})
+FROM xgb_stump;
+----
+<REGEX>:.*base_scores has 2 values for n_classes=3.*
+
+statement error
+SELECT duckboost_import('xgboost', dump, MAP {'base_score': '0', 'base_scores': '[0]'})
+FROM xgb_stump;
+----
+<REGEX>:.*pass either base_score or base_scores, not both.*
+
+statement error
+SELECT duckboost_import('xgboost', dump, MAP {'base_score': 'abc'})
+FROM xgb_stump;
+----
+<REGEX>:.*base_score must be a finite number, got 'abc'.*
+
+# --- LightGBM header and objective handling ---
+
+statement ok
+CREATE TABLE lgb_stump AS
+SELECT content AS dump FROM read_text('test/sql/duckboost/data/lgb_stump.txt');
+
+statement error
+SELECT duckboost_import('lightgbm', replace(dump, 'objective=regression', 'objective=regression sqrt')) FROM lgb_stump;
+----
+<REGEX>:.*\(reg_sqrt\) is not supported.*
+
+statement error
+SELECT duckboost_import('lightgbm', replace(dump, 'objective=regression', 'objective=multiclassova num_class:3')) FROM lgb_stump;
+----
+<REGEX>:.*objective 'multiclassova num_class:3' is not supported.*
+
+statement error
+SELECT duckboost_import('lightgbm', replace(dump, 'objective=regression', 'objective=poisson')) FROM lgb_stump;
+----
+<REGEX>:.*objective 'poisson' is not supported.*
+
+statement error
+SELECT duckboost_import('lightgbm', replace(dump, 'objective=regression', 'objective=mystery_loss')) FROM lgb_stump;
+----
+<REGEX>:.*objective 'mystery_loss' is not supported.*
+
+statement error
+SELECT duckboost_import('lightgbm', replace(dump, 'objective=regression', 'objective=multiclass num_class:2')) FROM lgb_stump;
+----
+<REGEX>:.*objective num_class:2 contradicts header num_class=1.*
+
+statement error
+SELECT duckboost_import('lightgbm', replace(dump, 'num_tree_per_iteration=1', 'num_tree_per_iteration=2')) FROM lgb_stump;
+----
+<REGEX>:.*num_tree_per_iteration=2 does not match num_class=1.*
+
+statement error
+SELECT duckboost_import(
+	'lightgbm',
+	replace(replace(dump, 'objective=regression', 'objective=multiclass num_class:2'), 'num_class=1', 'num_class=2')
+) FROM lgb_stump;
+----
+<REGEX>:.*num_tree_per_iteration=1 does not match num_class=2.*
+
+statement error
+SELECT duckboost_import(
+	'lightgbm',
+	replace(replace(replace(dump, 'objective=regression', 'objective=multiclass num_class:2'), 'num_class=1', 'num_class=2'), 'num_tree_per_iteration=1', 'num_tree_per_iteration=2')
+) FROM lgb_stump;
+----
+<REGEX>:.*lightgbm dump has 1 trees, which is not a multiple of n_classes=2.*
+
+statement error
+SELECT duckboost_import('lightgbm', dump, MAP {'task': 'binary'}) FROM lgb_stump;
+----
+<REGEX>:.*import task 'binary' contradicts lightgbm header task 'regression'.*
+
+statement error
+SELECT duckboost_import('lightgbm', dump, MAP {'n_classes': '3'}) FROM lgb_stump;
+----
+<REGEX>:.*import n_classes=3 contradicts lightgbm header num_class=1.*
+
+statement error
+SELECT duckboost_import('lightgbm', dump, MAP {'config': '{}'}) FROM lgb_stump;
+----
+<REGEX>:.*'config' is only valid for xgboost dumps.*
+
+statement error
+SELECT duckboost_import('lightgbm', replace(dump, 'num_leaves=2', 'num_leaves=two')) FROM lgb_stump;
+----
+<REGEX>:.*lightgbm num_leaves must be a finite number, got 'two'.*
+
+statement error
+SELECT duckboost_import('lightgbm', replace(dump, 'is_linear=0', 'is_linear=1')) FROM lgb_stump;
+----
+<REGEX>:.*linear trees \(is_linear=1\) are not supported.*
+
+statement error
+SELECT duckboost_import('lightgbm', replace(dump, 'end of trees', 'end of trees' || chr(10) || 'average_output')) FROM lgb_stump;
+----
+<REGEX>:.*average_output / random-forest dumps are not supported.*
+
+# Quantile level comes from the trailing parameters section.
+query I
+SELECT duckboost_import(
+	'lightgbm',
+	replace(dump, 'objective=regression', 'objective=quantile') || chr(10) || 'parameters:' || chr(10) || '[alpha: 0.25]' || chr(10) || 'end of parameters'
+) LIKE '%"objective":"quantile"%"objective_alpha":0.25%'
+FROM lgb_stump;
+----
+true
+
+# --- Other backends ---
+
+statement error
+SELECT duckboost_import('catboost', (SELECT content FROM read_text('test/sql/duckboost/data/catboost_stump.json')), MAP {'config': '{}'});
+----
+<REGEX>:.*'config' is only valid for xgboost dumps.*

@@ -9,7 +9,9 @@
 #include <cctype>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
+#include <initializer_list>
 #include <limits>
 #include <map>
 #include <sstream>
@@ -53,39 +55,50 @@ double ThresholdForFloat32Less(double border) {
 	return midpoint;
 }
 
+//! XGBoost names unnamed features f0, f1, ...; returns false for any other spelling.
+bool ParseXGBoostPositionalName(const string &name, idx_t &idx) {
+	// f + at most 9 digits keeps the index far from idx_t overflow.
+	if (name.size() < 2 || name.size() > 10 || name[0] != 'f' || (name.size() > 2 && name[1] == '0')) {
+		return false;
+	}
+	idx_t value = 0;
+	for (idx_t i = 1; i < name.size(); i++) {
+		if (!std::isdigit(static_cast<unsigned char>(name[i]))) {
+			return false;
+		}
+		value = value * 10 + static_cast<idx_t>(name[i] - '0');
+	}
+	idx = value;
+	return true;
+}
+
+//! name_to_idx is pre-seeded with feature_names positions when the caller supplies them.
 idx_t ParseFeatureIndex(const string &name, unordered_map<string, idx_t> &name_to_idx, idx_t &n_features,
                         const vector<string> *allowed_names) {
 	auto it = name_to_idx.find(name);
 	if (it != name_to_idx.end()) {
 		return it->second;
 	}
+	idx_t idx = 0;
+	const bool positional = ParseXGBoostPositionalName(name, idx);
 	if (allowed_names) {
-		for (idx_t i = 0; i < allowed_names->size(); i++) {
-			if ((*allowed_names)[i] == name) {
-				n_features = MaxValue<idx_t>(n_features, i + 1);
-				name_to_idx[name] = i;
-				return i;
-			}
+		if (!positional) {
+			throw InvalidInputException("duckboost: xgboost feature '%s' is not in feature_names", name);
 		}
-		throw InvalidInputException("duckboost: xgboost feature '%s' is not in feature_names", name);
+		if (idx >= allowed_names->size()) {
+			throw InvalidInputException("duckboost: xgboost feature '%s' is out of range for %llu feature_names", name,
+			                            (unsigned long long)allowed_names->size());
+		}
+		name_to_idx[name] = idx;
+		return idx;
 	}
-	if (!name.empty() && (name[0] == 'f' || name[0] == 'F')) {
-		bool all_digits = true;
-		for (idx_t i = 1; i < name.size(); i++) {
-			if (!std::isdigit(static_cast<unsigned char>(name[i]))) {
-				all_digits = false;
-				break;
-			}
-		}
-		if (all_digits && name.size() > 1) {
-			auto idx = static_cast<idx_t>(std::stoull(name.substr(1)));
-			n_features = MaxValue<idx_t>(n_features, idx + 1);
-			name_to_idx[name] = idx;
-			return idx;
-		}
+	if (!positional) {
+		throw InvalidInputException(
+		    "duckboost: xgboost dump uses feature names; pass feature_names in scoring column order");
 	}
-	throw InvalidInputException(
-	    "duckboost: xgboost dump uses feature names; pass feature_names in scoring column order");
+	n_features = MaxValue<idx_t>(n_features, idx + 1);
+	name_to_idx[name] = idx;
+	return idx;
 }
 
 void ApplyImportOptions(BoostModel &model, const ImportOptions &options) {
@@ -130,6 +143,32 @@ void ApplyImportOptions(BoostModel &model, const ImportOptions &options) {
 	if (model.task != BoostTask::MULTICLASS) {
 		model.n_classes = 1;
 	}
+	if (options.base_scores_set) {
+		if (model.task == BoostTask::MULTICLASS) {
+			if (model.base_scores.size() == 1) {
+				model.base_scores.resize(model.n_classes, model.base_scores[0]);
+			} else if (model.base_scores.size() != model.n_classes) {
+				throw InvalidInputException("duckboost: base_scores has %llu values for n_classes=%llu",
+				                            (unsigned long long)model.base_scores.size(),
+				                            (unsigned long long)model.n_classes);
+			}
+		} else {
+			if (model.base_scores.size() != 1) {
+				throw InvalidInputException("duckboost: base_scores with %llu values requires a multiclass model",
+				                            (unsigned long long)model.base_scores.size());
+			}
+			model.base_scores.clear();
+		}
+	}
+}
+
+//! Multiclass trees are laid out round-major: tree index = round * n_classes + class.
+void CheckClassTreeLayout(const BoostModel &model, const char *vendor) {
+	if (model.task == BoostTask::MULTICLASS && model.trees.size() % model.n_classes != 0) {
+		throw InvalidInputException("duckboost: %s dump has %llu trees, which is not a multiple of n_classes=%llu",
+		                            vendor, (unsigned long long)model.trees.size(),
+		                            (unsigned long long)model.n_classes);
+	}
 }
 
 struct XGBNode {
@@ -142,6 +181,9 @@ struct XGBNode {
 	bool has_missing = false;
 	bool has_yes = false;
 	bool has_no = false;
+	bool has_split = false;
+	bool has_split_condition = false;
+	bool has_children = false;
 	string split;
 	double split_condition = 0;
 	vector<double> split_categories;
@@ -155,6 +197,18 @@ struct XGBNode {
 bool IsAllowedXGBKey(const string &key) {
 	return key == "nodeid" || key == "depth" || key == "split" || key == "split_condition" || key == "yes" ||
 	       key == "no" || key == "missing" || key == "children" || key == "leaf" || key == "gain" || key == "cover";
+}
+
+idx_t ParseXGBNodeIndex(JsonParser &p, const string &key) {
+	if (p.Peek() == '"') {
+		throw InvalidInputException("duckboost: xgboost '%s' must be a non-negative integer", key);
+	}
+	auto value = p.ParseNumber();
+	// 2^53: largest range where every integer is exactly representable as a double.
+	if (!std::isfinite(value) || value < 0 || std::floor(value) != value || value > 9007199254740992.0) {
+		throw InvalidInputException("duckboost: xgboost '%s' must be a non-negative integer", key);
+	}
+	return static_cast<idx_t>(value);
 }
 
 XGBNode ParseXGBNode(JsonParser &p) {
@@ -172,9 +226,9 @@ XGBNode ParseXGBNode(JsonParser &p) {
 			throw InvalidInputException("duckboost: unknown xgboost dump field '%s'", key);
 		}
 		if (key == "nodeid") {
-			node.nodeid = static_cast<idx_t>(p.ParseNumber());
+			node.nodeid = ParseXGBNodeIndex(p, key);
 		} else if (key == "depth") {
-			p.ParseNumber();
+			ParseXGBNodeIndex(p, key);
 		} else if (key == "leaf") {
 			if (p.Peek() == '[') {
 				throw InvalidInputException("duckboost: multi-output trees not supported");
@@ -184,7 +238,9 @@ XGBNode ParseXGBNode(JsonParser &p) {
 			node.leaf = p.ParseNumber();
 		} else if (key == "split") {
 			node.split = p.ParseString();
+			node.has_split = true;
 		} else if (key == "split_condition") {
+			node.has_split_condition = true;
 			if (p.Peek() == '[') {
 				node.categorical = true;
 				p.Expect('[');
@@ -205,19 +261,20 @@ XGBNode ParseXGBNode(JsonParser &p) {
 				node.split_condition = p.ParseNumber();
 			}
 		} else if (key == "yes") {
-			node.yes = static_cast<idx_t>(p.ParseNumber());
+			node.yes = ParseXGBNodeIndex(p, key);
 			node.has_yes = true;
 		} else if (key == "no") {
-			node.no = static_cast<idx_t>(p.ParseNumber());
+			node.no = ParseXGBNodeIndex(p, key);
 			node.has_no = true;
 		} else if (key == "missing") {
-			node.missing = static_cast<idx_t>(p.ParseNumber());
+			node.missing = ParseXGBNodeIndex(p, key);
 			node.has_missing = true;
 		} else if (key == "gain") {
 			node.gain = p.ParseNumber();
 		} else if (key == "cover") {
 			node.cover = p.ParseNumber();
 		} else if (key == "children") {
+			node.has_children = true;
 			p.Expect('[');
 			bool first_child = true;
 			while (!p.TryConsume(']')) {
@@ -234,20 +291,32 @@ XGBNode ParseXGBNode(JsonParser &p) {
 
 idx_t ConvertXGBNode(const XGBNode &node, BoostTree &tree, unordered_map<string, idx_t> &name_to_idx,
                      idx_t &n_features, const vector<string> *allowed_names) {
-	if (node.is_leaf || node.children.empty()) {
-		if (!node.children.empty()) {
-			throw InvalidInputException("duckboost: xgboost leaf node %llu has children",
+	const bool has_split_fields = node.has_split || node.has_split_condition || node.has_yes || node.has_no ||
+	                              node.has_missing || node.has_children;
+	if (node.has_leaf) {
+		if (has_split_fields) {
+			throw InvalidInputException("duckboost: xgboost node %llu mixes leaf and split fields",
 			                            (unsigned long long)node.nodeid);
 		}
 		TreeNode leaf;
 		leaf.is_leaf = true;
-		leaf.value = node.has_leaf ? node.leaf : 0.0;
+		leaf.value = node.leaf;
 		tree.nodes.push_back(leaf);
 		return tree.nodes.size() - 1;
 	}
-	if (node.split.empty() || !node.has_yes || !node.has_no || node.children.size() != 2) {
-		throw InvalidInputException("duckboost: xgboost node %llu is missing split/yes/no/children",
+	if (!node.has_split || !node.has_split_condition || !node.has_yes || !node.has_no ||
+	    node.children.size() != 2) {
+		throw InvalidInputException(
+		    "duckboost: xgboost node %llu needs split, split_condition, yes, no, and two children (or a leaf)",
+		    (unsigned long long)node.nodeid);
+	}
+	if (node.yes == node.no) {
+		throw InvalidInputException("duckboost: xgboost node %llu has identical yes/no children",
 		                            (unsigned long long)node.nodeid);
+	}
+	if (node.has_missing && node.missing != node.yes && node.missing != node.no) {
+		throw InvalidInputException("duckboost: xgboost node %llu missing=%llu matches neither yes nor no",
+		                            (unsigned long long)node.nodeid, (unsigned long long)node.missing);
 	}
 	const XGBNode *yes_child = nullptr;
 	const XGBNode *no_child = nullptr;
@@ -466,6 +535,46 @@ struct GlobalCatSplit {
 
 } // namespace
 
+static double ParseFiniteNumber(const string &raw, const string &what) {
+	auto text = raw;
+	StringUtil::Trim(text);
+	char *end = nullptr;
+	auto value = std::strtod(text.c_str(), &end);
+	if (text.empty() || end != text.c_str() + text.size() || !std::isfinite(value)) {
+		throw InvalidInputException("duckboost: %s must be a finite number, got '%s'", what, raw);
+	}
+	return value;
+}
+
+static idx_t ParseCount(const string &raw, const string &what) {
+	auto value = ParseFiniteNumber(raw, what);
+	if (value < 0 || std::floor(value) != value || value > 1e15) {
+		throw InvalidInputException("duckboost: %s must be a non-negative integer, got '%s'", what, raw);
+	}
+	return static_cast<idx_t>(value);
+}
+
+//! Accepts "[a,b]", "a,b", or a bare "a" (XGBoost writes base_score both ways across versions).
+static vector<double> ParseBracketedNumberList(const string &raw, const string &what) {
+	auto text = raw;
+	StringUtil::Trim(text);
+	if (!text.empty() && text.front() == '[') {
+		if (text.back() != ']') {
+			throw InvalidInputException("duckboost: malformed %s list '%s'", what, raw);
+		}
+		text = text.substr(1, text.size() - 2);
+	}
+	vector<double> out;
+	StringUtil::Trim(text);
+	if (text.empty()) {
+		return out;
+	}
+	for (auto &part : StringUtil::Split(text, ',')) {
+		out.push_back(ParseFiniteNumber(part, what));
+	}
+	return out;
+}
+
 ImportOptions ImportOptions::FromMap(const unordered_map<string, string> &options) {
 	ImportOptions result;
 	for (auto &entry : options) {
@@ -475,10 +584,16 @@ ImportOptions ImportOptions::FromMap(const unordered_map<string, string> &option
 			result.task = TaskFromString(value);
 			result.task_set = true;
 		} else if (key == "base_score" || key == "bias") {
-			result.base_score = std::stod(value);
+			result.base_score = ParseFiniteNumber(value, "base_score");
 			result.base_score_set = true;
+		} else if (key == "base_scores") {
+			result.base_scores = ParseBracketedNumberList(value, "base_scores");
+			if (result.base_scores.empty()) {
+				throw InvalidInputException("duckboost: base_scores must list at least one value");
+			}
+			result.base_scores_set = true;
 		} else if (key == "learning_rate" || key == "eta" || key == "lr" || key == "scale") {
-			result.learning_rate = std::stod(value);
+			result.learning_rate = ParseFiniteNumber(value, "learning_rate");
 			result.learning_rate_set = true;
 		} else if (key == "feature_names") {
 			result.feature_names = StringUtil::Split(value, ',');
@@ -486,7 +601,7 @@ ImportOptions ImportOptions::FromMap(const unordered_map<string, string> &option
 				StringUtil::Trim(name);
 			}
 		} else if (key == "n_classes" || key == "classes_count" || key == "num_class" || key == "num_classes") {
-			result.n_classes = static_cast<idx_t>(std::stoull(value));
+			result.n_classes = ParseCount(value, "n_classes");
 			result.n_classes_set = true;
 		} else if (key == "config") {
 			result.config = value;
@@ -494,7 +609,10 @@ ImportOptions ImportOptions::FromMap(const unordered_map<string, string> &option
 			throw InvalidInputException("duckboost: unknown import option '%s'", entry.first);
 		}
 	}
-	if (result.base_score_set && !result.config.empty()) {
+	if (result.base_score_set && result.base_scores_set) {
+		throw InvalidInputException("duckboost: pass either base_score or base_scores, not both");
+	}
+	if ((result.base_score_set || result.base_scores_set) && !result.config.empty()) {
 		throw InvalidInputException("duckboost: pass either base_score or config, not both");
 	}
 	return result;
@@ -507,155 +625,164 @@ static double Logit(double p) {
 	return std::log(p / (1.0 - p));
 }
 
-static vector<double> ParseBracketedNumberList(const string &raw) {
-	auto text = raw;
-	StringUtil::Trim(text);
-	if (text.empty()) {
-		return {};
-	}
-	if (text.front() == '[' && text.back() == ']') {
-		text = text.substr(1, text.size() - 2);
-	}
-	vector<double> out;
-	idx_t start = 0;
-	while (start <= text.size()) {
-		auto comma = text.find(',', start);
-		auto part = text.substr(start, comma == string::npos ? string::npos : comma - start);
-		StringUtil::Trim(part);
-		if (!part.empty()) {
-			out.push_back(std::stod(part));
+//! Value at a nested object path of an xgboost save_config() document: string contents for strings, raw JSON
+//! text otherwise, "" when any path component is missing.
+static string FindConfigValue(const string &config, std::initializer_list<const char *> path) {
+	JsonParser p(config);
+	for (auto key : path) {
+		if (p.Peek() != '{') {
+			return "";
 		}
-		if (comma == string::npos) {
-			break;
+		p.Expect('{');
+		bool found = false;
+		if (!p.TryConsume('}')) {
+			do {
+				auto name = p.ParseString();
+				p.Expect(':');
+				if (name == key) {
+					found = true;
+					break;
+				}
+				p.SkipValue();
+			} while (p.TryConsume(','));
 		}
-		start = comma + 1;
-	}
-	return out;
-}
-
-static string FindConfigString(const string &config, const string &key) {
-	// Prefer the learner_model_param / learner_train_param spellings when present.
-	idx_t search_from = 0;
-	if (key == "base_score" || key == "num_class") {
-		auto section = config.find("\"learner_model_param\"");
-		if (section != string::npos) {
-			search_from = section;
-		}
-	} else if (key == "objective" || key == "booster") {
-		auto section = config.find("\"learner_train_param\"");
-		if (section != string::npos) {
-			search_from = section;
+		if (!found) {
+			return "";
 		}
 	}
-	auto needle = "\"" + key + "\"";
-	auto pos = config.find(needle, search_from);
-	if (pos == string::npos) {
-		pos = config.find(needle);
-	}
-	if (pos == string::npos) {
-		return "";
-	}
-	pos = config.find(':', pos + needle.size());
-	if (pos == string::npos) {
-		return "";
-	}
-	// JsonParser stores a string reference; keep the substring alive for its lifetime.
-	auto rest = config.substr(pos + 1);
-	JsonParser p(rest);
-	auto c = p.Peek();
-	if (c == '"') {
+	if (p.Peek() == '"') {
 		return p.ParseString();
 	}
-	if (c == '[' || c == '{') {
-		auto start = p.pos;
-		p.SkipValue();
-		return rest.substr(start, p.pos - start);
-	}
-	if (c == 't' || c == 'f' || c == 'n') {
-		return "";
-	}
-	return FormatDouble(p.ParseNumber());
+	auto start = p.pos;
+	p.SkipValue();
+	return config.substr(start, p.pos - start);
 }
 
-static void ApplyXGBoostConfig(BoostModel &model, ImportOptions &options) {
+static void ApplyXGBoostConfig(BoostModel &model, const ImportOptions &options) {
 	if (options.config.empty()) {
 		return;
 	}
+	if (options.base_score_set || options.base_scores_set) {
+		throw InvalidInputException("duckboost: pass either base_score or config, not both");
+	}
 	auto &config = options.config;
-	auto booster = StringUtil::Lower(FindConfigString(config, "booster"));
-	if (!booster.empty() && booster != "gbtree") {
-		throw InvalidInputException("duckboost: xgboost booster '%s' is not supported (expected gbtree)", booster);
+	auto config_first = config.find_first_not_of(" \t\r\n");
+	if (config_first == string::npos || config[config_first] != '{' || FindConfigValue(config, {"learner"}).empty()) {
+		throw InvalidInputException("duckboost: xgboost config must be the Booster.save_config() JSON document");
 	}
-	auto parallel = FindConfigString(config, "num_parallel_tree");
-	auto objective = StringUtil::Lower(FindConfigString(config, "objective"));
+	auto booster = StringUtil::Lower(FindConfigValue(config, {"learner", "learner_train_param", "booster"}));
+	auto booster_name = StringUtil::Lower(FindConfigValue(config, {"learner", "gradient_booster", "name"}));
+	for (auto &name : {booster, booster_name}) {
+		if (!name.empty() && name != "gbtree") {
+			throw InvalidInputException("duckboost: xgboost booster '%s' is not supported (expected gbtree)", name);
+		}
+	}
+	// XGBoost 3 folds DART into gbtree: dropout reweights trees at predict time, which dumps do not record.
+	auto rate_drop = FindConfigValue(config, {"learner", "gradient_booster", "dart_train_param", "rate_drop"});
+	auto one_drop = FindConfigValue(config, {"learner", "gradient_booster", "dart_train_param", "one_drop"});
+	if ((!rate_drop.empty() && ParseFiniteNumber(rate_drop, "xgboost rate_drop") > 0) ||
+	    (!one_drop.empty() && ParseFiniteNumber(one_drop, "xgboost one_drop") != 0)) {
+		throw InvalidInputException("duckboost: xgboost models trained with dropout (DART) are not supported");
+	}
+	auto multi_strategy = StringUtil::Lower(FindConfigValue(config, {"learner", "learner_train_param", "multi_strategy"}));
+	auto num_target_raw = FindConfigValue(config, {"learner", "learner_model_param", "num_target"});
+	if (multi_strategy == "multi_output_tree" ||
+	    (!num_target_raw.empty() && ParseCount(num_target_raw, "xgboost num_target") > 1)) {
+		throw InvalidInputException("duckboost: xgboost multi-output models (num_target > 1) are not supported");
+	}
+	auto objective = StringUtil::Lower(FindConfigValue(config, {"learner", "learner_train_param", "objective"}));
 	if (objective.empty()) {
-		objective = "reg:squarederror";
+		objective = StringUtil::Lower(FindConfigValue(config, {"learner", "objective", "name"}));
 	}
-	if (!objective.empty() && objective.front() == '{') {
-		auto name = FindConfigString(objective, "name");
-		if (!name.empty()) {
-			objective = StringUtil::Lower(name);
-		}
+	if (objective.empty()) {
+		throw InvalidInputException("duckboost: xgboost config has no objective");
 	}
-	if (!parallel.empty() && std::stoull(parallel) > 1 &&
-	    (options.task == BoostTask::MULTICLASS || objective.find("multi") != string::npos)) {
-		throw InvalidInputException("duckboost: xgboost num_parallel_tree > 1 with multiclass is not supported");
-	}
-	auto base_raw = FindConfigString(config, "base_score");
-	auto num_class_raw = FindConfigString(config, "num_class");
+
+	BoostTask config_task = BoostTask::REGRESSION;
 	if (objective == "reg:squarederror" || objective == "reg:pseudohubererror") {
-		if (!options.task_set) {
-			model.task = BoostTask::REGRESSION;
-		}
 		model.loss = RegressionLoss::SQUARED_ERROR;
 	} else if (objective == "reg:absoluteerror") {
-		if (!options.task_set) {
-			model.task = BoostTask::REGRESSION;
-		}
 		model.loss = RegressionLoss::ABSOLUTE_ERROR;
 	} else if (objective == "reg:quantileerror") {
-		if (!options.task_set) {
-			model.task = BoostTask::REGRESSION;
-		}
 		model.loss = RegressionLoss::QUANTILE;
-		auto alpha = FindConfigString(config, "quantile_alpha");
-		if (!alpha.empty()) {
-			model.objective_alpha = std::stod(alpha);
+		auto alphas = ParseBracketedNumberList(
+		    FindConfigValue(config, {"learner", "objective", "quantile_loss_param", "quantile_alpha"}),
+		    "xgboost quantile_alpha");
+		if (alphas.size() != 1) {
+			throw InvalidInputException(
+			    "duckboost: xgboost reg:quantileerror needs exactly one quantile_alpha (multi-quantile models are "
+			    "multi-output and not supported)");
 		}
+		if (!(alphas[0] > 0 && alphas[0] < 1)) {
+			throw InvalidInputException("duckboost: xgboost quantile_alpha must be in (0, 1)");
+		}
+		model.objective_alpha = alphas[0];
 	} else if (objective == "binary:logistic") {
-		if (!options.task_set) {
-			model.task = BoostTask::BINARY;
-		}
+		config_task = BoostTask::BINARY;
 	} else if (objective == "multi:softprob" || objective == "multi:softmax") {
-		if (!options.task_set) {
-			model.task = BoostTask::MULTICLASS;
-		}
+		config_task = BoostTask::MULTICLASS;
 	} else if (objective == "binary:logitraw") {
-		throw InvalidInputException("duckboost: xgboost objective 'binary:logitraw' is not supported");
+		throw InvalidInputException(
+		    "duckboost: xgboost objective 'binary:logitraw' is not supported (duckboost binary models apply a sigmoid)");
 	} else {
-		throw InvalidInputException("duckboost: xgboost objective '%s' is not supported", objective);
+		throw InvalidInputException(
+		    "duckboost: xgboost objective '%s' is not supported (supported: reg:squarederror, reg:pseudohubererror, "
+		    "reg:absoluteerror, reg:quantileerror, binary:logistic, multi:softprob, multi:softmax)",
+		    objective);
 	}
-	if (!num_class_raw.empty()) {
-		model.n_classes = static_cast<idx_t>(std::stoull(num_class_raw));
-		if (model.n_classes >= 2) {
-			model.task = BoostTask::MULTICLASS;
+
+	auto num_class_raw = FindConfigValue(config, {"learner", "learner_model_param", "num_class"});
+	const idx_t config_classes = num_class_raw.empty() ? 0 : ParseCount(num_class_raw, "xgboost num_class");
+	if (config_task == BoostTask::MULTICLASS && config_classes < 2) {
+		throw InvalidInputException("duckboost: xgboost %s config needs num_class >= 2", objective);
+	}
+	if (config_task != BoostTask::MULTICLASS && config_classes >= 2) {
+		throw InvalidInputException("duckboost: xgboost config has num_class=%llu with objective '%s'",
+		                            (unsigned long long)config_classes, objective);
+	}
+	auto parallel_raw =
+	    FindConfigValue(config, {"learner", "gradient_booster", "gbtree_model_param", "num_parallel_tree"});
+	if (config_task == BoostTask::MULTICLASS && !parallel_raw.empty() &&
+	    ParseCount(parallel_raw, "xgboost num_parallel_tree") > 1) {
+		throw InvalidInputException("duckboost: xgboost num_parallel_tree > 1 with multiclass is not supported");
+	}
+	if (options.task_set && options.task != config_task) {
+		throw InvalidInputException("duckboost: import task '%s' contradicts xgboost config objective '%s'",
+		                            TaskToString(options.task), objective);
+	}
+	if (options.n_classes_set) {
+		const bool consistent = config_task == BoostTask::MULTICLASS ? options.n_classes == config_classes
+		                                                              : options.n_classes <= 1;
+		if (!consistent) {
+			throw InvalidInputException("duckboost: import n_classes=%llu contradicts xgboost config num_class=%llu",
+			                            (unsigned long long)options.n_classes, (unsigned long long)config_classes);
 		}
 	}
-	if (!base_raw.empty() && !options.base_score_set && !options.base_scores_set) {
-		auto scores = ParseBracketedNumberList(base_raw);
-		if (scores.empty()) {
-			throw InvalidInputException("duckboost: could not parse xgboost base_score from config");
-		}
-		if (model.task == BoostTask::BINARY) {
-			model.base_score = Logit(scores[0]);
-		} else if (model.task == BoostTask::MULTICLASS) {
-			model.base_scores = scores;
-			model.base_score = scores[0];
-			model.n_classes = MaxValue<idx_t>(model.n_classes, scores.size());
-		} else {
-			model.base_score = scores[0];
-		}
+	model.task = config_task;
+	model.n_classes = config_task == BoostTask::MULTICLASS ? config_classes : 1;
+
+	auto scores = ParseBracketedNumberList(FindConfigValue(config, {"learner", "learner_model_param", "base_score"}),
+	                                       "xgboost base_score");
+	if (scores.empty()) {
+		throw InvalidInputException("duckboost: xgboost config has no base_score");
 	}
+	if (config_task == BoostTask::MULTICLASS) {
+		if (scores.size() == 1) {
+			scores.resize(model.n_classes, scores[0]);
+		} else if (scores.size() != model.n_classes) {
+			throw InvalidInputException("duckboost: xgboost base_score has %llu values for num_class=%llu",
+			                            (unsigned long long)scores.size(), (unsigned long long)model.n_classes);
+		}
+		model.base_scores = scores;
+		model.base_score = scores[0];
+		return;
+	}
+	if (scores.size() != 1) {
+		throw InvalidInputException("duckboost: xgboost base_score has %llu values; expected one",
+		                            (unsigned long long)scores.size());
+	}
+	// XGBoost stores the binary:logistic intercept as a probability.
+	model.base_score = config_task == BoostTask::BINARY ? Logit(scores[0]) : scores[0];
 }
 
 bool LooksLikeDuckBoostJSON(const string &dump) {
@@ -664,8 +791,7 @@ bool LooksLikeDuckBoostJSON(const string &dump) {
 	return trimmed.find("\"duckboost_version\"") != string::npos;
 }
 
-BoostModel ImportXGBoostJSON(const string &dump, const ImportOptions &options_in) {
-	ImportOptions options = options_in;
+BoostModel ImportXGBoostJSON(const string &dump, const ImportOptions &options) {
 	JsonParser p(dump);
 	p.Expect('[');
 	BoostModel model;
@@ -677,7 +803,10 @@ BoostModel ImportXGBoostJSON(const string &dump, const ImportOptions &options_in
 	const vector<string> *allowed_names = options.feature_names.empty() ? nullptr : &options.feature_names;
 	if (allowed_names) {
 		for (idx_t i = 0; i < allowed_names->size(); i++) {
-			name_to_idx[(*allowed_names)[i]] = i;
+			if (!name_to_idx.emplace((*allowed_names)[i], i).second) {
+				throw InvalidInputException("duckboost: duplicate feature name '%s' in feature_names",
+				                            (*allowed_names)[i]);
+			}
 		}
 		model.n_features = MaxValue<idx_t>(model.n_features, allowed_names->size());
 	}
@@ -695,6 +824,12 @@ BoostModel ImportXGBoostJSON(const string &dump, const ImportOptions &options_in
 		}
 		model.trees.push_back(std::move(tree));
 	}
+	if (!p.AtEnd()) {
+		throw InvalidInputException("duckboost: unexpected content after the xgboost dump array");
+	}
+	if (model.trees.empty()) {
+		throw InvalidInputException("duckboost: no trees found in xgboost dump");
+	}
 	for (auto &entry : name_to_idx) {
 		if (model.feature_names.size() < model.n_features) {
 			model.feature_names.resize(model.n_features);
@@ -702,6 +837,7 @@ BoostModel ImportXGBoostJSON(const string &dump, const ImportOptions &options_in
 		model.feature_names[entry.second] = entry.first;
 	}
 	ApplyImportOptions(model, options);
+	CheckClassTreeLayout(model, "xgboost");
 	return model;
 }
 
@@ -710,10 +846,18 @@ BoostModel ImportLightGBMText(const string &dump, const ImportOptions &options) 
 	model.backend = BoostBackend::LIGHTGBM;
 	model.learning_rate = 1.0;
 	model.task = BoostTask::REGRESSION;
+	if (!options.config.empty()) {
+		throw InvalidInputException("duckboost: the config import option is only valid for xgboost dumps");
+	}
 	bool task_from_header = false;
 	double sigmoid_scale = 1.0;
 	bool saw_average_output = false;
 	bool saw_linear = false;
+	idx_t objective_classes = 0;
+	idx_t header_classes = 0;
+	idx_t trees_per_iteration = 0;
+	string objective_text;
+	double parameter_alpha = 0.9;
 
 	auto lines = StringUtil::Split(dump, '\n');
 	std::map<string, string> tree_fields;
@@ -739,7 +883,10 @@ BoostModel ImportLightGBMText(const string &dump, const ImportOptions &options) 
 		if (saw_linear) {
 			throw InvalidInputException("duckboost: lightgbm linear trees (is_linear=1) are not supported");
 		}
-		auto num_leaves = static_cast<idx_t>(std::stoull(tree_fields["num_leaves"]));
+		if (!tree_fields.count("num_leaves")) {
+			throw InvalidInputException("duckboost: lightgbm tree is missing num_leaves");
+		}
+		auto num_leaves = ParseCount(tree_fields["num_leaves"], "lightgbm num_leaves");
 		if (num_leaves == 0) {
 			throw InvalidInputException("duckboost: lightgbm tree has zero leaves");
 		}
@@ -749,7 +896,7 @@ BoostModel ImportLightGBMText(const string &dump, const ImportOptions &options) 
 		auto right_child = ParseIntList(tree_fields["right_child"]);
 		auto leaf_value = ParseDoubleList(tree_fields["leaf_value"]);
 		auto decision_type = ParseIntList(tree_fields.count("decision_type") ? tree_fields["decision_type"] : "");
-		auto num_cat = tree_fields.count("num_cat") ? static_cast<idx_t>(std::stoull(tree_fields["num_cat"])) : 0;
+		auto num_cat = tree_fields.count("num_cat") ? ParseCount(tree_fields["num_cat"], "lightgbm num_cat") : 0;
 		auto raw_cat_boundaries =
 		    ParseIntList(tree_fields.count("cat_boundaries") ? tree_fields["cat_boundaries"] : "");
 		auto raw_cat_threshold = ParseIntList(tree_fields.count("cat_threshold") ? tree_fields["cat_threshold"] : "");
@@ -832,12 +979,12 @@ BoostModel ImportLightGBMText(const string &dump, const ImportOptions &options) 
 	};
 
 	auto parse_objective = [&](const string &value) {
-		auto lower = StringUtil::Lower(value);
-		auto base = lower;
-		auto space = lower.find(' ');
-		if (space != string::npos) {
-			base = lower.substr(0, space);
+		objective_text = value;
+		auto tokens = SplitWhitespace(StringUtil::Lower(value));
+		if (tokens.empty()) {
+			throw InvalidInputException("duckboost: lightgbm dump has an empty objective");
 		}
+		auto base = tokens[0];
 		auto colon = base.find(':');
 		if (colon != string::npos) {
 			base = base.substr(0, colon);
@@ -847,13 +994,24 @@ BoostModel ImportLightGBMText(const string &dump, const ImportOptions &options) 
 		    base == "rank_xendcg" || base == "custom" || base == "none") {
 			throw InvalidInputException("duckboost: lightgbm objective '%s' is not supported", value);
 		}
-		if (base == "binary" || base.find("logistic") != string::npos) {
+		for (idx_t i = 1; i < tokens.size(); i++) {
+			auto &token = tokens[i];
+			if (token == "sqrt") {
+				// reg_sqrt squares raw scores back at predict time; duckboost has no such link.
+				throw InvalidInputException("duckboost: lightgbm objective '%s' (reg_sqrt) is not supported", value);
+			}
+			if (StringUtil::StartsWith(token, "sigmoid:")) {
+				sigmoid_scale = ParseFiniteNumber(token.substr(8), "lightgbm sigmoid");
+				if (!(sigmoid_scale > 0)) {
+					throw InvalidInputException("duckboost: lightgbm sigmoid must be > 0");
+				}
+			} else if (StringUtil::StartsWith(token, "num_class:")) {
+				objective_classes = ParseCount(token.substr(10), "lightgbm num_class");
+			}
+		}
+		if (base == "binary") {
 			model.task = BoostTask::BINARY;
 			task_from_header = true;
-			auto sig = lower.find("sigmoid:");
-			if (sig != string::npos) {
-				sigmoid_scale = std::stod(lower.substr(sig + 8));
-			}
 			return;
 		}
 		if (base == "cross_entropy" || base == "xentropy") {
@@ -861,13 +1019,9 @@ BoostModel ImportLightGBMText(const string &dump, const ImportOptions &options) 
 			task_from_header = true;
 			return;
 		}
-		if (base == "multiclass") {
+		if (base == "multiclass" || base == "softmax") {
 			model.task = BoostTask::MULTICLASS;
 			task_from_header = true;
-			auto nc = lower.find("num_class:");
-			if (nc != string::npos) {
-				model.n_classes = static_cast<idx_t>(std::stoull(lower.substr(nc + 10)));
-			}
 			return;
 		}
 		if (base == "regression_l1") {
@@ -913,15 +1067,9 @@ BoostModel ImportLightGBMText(const string &dump, const ImportOptions &options) 
 		}
 		auto eq = line.find('=');
 		if (eq == string::npos) {
-			// LightGBM parameters section may contain "[alpha: 0.9]".
-			auto alpha_pos = StringUtil::Lower(line).find("[alpha:");
-			if (alpha_pos != string::npos) {
-				auto alpha_val = line.substr(alpha_pos + 7);
-				StringUtil::Trim(alpha_val);
-				if (!alpha_val.empty() && alpha_val.back() == ']') {
-					alpha_val.pop_back();
-				}
-				model.objective_alpha = std::stod(alpha_val);
+			// The trailing parameters section records the quantile level as "[alpha: 0.9]".
+			if (StringUtil::StartsWith(line, "[alpha:") && line.back() == ']') {
+				parameter_alpha = ParseFiniteNumber(line.substr(7, line.size() - 8), "lightgbm alpha");
 			}
 			continue;
 		}
@@ -939,13 +1087,11 @@ BoostModel ImportLightGBMText(const string &dump, const ImportOptions &options) 
 			model.feature_names = SplitWhitespace(value);
 			model.n_features = MaxValue<idx_t>(model.n_features, model.feature_names.size());
 		} else if (key == "max_feature_idx") {
-			model.n_features = MaxValue<idx_t>(model.n_features, static_cast<idx_t>(std::stoull(value)) + 1);
+			model.n_features = MaxValue<idx_t>(model.n_features, ParseCount(value, "lightgbm max_feature_idx") + 1);
 		} else if (key == "num_class") {
-			model.n_classes = static_cast<idx_t>(std::stoull(value));
-			if (model.n_classes >= 2) {
-				model.task = BoostTask::MULTICLASS;
-				task_from_header = true;
-			}
+			header_classes = ParseCount(value, "lightgbm num_class");
+		} else if (key == "num_tree_per_iteration") {
+			trees_per_iteration = ParseCount(value, "lightgbm num_tree_per_iteration");
 		}
 	}
 	flush_tree();
@@ -955,11 +1101,59 @@ BoostModel ImportLightGBMText(const string &dump, const ImportOptions &options) 
 	if (model.trees.empty()) {
 		throw InvalidInputException("duckboost: no trees found in lightgbm dump");
 	}
+	if (objective_text.empty() && !options.task_set) {
+		throw InvalidInputException(
+		    "duckboost: lightgbm dump has no objective line (custom objective?); pass task to import raw scores");
+	}
+	if (model.loss == RegressionLoss::QUANTILE) {
+		if (!(parameter_alpha > 0 && parameter_alpha < 1)) {
+			throw InvalidInputException("duckboost: lightgbm quantile alpha must be in (0, 1)");
+		}
+		model.objective_alpha = parameter_alpha;
+	}
+	if (objective_classes > 0 && header_classes > 0 && objective_classes != header_classes) {
+		throw InvalidInputException("duckboost: lightgbm objective num_class:%llu contradicts header num_class=%llu",
+		                            (unsigned long long)objective_classes, (unsigned long long)header_classes);
+	}
+	const idx_t dump_classes = MaxValue<idx_t>(objective_classes, header_classes);
+	if (!task_from_header) {
+		// Raw-score import of a custom-objective dump: the caller's task stands in for the objective line.
+		model.task = options.task;
+		if (options.n_classes_set && options.n_classes >= 2) {
+			model.task = BoostTask::MULTICLASS;
+		}
+	}
+	if (options.n_classes_set && (task_from_header || dump_classes > 0)) {
+		const bool consistent = model.task == BoostTask::MULTICLASS ? options.n_classes == dump_classes
+		                                                             : options.n_classes <= 1;
+		if (!consistent) {
+			throw InvalidInputException("duckboost: import n_classes=%llu contradicts lightgbm header num_class=%llu",
+			                            (unsigned long long)options.n_classes,
+			                            (unsigned long long)MaxValue<idx_t>(dump_classes, 1));
+		}
+	}
+	if (model.task == BoostTask::MULTICLASS) {
+		const idx_t classes = dump_classes > 0 ? dump_classes : options.n_classes;
+		if (classes < 2) {
+			throw InvalidInputException("duckboost: lightgbm multiclass dump needs num_class >= 2");
+		}
+		model.n_classes = classes;
+	} else if (dump_classes >= 2) {
+		throw InvalidInputException("duckboost: lightgbm dump has num_class=%llu with objective '%s'",
+		                            (unsigned long long)dump_classes,
+		                            objective_text.empty() ? TaskToString(model.task) : objective_text);
+	}
+	if (trees_per_iteration > 0 && trees_per_iteration != MaxValue<idx_t>(model.n_classes, 1)) {
+		throw InvalidInputException("duckboost: lightgbm num_tree_per_iteration=%llu does not match num_class=%llu",
+		                            (unsigned long long)trees_per_iteration,
+		                            (unsigned long long)MaxValue<idx_t>(model.n_classes, 1));
+	}
 	if (options.task_set && task_from_header && options.task != model.task) {
 		throw InvalidInputException("duckboost: import task '%s' contradicts lightgbm header task '%s'",
 		                            TaskToString(options.task), TaskToString(model.task));
 	}
 	ApplyImportOptions(model, options);
+	CheckClassTreeLayout(model, "lightgbm");
 	return model;
 }
 
@@ -1675,6 +1869,9 @@ BoostModel ImportCatBoostJSON(const string &dump, const ImportOptions &options) 
 BoostModel ImportModel(BoostBackend backend, const string &dump, const ImportOptions &options) {
 	if (dump.empty()) {
 		throw InvalidInputException("duckboost: empty model dump");
+	}
+	if (!options.config.empty() && (backend != BoostBackend::XGBOOST || LooksLikeDuckBoostJSON(dump))) {
+		throw InvalidInputException("duckboost: import option 'config' is only valid for xgboost dumps");
 	}
 	if (LooksLikeDuckBoostJSON(dump) || backend == BoostBackend::REFERENCE) {
 		auto model = BoostModel::FromJSON(dump);

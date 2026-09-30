@@ -1000,6 +1000,11 @@ BoostModel BoostModel::FromJSON(const string &json) {
 			}
 			model.duckboost_version = static_cast<idx_t>(raw_version);
 			version_seen = true;
+			if (model.duckboost_version > DUCKBOOST_FORMAT_VERSION) {
+				throw InvalidInputException(
+				    "duckboost: model format version %llu is newer than this build supports (max %llu)",
+				    (unsigned long long)model.duckboost_version, (unsigned long long)DUCKBOOST_FORMAT_VERSION);
+			}
 		} else if (key == "backend") {
 			model.backend = BackendFromString(p.ParseString());
 		} else if (key == "task") {

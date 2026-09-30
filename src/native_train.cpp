@@ -278,6 +278,37 @@ BoostModel TrainWithLightGBM(const vector<double> &y, const vector<vector<double
 	}
 
 	string dataset_params = "max_bin=" + std::to_string(MaxValue<idx_t>(options.max_bins, 2));
+	if (!options.categorical_features.empty()) {
+		dataset_params += " categorical_feature=";
+		for (idx_t i = 0; i < options.categorical_features.size(); i++) {
+			if (i > 0) {
+				dataset_params += ",";
+			}
+			auto token = options.categorical_features[i];
+			bool all_digits = !token.empty();
+			for (char c : token) {
+				if (!std::isdigit(static_cast<unsigned char>(c))) {
+					all_digits = false;
+					break;
+				}
+			}
+			if (all_digits) {
+				dataset_params += token;
+			} else {
+				idx_t found = static_cast<idx_t>(ncol);
+				for (idx_t f = 0; f < options.feature_names.size(); f++) {
+					if (options.feature_names[f] == token) {
+						found = f;
+						break;
+					}
+				}
+				if (found >= static_cast<idx_t>(ncol)) {
+					throw InvalidInputException("duckboost: unknown categorical feature '%s'", token);
+				}
+				dataset_params += std::to_string(found);
+			}
+		}
+	}
 
 	DatasetHandle dataset = nullptr;
 	if (LGBM_DatasetCreateFromMat(flat.data(), C_API_DTYPE_FLOAT64, nrow, ncol, 1, dataset_params.c_str(), nullptr,
@@ -340,39 +371,6 @@ BoostModel TrainWithLightGBM(const vector<double> &y, const vector<vector<double
 	}
 	if (options.subsample < 1.0) {
 		params += " bagging_freq=1";
-	}
-	if (!options.categorical_features.empty()) {
-		auto resolved = options.categorical_features;
-		params += " categorical_feature=";
-		for (idx_t i = 0; i < resolved.size(); i++) {
-			if (i > 0) {
-				params += ",";
-			}
-			auto token = resolved[i];
-			bool all_digits = !token.empty();
-			for (char c : token) {
-				if (!std::isdigit(static_cast<unsigned char>(c))) {
-					all_digits = false;
-					break;
-				}
-			}
-			if (all_digits) {
-				params += token;
-			} else {
-				idx_t found = ncol;
-				for (idx_t f = 0; f < options.feature_names.size(); f++) {
-					if (options.feature_names[f] == token) {
-						found = f;
-						break;
-					}
-				}
-				if (found >= static_cast<idx_t>(ncol)) {
-					LGBM_DatasetFree(dataset);
-					throw InvalidInputException("duckboost: unknown categorical feature '%s'", token);
-				}
-				params += std::to_string(found);
-			}
-		}
 	}
 
 	BoosterHandle booster = nullptr;
@@ -478,8 +476,9 @@ bool NativeTrainerLinked(BoostBackend backend) {
 
 BoostModel TrainNative(const vector<double> &y, const vector<vector<double>> &x, const TrainOptions &options,
                        const vector<double> &weights) {
-	if (!options.categorical_features.empty()) {
-		throw NotImplementedException("duckboost: categorical_features is supported by the reference backend only");
+	if (!options.categorical_features.empty() && options.backend != BoostBackend::LIGHTGBM) {
+		throw NotImplementedException(
+		    "duckboost: categorical_features requires backend='lightgbm' or 'reference'");
 	}
 	if (!NativeTrainerCompiled(options.backend)) {
 		throw NotImplementedException("duckboost: native training for backend '%s' is not linked in this build. "

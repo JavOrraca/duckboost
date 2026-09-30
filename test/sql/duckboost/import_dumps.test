@@ -72,11 +72,22 @@ SELECT model LIKE '%"backend":"lightgbm"%' FROM lgb_models;
 ----
 true
 
+# No objective line (custom objective): raw scores need an explicit task.
+statement error
+SELECT duckboost_import(
+	'lightgbm',
+	(SELECT content FROM read_text('test/sql/duckboost/data/lgb_shrink.txt'))
+);
+----
+<REGEX>:.*no objective line.*pass task.*
+
+# Saved leaf values already include shrinkage.
 statement ok
 CREATE TABLE lgb_shrink AS
 SELECT duckboost_import(
 	'lightgbm',
-	(SELECT content FROM read_text('test/sql/duckboost/data/lgb_shrink.txt'))
+	(SELECT content FROM read_text('test/sql/duckboost/data/lgb_shrink.txt')),
+	MAP {'task': 'regression'}
 ) AS model;
 
 query I
