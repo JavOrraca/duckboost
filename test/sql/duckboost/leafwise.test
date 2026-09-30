@@ -71,7 +71,7 @@ SELECT
 		WHEN i < 80 THEN 0.0
 		WHEN i < 90 THEN 10.0
 		WHEN i < 95 THEN 20.0
-		ELSE 30.0
+		ELSE 100.0
 	END AS y
 FROM range(100) t(i);
 
