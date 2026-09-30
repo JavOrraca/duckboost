@@ -1,0 +1,130 @@
+# name: test/sql/duckboost/missing_values.test
+# description: reference trainer learns XGBoost-style missing-value default directions
+# group: [duckboost]
+
+require duckboost
+
+# Dataset where x2 is often NULL and the missingness itself is predictive:
+# when x2 IS NULL, y tends to be high; when present, y ≈ 2*x1 + x2.
+statement ok
+CREATE TABLE train AS
+SELECT
+	i::DOUBLE AS x1,
+	CASE WHEN i % 3 = 0 THEN NULL ELSE (i % 5)::DOUBLE END AS x2,
+	CASE
+		WHEN i % 3 = 0 THEN (10.0 + 0.1 * i)
+		ELSE (2.0 * i + (i % 5))
+	END AS y
+FROM range(60) t(i);
+
+statement ok
+CREATE TABLE models AS
+SELECT duckboost_train(
+	y,
+	[x1, x2],
+	MAP {
+		'backend': 'reference',
+		'task': 'regression',
+		'n_estimators': '40',
+		'max_depth': '3',
+		'learning_rate': '0.15',
+		'reg_lambda': '1.0',
+		'min_child_weight': '1.0',
+		'seed': '7',
+		'feature_names': 'x1,x2'
+	}
+) AS model
+FROM train;
+
+# Training with NULLs must succeed and emit default_left in the model JSON
+query I
+SELECT model LIKE '%"default_left":%' FROM models;
+----
+true
+
+# Model should fit the missingness pattern reasonably on train
+query I
+SELECT
+	duckboost_evaluate_agg(m.model, t.y, [t.x1, t.x2], MAP {'metric': 'rmse'}) < 2.5
+FROM models m, train t;
+----
+true
+
+# Predict with SQL NULL and IEEE NaN both work
+query II
+SELECT
+	duckboost_predict((SELECT model FROM models), [3.0, NULL]) IS NOT NULL,
+	duckboost_predict((SELECT model FROM models), [3.0, 'nan'::DOUBLE]) IS NOT NULL;
+----
+true	true
+
+# Rows with missing x2 should score closer to the "missing" regime (~10+) than to 2*x1
+query I
+SELECT duckboost_predict((SELECT model FROM models), [3.0, NULL]) > 6.0;
+----
+true
+
+# Exported SQL must mention NULL/isnan handling and match in-process predict on mixed data
+statement ok
+CREATE TABLE score AS
+SELECT * FROM train WHERE CAST(x1 AS BIGINT) % 7 = 0;
+
+statement ok
+CREATE TABLE native_pred AS
+SELECT
+	s.x1,
+	s.x2,
+	duckboost_predict(m.model, [s.x1, s.x2]) AS pred
+FROM score s, models m;
+
+statement ok
+CREATE TABLE sql_text AS
+SELECT duckboost_to_sql(
+	model,
+	'score',
+	['x1', 'x2'],
+	MAP {'separate_trees': 'true', 'prediction_alias': 'pred'}
+) AS q
+FROM models;
+
+query I
+SELECT q ILIKE '%IS NULL%' AND q ILIKE '%isnan%' FROM sql_text;
+----
+true
+
+statement ok
+SET VARIABLE duckboost_missing_sql = (SELECT q FROM sql_text);
+
+statement ok
+CREATE TABLE sql_pred AS
+SELECT * FROM query(getvariable('duckboost_missing_sql'));
+
+query I
+SELECT max(abs(n.pred - s.pred)) < 1e-8
+FROM (
+	SELECT pred, row_number() OVER (ORDER BY x1, coalesce(x2, -1)) AS rn FROM native_pred
+) n
+JOIN (
+	SELECT pred, row_number() OVER () AS rn FROM sql_pred
+) s USING (rn);
+----
+true
+
+# Regularization / early-stopping options are accepted
+statement ok
+SELECT duckboost_train(
+	y,
+	[x1, x2],
+	MAP {
+		'n_estimators': '8',
+		'max_depth': '2',
+		'subsample': '0.8',
+		'colsample_bytree': '1.0',
+		'reg_alpha': '0.1',
+		'gamma': '0.0',
+		'early_stopping_rounds': '5',
+		'validation_fraction': '0.25',
+		'seed': '1'
+	}
+)
+FROM train;

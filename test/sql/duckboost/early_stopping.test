@@ -1,0 +1,101 @@
+# name: test/sql/duckboost/early_stopping.test
+# description: early stopping with validation_fraction for the reference trainer
+# group: [duckboost]
+
+require duckboost
+
+# Early stopping should keep fewer trees than n_estimators on a tiny noisy set
+statement ok
+CREATE TABLE early_train AS
+SELECT
+	i::DOUBLE AS x1,
+	((i % 2) + 0.01 * i)::DOUBLE AS y
+FROM range(40) t(i);
+
+statement ok
+CREATE TABLE early_models AS
+SELECT duckboost_train(
+	y, [x1],
+	MAP {
+		'n_estimators': '50',
+		'max_depth': '2',
+		'learning_rate': '0.3',
+		'early_stopping_rounds': '3',
+		'validation_fraction': '0.3',
+		'seed': '7'
+	}
+) AS model
+FROM early_train;
+
+query I
+SELECT length(regexp_extract_all(model, '"nodes"')) < 50 FROM early_models;
+----
+true
+
+# early_stopping_rounds alone defaults validation_fraction to 0.2
+statement ok
+SELECT duckboost_train(
+	y, [x1],
+	MAP {
+		'n_estimators': '20',
+		'max_depth': '2',
+		'early_stopping_rounds': '2',
+		'seed': '1'
+	}
+)
+FROM early_train;
+
+# Works with the existing validation-split helper: train only on split='train' rows,
+# and let validation_fraction hold out a slice for stopping.
+statement ok
+CREATE TABLE penguins AS
+FROM read_csv('data/penguins.csv', nullstr = 'NA')
+WHERE bill_length_mm IS NOT NULL AND sex IS NOT NULL;
+
+statement ok
+CREATE TABLE penguins_split AS
+FROM duckboost_initial_split('penguins', prop := 0.75, strata := species, seed := 42);
+
+statement ok
+CREATE TABLE penguins_models AS
+SELECT duckboost_train(
+	(sex = 'male')::DOUBLE,
+	[bill_length_mm, bill_depth_mm, flipper_length_mm, body_mass_g],
+	MAP {
+		'task': 'binary',
+		'n_estimators': '40',
+		'max_depth': '3',
+		'learning_rate': '0.2',
+		'early_stopping_rounds': '5',
+		'validation_fraction': '0.2',
+		'seed': '11',
+		'feature_names': 'bill_length_mm,bill_depth_mm,flipper_length_mm,body_mass_g'
+	}
+) AS model
+FROM penguins_split
+WHERE split = 'train';
+
+query I
+SELECT
+	duckboost_evaluate_agg(
+		m.model,
+		(s.sex = 'male')::DOUBLE,
+		[s.bill_length_mm, s.bill_depth_mm, s.flipper_length_mm, s.body_mass_g],
+		MAP {'metric': 'accuracy'}
+	) > 0.7
+FROM penguins_models m, penguins_split s
+WHERE s.split = 'test';
+----
+true
+
+# Top importance feature is one of the four predictors
+statement ok
+SET VARIABLE penguins_model = (SELECT model FROM penguins_models);
+
+query I
+SELECT variable IN ('bill_length_mm', 'bill_depth_mm', 'flipper_length_mm', 'body_mass_g')
+FROM duckboost_importance(getvariable('penguins_model'))
+ORDER BY importance DESC
+LIMIT 1;
+----
+true
