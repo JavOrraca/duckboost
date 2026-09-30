@@ -14,6 +14,16 @@
 namespace duckdb {
 namespace duckboost {
 
+bool NodeGoesLeft(const TreeNode &node, double value) {
+	if (std::isnan(value)) {
+		return node.default_left;
+	}
+	if (node.compare == SplitCompare::EQUAL) {
+		return value != node.threshold;
+	}
+	return value < node.threshold;
+}
+
 namespace {
 
 string QuoteIdent(const string &name) {
@@ -364,6 +374,11 @@ TrainOptions TrainOptions::FromMap(const unordered_map<string, string> &options)
 			result.feature_names = StringUtil::Split(value, ',');
 			for (auto &name : result.feature_names) {
 				StringUtil::Trim(name);
+			}
+		} else if (key == "categorical_features" || key == "cat_features" || key == "categorical_feature") {
+			result.categorical_features = StringUtil::Split(value, ',');
+			for (auto &feature : result.categorical_features) {
+				StringUtil::Trim(feature);
 			}
 		} else {
 			throw InvalidInputException("duckboost: unknown train option '%s'", entry.first);
@@ -1021,14 +1036,7 @@ double BoostModel::EvalTree(const BoostTree &tree, const vector<double> &feature
 		if (node.feature >= features.size()) {
 			throw InvalidInputException("duckboost: feature index out of range during prediction");
 		}
-		auto value = features[node.feature];
-		if (std::isnan(value)) {
-			node_idx = node.default_left ? node.left : node.right;
-		} else if (node.compare == SplitCompare::EQUAL) {
-			node_idx = value == node.threshold ? node.right : node.left;
-		} else {
-			node_idx = value < node.threshold ? node.left : node.right;
-		}
+		node_idx = NodeGoesLeft(node, features[node.feature]) ? node.left : node.right;
 	}
 }
 

@@ -38,6 +38,7 @@ duckboost_train(y DOUBLE, features DOUBLE[], weight DOUBLE, options MAP(VARCHAR,
 | `class_weight` | `class_weights` | | `balanced` or comma-separated per-class multipliers (binary / multiclass). |
 | `n_classes` | `num_class`, `num_classes` | max label + 1 | Multiclass only; ignored for other tasks. Must be >= 2 and greater than every label. Set it when a class is absent from the training rows. |
 | `feature_names` | | `f0,f1,...` | Comma-separated names. The count must match the feature width. |
+| `categorical_features` | `cat_features`, `categorical_feature` | | Comma-separated feature names or zero-based indices. The reference trainer evaluates exact one-vs-rest equality splits without `max_bins` capping; native trainers reject this option. |
 
 Unknown keys raise `duckboost: unknown train option`. Values are strings inside the MAP.
 

@@ -38,6 +38,7 @@ struct SplitCandidate {
 	idx_t feature = 0;
 	double threshold = 0;
 	double gain = -std::numeric_limits<double>::infinity();
+	SplitCompare compare = SplitCompare::LESS;
 	bool default_left = true;
 };
 
@@ -138,9 +139,9 @@ bool ChildFeasible(const GradStat &stat, idx_t row_count, const TrainOptions &op
 	return row_count >= options.min_samples_leaf && stat.h >= options.min_child_weight;
 }
 
-void ConsiderSplit(SplitCandidate &best, idx_t feature, double threshold, bool default_left, const GradStat &left,
-                   const GradStat &right, const GradStat &parent, idx_t left_rows, idx_t right_rows,
-                   const TrainOptions &options) {
+void ConsiderSplit(SplitCandidate &best, idx_t feature, double threshold, SplitCompare compare, bool default_left,
+                   const GradStat &left, const GradStat &right, const GradStat &parent, idx_t left_rows,
+                   idx_t right_rows, const TrainOptions &options) {
 	if (!ChildFeasible(left, left_rows, options) || !ChildFeasible(right, right_rows, options)) {
 		return;
 	}
@@ -149,13 +150,15 @@ void ConsiderSplit(SplitCandidate &best, idx_t feature, double threshold, bool d
 		best.gain = gain;
 		best.feature = feature;
 		best.threshold = threshold;
+		best.compare = compare;
 		best.default_left = default_left;
 	}
 }
 
 SplitCandidate FindBestSplit(const vector<vector<double>> &x, const vector<double> &gradients,
                              const vector<double> &hessians, const vector<idx_t> &rows,
-                             const vector<idx_t> &feature_subset, const TrainOptions &options) {
+                             const vector<idx_t> &feature_subset, const vector<bool> &categorical_features,
+                             const TrainOptions &options) {
 	SplitCandidate best;
 	if (rows.size() < 2 * options.min_samples_leaf) {
 		return best;
@@ -179,6 +182,44 @@ SplitCandidate FindBestSplit(const vector<vector<double>> &x, const vector<doubl
 			continue;
 		}
 		std::sort(present.begin(), present.end(), [&](idx_t a, idx_t b) { return x[a][f] < x[b][f]; });
+
+		if (categorical_features[f]) {
+			idx_t distinct_count = 1;
+			for (idx_t i = 1; i < present.size(); i++) {
+				if (x[present[i]][f] != x[present[i - 1]][f]) {
+					distinct_count++;
+				}
+			}
+			if (distinct_count < 2) {
+				continue;
+			}
+
+			for (idx_t begin = 0; begin < present.size();) {
+				auto category = x[present[begin]][f];
+				idx_t end = begin;
+				GradStat matching;
+				while (end < present.size() && x[present[end]][f] == category) {
+					auto row = present[end];
+					matching.Add(gradients[row], hessians[row]);
+					end++;
+				}
+				auto rest = parent.Without(matching).Without(missing_stat);
+				auto matching_count = end - begin;
+				auto rest_count = present.size() - matching_count;
+
+				GradStat left_m = rest;
+				left_m.Add(missing_stat);
+				ConsiderSplit(best, f, category, SplitCompare::EQUAL, true, left_m, matching, parent,
+				              rest_count + missing_count, matching_count, options);
+				GradStat right_m = matching;
+				right_m.Add(missing_stat);
+				ConsiderSplit(best, f, category, SplitCompare::EQUAL, false, rest, right_m, parent, rest_count,
+				              matching_count + missing_count, options);
+				begin = end;
+			}
+			continue;
+		}
+
 		vector<double> present_values;
 		present_values.reserve(present.size());
 		for (auto row : present) {
@@ -212,11 +253,11 @@ SplitCandidate FindBestSplit(const vector<vector<double>> &x, const vector<doubl
 			auto threshold = bin_uppers[b];
 			GradStat left_m = left_present;
 			left_m.Add(missing_stat);
-			ConsiderSplit(best, f, threshold, true, left_m, right_present, parent, left_count + missing_count,
-			              right_count, options);
+			ConsiderSplit(best, f, threshold, SplitCompare::LESS, true, left_m, right_present, parent,
+			              left_count + missing_count, right_count, options);
 			GradStat right_m = right_present;
 			right_m.Add(missing_stat);
-			ConsiderSplit(best, f, threshold, false, left_present, right_m, parent, left_count,
+			ConsiderSplit(best, f, threshold, SplitCompare::LESS, false, left_present, right_m, parent, left_count,
 			              right_count + missing_count, options);
 		}
 	}
@@ -237,10 +278,13 @@ void PartitionRows(const vector<vector<double>> &x, const vector<idx_t> &rows, c
 	right_rows.clear();
 	left_rows.reserve(rows.size());
 	right_rows.reserve(rows.size());
+	TreeNode node;
+	node.threshold = split.threshold;
+	node.compare = split.compare;
+	node.default_left = split.default_left;
 	for (auto row : rows) {
 		auto value = x[row][split.feature];
-		bool go_left = IsMissing(value) ? split.default_left : value < split.threshold;
-		if (go_left) {
+		if (NodeGoesLeft(node, value)) {
 			left_rows.push_back(row);
 		} else {
 			right_rows.push_back(row);
@@ -250,12 +294,12 @@ void PartitionRows(const vector<vector<double>> &x, const vector<idx_t> &rows, c
 
 idx_t BuildTree(BoostTree &tree, const vector<vector<double>> &x, const vector<double> &gradients,
                 const vector<double> &hessians, const vector<idx_t> &rows, const vector<idx_t> &feature_subset,
-                idx_t depth, const TrainOptions &options) {
+                const vector<bool> &categorical_features, idx_t depth, const TrainOptions &options) {
 	auto parent = SumStats(gradients, hessians, rows);
 	if (depth >= options.max_depth || rows.size() < 2 * options.min_samples_leaf) {
 		return BuildLeaf(tree, LeafWeight(parent, options));
 	}
-	auto split = FindBestSplit(x, gradients, hessians, rows, feature_subset, options);
+	auto split = FindBestSplit(x, gradients, hessians, rows, feature_subset, categorical_features, options);
 	if (!std::isfinite(split.gain) || split.gain <= 0) {
 		return BuildLeaf(tree, LeafWeight(parent, options));
 	}
@@ -270,14 +314,16 @@ idx_t BuildTree(BoostTree &tree, const vector<vector<double>> &x, const vector<d
 	node.is_leaf = false;
 	node.feature = split.feature;
 	node.threshold = split.threshold;
+	node.compare = split.compare;
 	node.default_left = split.default_left;
 	node.gain = split.gain;
 	node.cover = parent.h;
 	auto node_idx = tree.nodes.size();
 	tree.nodes.push_back(node);
-	tree.nodes[node_idx].left = BuildTree(tree, x, gradients, hessians, left_rows, feature_subset, depth + 1, options);
+	tree.nodes[node_idx].left =
+	    BuildTree(tree, x, gradients, hessians, left_rows, feature_subset, categorical_features, depth + 1, options);
 	tree.nodes[node_idx].right =
-	    BuildTree(tree, x, gradients, hessians, right_rows, feature_subset, depth + 1, options);
+	    BuildTree(tree, x, gradients, hessians, right_rows, feature_subset, categorical_features, depth + 1, options);
 	return node_idx;
 }
 
@@ -321,12 +367,7 @@ double ApplyTree(const BoostTree &tree, const vector<double> &features) {
 		if (node.is_leaf) {
 			return node.value;
 		}
-		auto value = features[node.feature];
-		if (IsMissing(value)) {
-			node_idx = node.default_left ? node.left : node.right;
-		} else {
-			node_idx = value < node.threshold ? node.left : node.right;
-		}
+		node_idx = NodeGoesLeft(node, features[node.feature]) ? node.left : node.right;
 	}
 }
 
@@ -450,6 +491,41 @@ double EvalValidMulticlassLogloss(const vector<double> &y, const vector<vector<d
 	return wsum > 0 ? loss / wsum : std::numeric_limits<double>::infinity();
 }
 
+vector<bool> ResolveCategoricalFeatures(const vector<string> &tokens, const vector<string> &feature_names) {
+	vector<bool> categorical(feature_names.size(), false);
+	for (auto &token : tokens) {
+		bool is_index = !token.empty();
+		for (auto ch : token) {
+			if (ch < '0' || ch > '9') {
+				is_index = false;
+				break;
+			}
+		}
+		if (is_index) {
+			idx_t feature_idx = 0;
+			for (auto ch : token) {
+				auto digit = static_cast<idx_t>(ch - '0');
+				if (feature_idx > (std::numeric_limits<idx_t>::max() - digit) / 10) {
+					throw InvalidInputException("duckboost: categorical feature index '%s' is out of range", token);
+				}
+				feature_idx = feature_idx * 10 + digit;
+			}
+			if (feature_idx >= feature_names.size()) {
+				throw InvalidInputException("duckboost: categorical feature index '%s' is out of range", token);
+			}
+			categorical[feature_idx] = true;
+			continue;
+		}
+
+		auto match = std::find(feature_names.begin(), feature_names.end(), token);
+		if (match == feature_names.end()) {
+			throw InvalidInputException("duckboost: unknown categorical feature '%s'", token);
+		}
+		categorical[static_cast<idx_t>(match - feature_names.begin())] = true;
+	}
+	return categorical;
+}
+
 BoostModel TrainReference(const vector<double> &y, const vector<vector<double>> &x, const TrainOptions &options,
                           const vector<double> &weights_in) {
 	if (y.size() != x.size()) {
@@ -480,6 +556,7 @@ BoostModel TrainReference(const vector<double> &y, const vector<vector<double>> 
 		throw InvalidInputException("duckboost: feature_names count (%llu) must match feature width (%llu)",
 		                            (unsigned long long)model.feature_names.size(), (unsigned long long)n_features);
 	}
+	auto categorical_features = ResolveCategoricalFeatures(options.categorical_features, model.feature_names);
 
 	auto weights = NormalizeWeights(y, weights_in);
 	SimpleRng rng(options.seed);
@@ -555,7 +632,7 @@ BoostModel TrainReference(const vector<double> &y, const vector<vector<double>> 
 					hessians[i] = weights[i] * std::max(p * (1.0 - p), 1e-6);
 				}
 				BoostTree tree;
-				BuildTree(tree, x, gradients, hessians, grow_rows, feature_subset, 0, options);
+				BuildTree(tree, x, gradients, hessians, grow_rows, feature_subset, categorical_features, 0, options);
 				for (idx_t i = 0; i < y.size(); i++) {
 					prediction[i][c] += options.learning_rate * ApplyTree(tree, x[i]);
 				}
@@ -616,7 +693,7 @@ BoostModel TrainReference(const vector<double> &y, const vector<vector<double>> 
 		auto grow_rows = SampleRows(train_rows, options.subsample, rng);
 		auto feature_subset = SampleFeatures(n_features, options.colsample_bytree, rng);
 		BoostTree tree;
-		BuildTree(tree, x, gradients, hessians, grow_rows, feature_subset, 0, options);
+		BuildTree(tree, x, gradients, hessians, grow_rows, feature_subset, categorical_features, 0, options);
 		for (idx_t i = 0; i < y.size(); i++) {
 			prediction[i] += options.learning_rate * ApplyTree(tree, x[i]);
 		}
@@ -675,6 +752,9 @@ BoostModel TrainModel(const vector<double> &y, const vector<vector<double>> &x, 
                       const vector<double> &weights) {
 	if (options.backend == BoostBackend::REFERENCE) {
 		return TrainReference(y, x, options, weights);
+	}
+	if (!options.categorical_features.empty()) {
+		throw NotImplementedException("duckboost: categorical_features is supported by the reference backend only");
 	}
 	if (NativeTrainerCompiled(options.backend)) {
 		return TrainNative(y, x, options, weights);

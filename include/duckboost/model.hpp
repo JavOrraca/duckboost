@@ -44,6 +44,9 @@ struct BoostTree {
 	vector<TreeNode> nodes;
 };
 
+//! Return true when a value follows a node's left branch.
+bool NodeGoesLeft(const TreeNode &node, double value);
+
 enum class CtrElementKind : uint8_t { CAT_FEATURE_VALUE = 0, FLOAT_FEATURE = 1, CAT_FEATURE_EXACT_VALUE = 2 };
 
 //! One component of a CatBoost CTR combination hash.
@@ -133,6 +136,8 @@ struct TrainOptions {
 	//! "balanced" or comma-separated per-class multipliers; empty = none.
 	string class_weight;
 	vector<string> feature_names;
+	//! Comma-separated feature names or zero-based indices; reference backend only.
+	vector<string> categorical_features;
 
 	static TrainOptions FromMap(const unordered_map<string, string> &options);
 };

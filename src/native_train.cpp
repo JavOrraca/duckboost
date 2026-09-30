@@ -428,6 +428,9 @@ bool NativeTrainerLinked(BoostBackend backend) {
 
 BoostModel TrainNative(const vector<double> &y, const vector<vector<double>> &x, const TrainOptions &options,
                        const vector<double> &weights) {
+	if (!options.categorical_features.empty()) {
+		throw NotImplementedException("duckboost: categorical_features is supported by the reference backend only");
+	}
 	if (!NativeTrainerCompiled(options.backend)) {
 		throw NotImplementedException("duckboost: native training for backend '%s' is not linked in this build. "
 		                              "Configure with -DDUCKBOOST_WITH_%s=ON (and install the vendor library), "
