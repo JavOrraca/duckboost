@@ -1,0 +1,74 @@
+# name: test/sql/duckboost/sample_weights.test
+# description: sample weights and class_weight for reference trainer
+# group: [duckboost]
+
+require duckboost
+
+statement ok
+CREATE TABLE train AS
+SELECT
+	i::DOUBLE AS x1,
+	CASE WHEN i < 10 THEN 1.0 ELSE 0.0 END AS y,
+	CASE WHEN i < 10 THEN 5.0 ELSE 1.0 END AS w
+FROM range(40) t(i);
+
+# Heavy weight on the minority class should pull predictions toward 1 for small x1
+statement ok
+CREATE TABLE weighted AS
+SELECT duckboost_train(
+	y,
+	[x1],
+	w,
+	MAP {
+		'backend': 'reference',
+		'task': 'binary',
+		'n_estimators': '30',
+		'max_depth': '2',
+		'learning_rate': '0.2',
+		'seed': '1'
+	}
+) AS model
+FROM train;
+
+statement ok
+CREATE TABLE unweighted AS
+SELECT duckboost_train(
+	y,
+	[x1],
+	MAP {
+		'backend': 'reference',
+		'task': 'binary',
+		'n_estimators': '30',
+		'max_depth': '2',
+		'learning_rate': '0.2',
+		'seed': '1'
+	}
+) AS model
+FROM train;
+
+query I
+SELECT duckboost_predict((SELECT model FROM weighted), [2.0]) >
+       duckboost_predict((SELECT model FROM unweighted), [2.0]);
+----
+true
+
+# class_weight=balanced is accepted and trains
+statement ok
+SELECT duckboost_train(
+	y,
+	[x1],
+	MAP {
+		'task': 'binary',
+		'n_estimators': '10',
+		'max_depth': '2',
+		'class_weight': 'balanced',
+		'seed': '2'
+	}
+)
+FROM train;
+
+# NULL weights are rejected
+statement error
+SELECT duckboost_train(y, [x1], NULL::DOUBLE) FROM train;
+----
+sample weight cannot be NULL

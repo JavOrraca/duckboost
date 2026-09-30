@@ -20,7 +20,9 @@ bool NativeTrainerCompiled(BoostBackend backend);
 bool NativeTrainerLinked(BoostBackend backend);
 
 //! Train using a vendor library when linked; stub / unlinked builds throw NotImplementedException.
-BoostModel TrainNative(const vector<double> &y, const vector<vector<double>> &x, const TrainOptions &options);
+//! weights empty ⇒ unit weights (forwarded to the vendor library when linked).
+BoostModel TrainNative(const vector<double> &y, const vector<vector<double>> &x, const TrainOptions &options,
+                       const vector<double> &weights = {});
 
 } // namespace duckboost
 } // namespace duckdb

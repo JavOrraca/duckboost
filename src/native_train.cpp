@@ -133,7 +133,8 @@ idx_t InferClassCount(const vector<double> &y, const TrainOptions &options) {
 	throw InvalidInputException("duckboost: xgboost %s failed: %s", context, err ? err : "unknown error");
 }
 
-BoostModel TrainWithXGBoost(const vector<double> &y, const vector<vector<double>> &x, const TrainOptions &options) {
+BoostModel TrainWithXGBoost(const vector<double> &y, const vector<vector<double>> &x, const TrainOptions &options,
+                            const vector<double> &weights) {
 	EnsureRectangular(y, x);
 	const idx_t nrow = y.size();
 	const idx_t ncol = x[0].size();
@@ -157,6 +158,20 @@ BoostModel TrainWithXGBoost(const vector<double> &y, const vector<vector<double>
 		XGDMatrixFree(dmat);
 		ThrowXGBoostError("XGDMatrixSetFloatInfo(label)");
 	}
+	if (!weights.empty()) {
+		if (weights.size() != nrow) {
+			XGDMatrixFree(dmat);
+			throw InvalidInputException("duckboost: sample weight count must match row count for xgboost train");
+		}
+		vector<float> weight_f(nrow);
+		for (idx_t i = 0; i < nrow; i++) {
+			weight_f[i] = static_cast<float>(weights[i]);
+		}
+		if (XGDMatrixSetFloatInfo(dmat, "weight", weight_f.data(), static_cast<bst_ulong>(nrow)) != 0) {
+			XGDMatrixFree(dmat);
+			ThrowXGBoostError("XGDMatrixSetFloatInfo(weight)");
+		}
+	}
 
 	BoosterHandle booster = nullptr;
 	const DMatrixHandle dmats[] = {dmat};
@@ -176,7 +191,13 @@ BoostModel TrainWithXGBoost(const vector<double> &y, const vector<vector<double>
 	set_param("verbosity", "0");
 	set_param("max_depth", std::to_string(options.max_depth));
 	set_param("eta", std::to_string(options.learning_rate));
-	set_param("min_child_weight", std::to_string(options.min_samples_leaf));
+	set_param("min_child_weight",
+	          std::to_string(options.min_child_weight > 0 ? options.min_child_weight : options.min_samples_leaf));
+	set_param("lambda", std::to_string(options.reg_lambda));
+	set_param("alpha", std::to_string(options.reg_alpha));
+	set_param("gamma", std::to_string(options.min_split_gain));
+	set_param("subsample", std::to_string(options.subsample));
+	set_param("colsample_bytree", std::to_string(options.colsample_bytree));
 	set_param("objective", ObjectiveForXGBoost(options.task, n_classes));
 	if (options.task == BoostTask::MULTICLASS) {
 		set_param("num_class", std::to_string(n_classes));
@@ -239,7 +260,8 @@ BoostModel TrainWithXGBoost(const vector<double> &y, const vector<vector<double>
 	throw InvalidInputException("duckboost: lightgbm %s failed: %s", context, err ? err : "unknown error");
 }
 
-BoostModel TrainWithLightGBM(const vector<double> &y, const vector<vector<double>> &x, const TrainOptions &options) {
+BoostModel TrainWithLightGBM(const vector<double> &y, const vector<vector<double>> &x, const TrainOptions &options,
+                             const vector<double> &weights) {
 	EnsureRectangular(y, x);
 	const auto nrow = NumericCast<int32_t>(y.size());
 	const auto ncol = NumericCast<int32_t>(x[0].size());
@@ -266,6 +288,20 @@ BoostModel TrainWithLightGBM(const vector<double> &y, const vector<vector<double
 		LGBM_DatasetFree(dataset);
 		ThrowLightGBMError("LGBM_DatasetSetField(label)");
 	}
+	if (!weights.empty()) {
+		if (weights.size() != static_cast<idx_t>(nrow)) {
+			LGBM_DatasetFree(dataset);
+			throw InvalidInputException("duckboost: sample weight count must match row count for lightgbm train");
+		}
+		vector<float> weight_f(static_cast<idx_t>(nrow));
+		for (int32_t i = 0; i < nrow; i++) {
+			weight_f[static_cast<idx_t>(i)] = static_cast<float>(weights[static_cast<idx_t>(i)]);
+		}
+		if (LGBM_DatasetSetField(dataset, "weight", weight_f.data(), nrow, C_API_DTYPE_FLOAT32) != 0) {
+			LGBM_DatasetFree(dataset);
+			ThrowLightGBMError("LGBM_DatasetSetField(weight)");
+		}
+	}
 	if (!options.feature_names.empty() && options.feature_names.size() == static_cast<idx_t>(ncol)) {
 		vector<const char *> fnames(static_cast<idx_t>(ncol));
 		for (int32_t i = 0; i < ncol; i++) {
@@ -279,10 +315,12 @@ BoostModel TrainWithLightGBM(const vector<double> &y, const vector<vector<double
 
 	string params = StringUtil::Format(
 	    "objective=%s learning_rate=%g num_leaves=%llu max_depth=%llu min_data_in_leaf=%llu "
+	    "lambda_l2=%g lambda_l1=%g min_gain_to_split=%g bagging_fraction=%g feature_fraction=%g "
 	    "verbosity=-1 force_col_wise=true",
 	    ObjectiveForLightGBM(options.task, n_classes), options.learning_rate,
 	    (unsigned long long)MaxValue<idx_t>(2, 1ULL << MinValue<idx_t>(options.max_depth, 10)),
-	    (unsigned long long)options.max_depth, (unsigned long long)MaxValue<idx_t>(options.min_samples_leaf, 1));
+	    (unsigned long long)options.max_depth, (unsigned long long)MaxValue<idx_t>(options.min_samples_leaf, 1),
+	    options.reg_lambda, options.reg_alpha, options.min_split_gain, options.subsample, options.colsample_bytree);
 	if (options.task == BoostTask::MULTICLASS) {
 		params += " num_class=" + std::to_string(n_classes);
 	}
@@ -388,7 +426,8 @@ bool NativeTrainerLinked(BoostBackend backend) {
 #endif
 }
 
-BoostModel TrainNative(const vector<double> &y, const vector<vector<double>> &x, const TrainOptions &options) {
+BoostModel TrainNative(const vector<double> &y, const vector<vector<double>> &x, const TrainOptions &options,
+                       const vector<double> &weights) {
 	if (!NativeTrainerCompiled(options.backend)) {
 		throw NotImplementedException("duckboost: native training for backend '%s' is not linked in this build. "
 		                              "Configure with -DDUCKBOOST_WITH_%s=ON (and install the vendor library), "
@@ -407,13 +446,13 @@ BoostModel TrainNative(const vector<double> &y, const vector<vector<double>> &x,
 	switch (options.backend) {
 	case BoostBackend::XGBOOST:
 #if defined(DUCKBOOST_WITH_XGBOOST) && !defined(DUCKBOOST_NATIVE_STUB)
-		return TrainWithXGBoost(y, x, options);
+		return TrainWithXGBoost(y, x, options, weights);
 #else
 		break;
 #endif
 	case BoostBackend::LIGHTGBM:
 #if defined(DUCKBOOST_WITH_LIGHTGBM) && !defined(DUCKBOOST_NATIVE_STUB)
-		return TrainWithLightGBM(y, x, options);
+		return TrainWithLightGBM(y, x, options, weights);
 #else
 		break;
 #endif

@@ -10,6 +10,7 @@
 #include "duckdb/common/numeric_utils.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/types/data_chunk.hpp"
+#include "duckdb/common/types/value.hpp"
 #include "duckdb/common/vector/flat_vector.hpp"
 #include "duckdb/common/vector/list_vector.hpp"
 #include "duckdb/common/vector/map_vector.hpp"
@@ -22,6 +23,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <numeric>
 
 namespace duckdb {
@@ -79,7 +81,9 @@ vector<double> ReadFeatureList(Vector &list_vector, idx_t row) {
 	for (idx_t i = 0; i < entry.length; i++) {
 		auto child_idx = child_format.sel->get_index(entry.offset + i);
 		if (!child_format.validity.RowIsValid(child_idx)) {
-			throw InvalidInputException("duckboost: feature values cannot be NULL");
+			// SQL NULL → NaN so the reference trainer can learn XGBoost-style default directions.
+			features.push_back(std::numeric_limits<double>::quiet_NaN());
+			continue;
 		}
 		features.push_back(child_data[child_idx]);
 	}
@@ -123,30 +127,45 @@ bool TotalLess(double a, double b) {
 // Parallel aggregation hands rows to an aggregate in thread-dependent order, and both the trainer (tie-breaking,
 // floating-point sums) and the metrics depend on row order. Sorting first makes the result depend only on which
 // rows went in.
-void SortRowsCanonically(vector<double> &y, vector<vector<double>> &x) {
+void SortRowsCanonically(vector<double> &y, vector<vector<double>> &x, vector<double> *weights) {
 	vector<idx_t> order(y.size());
 	std::iota(order.begin(), order.end(), idx_t(0));
 	std::sort(order.begin(), order.end(), [&](idx_t a, idx_t b) {
 		if (TotalLess(y[a], y[b]) || TotalLess(y[b], y[a])) {
 			return TotalLess(y[a], y[b]);
 		}
+		if (weights && (TotalLess((*weights)[a], (*weights)[b]) || TotalLess((*weights)[b], (*weights)[a]))) {
+			return TotalLess((*weights)[a], (*weights)[b]);
+		}
 		return std::lexicographical_compare(x[a].begin(), x[a].end(), x[b].begin(), x[b].end(), TotalLess);
 	});
 	vector<double> sorted_y;
 	vector<vector<double>> sorted_x;
+	vector<double> sorted_w;
 	sorted_y.reserve(y.size());
 	sorted_x.reserve(x.size());
+	if (weights) {
+		sorted_w.reserve(weights->size());
+	}
 	for (auto index : order) {
 		sorted_y.push_back(y[index]);
 		sorted_x.push_back(std::move(x[index]));
+		if (weights) {
+			sorted_w.push_back((*weights)[index]);
+		}
 	}
 	y = std::move(sorted_y);
 	x = std::move(sorted_x);
+	if (weights) {
+		*weights = std::move(sorted_w);
+	}
 }
 
 struct TrainDataset {
 	vector<double> y;
 	vector<vector<double>> x;
+	vector<double> weights;
+	bool has_weights = false;
 	TrainOptions options;
 	bool options_set = false;
 };
@@ -188,6 +207,37 @@ void TrainUpdate(Vector inputs[], AggregateInputData &, idx_t input_count, Vecto
 	y_vector.ToUnifiedFormat(y_format);
 	auto y_data = UnifiedVectorFormat::GetData<double>(y_format);
 
+	// Signatures:
+	// (y, features)
+	// (y, features, options MAP)
+	// (y, features, weight DOUBLE)
+	// (y, features, weight DOUBLE, options MAP)
+	bool has_weight = false;
+	bool has_options = false;
+	idx_t weight_arg = 0;
+	idx_t options_arg = 0;
+	if (input_count == 3) {
+		if (inputs[2].GetType().id() == LogicalTypeId::MAP) {
+			has_options = true;
+			options_arg = 2;
+		} else {
+			has_weight = true;
+			weight_arg = 2;
+		}
+	} else if (input_count >= 4) {
+		has_weight = true;
+		weight_arg = 2;
+		has_options = true;
+		options_arg = 3;
+	}
+
+	UnifiedVectorFormat weight_format;
+	const double *weight_data = nullptr;
+	if (has_weight) {
+		inputs[weight_arg].ToUnifiedFormat(weight_format);
+		weight_data = UnifiedVectorFormat::GetData<double>(weight_format);
+	}
+
 	UnifiedVectorFormat state_format;
 	state_vector.ToUnifiedFormat(state_format);
 	auto states = UnifiedVectorFormat::GetData<TrainState *>(state_format);
@@ -200,12 +250,20 @@ void TrainUpdate(Vector inputs[], AggregateInputData &, idx_t input_count, Vecto
 		auto state_idx = state_format.sel->get_index(i);
 		auto &state = *states[state_idx];
 		EnsureTrainState(state);
-		if (input_count >= 3 && !state.data->options_set) {
-			state.data->options = TrainOptions::FromMap(MapVectorToOptions(inputs[2], i));
+		if (has_options && !state.data->options_set) {
+			state.data->options = TrainOptions::FromMap(MapVectorToOptions(inputs[options_arg], i));
 			state.data->options_set = true;
 		}
 		state.data->y.push_back(y_data[y_idx]);
 		state.data->x.push_back(ReadFeatureList(x_vector, i));
+		if (has_weight) {
+			auto w_idx = weight_format.sel->get_index(i);
+			if (!weight_format.validity.RowIsValid(w_idx)) {
+				throw InvalidInputException("duckboost: sample weight cannot be NULL");
+			}
+			state.data->weights.push_back(weight_data[w_idx]);
+			state.data->has_weights = true;
+		}
 	}
 }
 
@@ -229,6 +287,10 @@ void TrainCombine(Vector &source, Vector &target, AggregateInputData &, idx_t co
 		}
 		dst.data->y.insert(dst.data->y.end(), src.data->y.begin(), src.data->y.end());
 		dst.data->x.insert(dst.data->x.end(), src.data->x.begin(), src.data->x.end());
+		if (src.data->has_weights) {
+			dst.data->weights.insert(dst.data->weights.end(), src.data->weights.begin(), src.data->weights.end());
+			dst.data->has_weights = true;
+		}
 	}
 }
 
@@ -245,16 +307,21 @@ void TrainFinalize(Vector &state_vector, AggregateFinalizeInputData &, Vector &r
 			continue;
 		}
 		auto options = state.data->options_set ? state.data->options : TrainOptions();
-		SortRowsCanonically(state.data->y, state.data->x);
-		auto model = TrainModel(state.data->y, state.data->x, options);
+		SortRowsCanonically(state.data->y, state.data->x, state.data->has_weights ? &state.data->weights : nullptr);
+		const vector<double> empty_weights;
+		auto model = TrainModel(state.data->y, state.data->x, options,
+		                        state.data->has_weights ? state.data->weights : empty_weights);
 		writer.WriteValue(StringVector::AddString(result, model.ToJSON()));
 	}
 }
 
-AggregateFunction GetTrainFunction(bool with_options) {
+AggregateFunction GetTrainFunction(bool with_weight, bool with_options) {
 	auto feature_type = LogicalType::LIST(LogicalType::DOUBLE);
 	auto options_type = LogicalType::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR);
 	vector<LogicalType> args = {LogicalType::DOUBLE, feature_type};
+	if (with_weight) {
+		args.push_back(LogicalType::DOUBLE);
+	}
 	if (with_options) {
 		args.push_back(options_type);
 	}
@@ -266,8 +333,12 @@ AggregateFunction GetTrainFunction(bool with_options) {
 	fun.SetNullHandling(FunctionNullHandling::SPECIAL_HANDLING);
 	fun.GetSignature().GetParameter(0).SetName("y");
 	fun.GetSignature().GetParameter(1).SetName("features");
+	idx_t next = 2;
+	if (with_weight) {
+		fun.GetSignature().GetParameter(next++).SetName("weight");
+	}
 	if (with_options) {
-		fun.GetSignature().GetParameter(2).SetName("options");
+		fun.GetSignature().GetParameter(next).SetName("options");
 	}
 	return fun;
 }
@@ -482,7 +553,7 @@ void EvaluateAggFinalize(Vector &state_vector, AggregateFinalizeInputData &, Vec
 		if (options.metric.empty()) {
 			options.metric = "auto";
 		}
-		SortRowsCanonically(state.data->y, state.data->x);
+		SortRowsCanonically(state.data->y, state.data->x, nullptr);
 		writer.WriteValue(EvaluateModel(model, state.data->y, state.data->x, options));
 	}
 }
@@ -802,10 +873,91 @@ void RegisterDuckBoostMacros(ExtensionLoader &loader) {
 	}
 }
 
+unordered_map<string, string> ValueMapToOptions(const Value &map_value) {
+	unordered_map<string, string> options;
+	if (map_value.IsNull()) {
+		return options;
+	}
+	for (auto &entry : MapValue::GetChildren(map_value)) {
+		auto &kv = StructValue::GetChildren(entry);
+		if (kv[0].IsNull() || kv[1].IsNull()) {
+			continue;
+		}
+		options[StringValue::Get(kv[0])] = StringValue::Get(kv[1]);
+	}
+	return options;
+}
+
+struct ImportanceBindData : public TableFunctionData {
+	vector<FeatureImportance> rows;
+};
+
+struct ImportanceData : public GlobalTableFunctionState {
+	idx_t offset = 0;
+};
+
+unique_ptr<FunctionData> ImportanceBind(ClientContext &, TableFunctionBindInput &input,
+                                        vector<LogicalType> &return_types, vector<Identifier> &names) {
+	names = {"variable", "feature_index", "gain", "cover", "frequency", "importance"};
+	return_types = {LogicalType::VARCHAR, LogicalType::BIGINT, LogicalType::DOUBLE,
+	                LogicalType::DOUBLE,  LogicalType::BIGINT, LogicalType::DOUBLE};
+	if (input.inputs.empty() || input.inputs[0].IsNull()) {
+		throw InvalidInputException("duckboost_importance: model must not be NULL");
+	}
+	unordered_map<string, string> option_map;
+	if (input.inputs.size() >= 2 && !input.inputs[1].IsNull()) {
+		option_map = ValueMapToOptions(input.inputs[1]);
+	}
+	for (auto &np : input.named_parameters) {
+		auto key = StringUtil::Lower(np.first.GetIdentifierName());
+		if (key == "options" && !np.second.IsNull()) {
+			auto named = ValueMapToOptions(np.second);
+			option_map.insert(named.begin(), named.end());
+		}
+	}
+	auto options = ImportanceOptions::FromMap(option_map);
+	auto model = BoostModel::FromJSON(StringValue::Get(input.inputs[0]));
+	auto result = make_uniq<ImportanceBindData>();
+	result->rows = ComputeFeatureImportance(model, options);
+	return std::move(result);
+}
+
+unique_ptr<GlobalTableFunctionState> ImportanceInit(ClientContext &, TableFunctionInitInput &) {
+	return make_uniq<ImportanceData>();
+}
+
+void ImportanceFunction(ClientContext &, TableFunctionInput &data, DataChunk &output) {
+	auto &bind = data.bind_data->Cast<ImportanceBindData>();
+	auto &state = data.global_state->Cast<ImportanceData>();
+	if (state.offset >= bind.rows.size()) {
+		return;
+	}
+	const idx_t remaining = bind.rows.size() - state.offset;
+	const idx_t count = MinValue<idx_t>(remaining, STANDARD_VECTOR_SIZE);
+	auto variable_writer = FlatVector::Writer<string_t>(output.data[0], count);
+	auto index_writer = FlatVector::Writer<int64_t>(output.data[1], count);
+	auto gain_writer = FlatVector::Writer<double>(output.data[2], count);
+	auto cover_writer = FlatVector::Writer<double>(output.data[3], count);
+	auto frequency_writer = FlatVector::Writer<int64_t>(output.data[4], count);
+	auto importance_writer = FlatVector::Writer<double>(output.data[5], count);
+	for (idx_t i = 0; i < count; i++) {
+		auto &row = bind.rows[state.offset + i];
+		variable_writer.WriteValue(StringVector::AddString(output.data[0], row.variable));
+		index_writer.WriteValue(NumericCast<int64_t>(row.feature_index));
+		gain_writer.WriteValue(row.gain);
+		cover_writer.WriteValue(row.cover);
+		frequency_writer.WriteValue(NumericCast<int64_t>(row.frequency));
+		importance_writer.WriteValue(row.importance);
+	}
+	state.offset += count;
+}
+
 void RegisterDuckBoostFunctions(ExtensionLoader &loader) {
 	AggregateFunctionSet train_set("duckboost_train");
-	train_set.AddFunction(GetTrainFunction(false));
-	train_set.AddFunction(GetTrainFunction(true));
+	train_set.AddFunction(GetTrainFunction(false, false));
+	train_set.AddFunction(GetTrainFunction(false, true));
+	train_set.AddFunction(GetTrainFunction(true, false));
+	train_set.AddFunction(GetTrainFunction(true, true));
 	loader.RegisterFunction(train_set);
 
 	ScalarFunctionSet predict_set("duckboost_predict");
@@ -884,6 +1036,22 @@ void RegisterDuckBoostFunctions(ExtensionLoader &loader) {
 
 	TableFunction build_info_fun("duckboost_build_info", {}, BuildInfoFunction, BuildInfoBind, BuildInfoInit);
 	loader.RegisterFunction(build_info_fun);
+
+	TableFunctionSet importance_set("duckboost_importance");
+	{
+		FunctionSignature sig;
+		sig.AddParameter("model", LogicalType::VARCHAR);
+		TableFunction importance_fun(std::move(sig), ImportanceFunction, ImportanceBind, ImportanceInit);
+		importance_set.AddFunction(std::move(importance_fun));
+	}
+	{
+		FunctionSignature sig;
+		sig.AddParameter("model", LogicalType::VARCHAR);
+		sig.AddParameter("options", LogicalType::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR));
+		TableFunction importance_opts(std::move(sig), ImportanceFunction, ImportanceBind, ImportanceInit);
+		importance_set.AddFunction(std::move(importance_opts));
+	}
+	loader.RegisterFunction(importance_set);
 
 	RegisterDuckBoostMacros(loader);
 }

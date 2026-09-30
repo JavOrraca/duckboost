@@ -127,7 +127,22 @@ FROM mc_train;
 
 -- predict returns argmax class index; predict_proba returns softmax LIST
 SELECT duckboost_predict(model, features), duckboost_predict_proba(model, features) FROM mc_models, mc_test;
+
+-- Sample weights / class_weight, early stopping, and feature importance
+SELECT duckboost_train(y, features, weight, MAP {
+	'task': 'binary',
+	'class_weight': 'balanced',
+	'n_estimators': '50',
+	'early_stopping_rounds': '5',
+	'validation_fraction': '0.2',
+	'reg_lambda': '1.0',
+	'seed': '42'
+}) AS model FROM train;
+
+SELECT * FROM duckboost_importance(model);  -- variable, gain, cover, frequency, importance
 ```
+
+Feature `NULL`s are treated as missing (NaN): the reference trainer learns an XGBoost-style `default_left` direction per split, and `duckboost_to_sql` emits matching `IS NULL OR isnan(...)` branches.
 
 ### Example datasets
 
@@ -220,7 +235,7 @@ For `task: "multiclass"`, `n_classes >= 2`, optional `base_scores` holds per-cla
 
 - **Layout**: standalone community extension ([extension-template](https://github.com/duckdb/extension-template)) so optional vendor ML libraries stay out of core DuckDB builds. The `duckdb` submodule tracks DuckDB 2.0 (`v2.0-cyanoptera`).
 - **SQL export** mirrors orbital's `separate_trees` idea so DuckDB can evaluate ensemble members as independent columns.
-- **Reference trainer** is a didactic histogram/quantile-split GBDT (squared error, logistic, and softmax for multiclass). It is not a replacement for production XGBoost/LightGBM/CatBoost quality, but it exercises the full train → evaluate → SQL path.
+- **Reference trainer** is a didactic histogram/quantile-split GBDT (squared error, logistic, and softmax for multiclass) with missing-value defaults, L1/L2/`gamma`, sample weights, and early stopping. It is not a replacement for production XGBoost/LightGBM/CatBoost quality, but it exercises the full train → evaluate → inspect → SQL path.
 - **Table macros** `duckboost_fit` / `duckboost_score` wrap `duckboost_train` / `duckboost_predict` with `query_table` for a compact SQL workflow.
 - **Split and preprocessing macros** are plain SQL macros registered by the extension. Splits rank rows by a hash of the row's values mixed with `seed`, so they are reproducible and independent of physical row order.
 
@@ -230,4 +245,5 @@ For `task: "multiclass"`, `n_classes >= 2`, optional `base_scores` holds per-cla
 - [x] Vendor C API bridges for XGBoost / LightGBM (train → dump → import into `BoostModel`)
 - [x] Standalone extension-template repository (`Makefile`, `extension_config.cmake`, [`docs/community_extensions_description.yml`](docs/community_extensions_description.yml))
 - [x] Split helpers (train/test, train/validation/test, v-fold) and preprocessing helpers (dummy/one-hot, integer encoding, rare-level pooling)
+- [x] Missing-value aware splits, sample weights / `class_weight`, early stopping, regularization, and `duckboost_importance`
 - [ ] Submit [`docs/community_extensions_description.yml`](docs/community_extensions_description.yml) to `duckdb/community-extensions` after DuckDB 2.0 is released

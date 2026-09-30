@@ -1,0 +1,110 @@
+# name: test/sql/duckboost/importance.test
+# description: duckboost feature importance (gain / cover / frequency)
+# group: [duckboost]
+
+require duckboost
+
+# x_signal drives y; x_noise is unrelated.
+statement ok
+CREATE TABLE train AS
+SELECT
+	i::DOUBLE AS x_signal,
+	((i * 17) % 11)::DOUBLE AS x_noise,
+	(3.0 * i + 1.0)::DOUBLE AS y
+FROM range(60) t(i);
+
+statement ok
+CREATE TABLE models AS
+SELECT duckboost_train(
+	y,
+	[x_signal, x_noise],
+	MAP {
+		'backend': 'reference',
+		'task': 'regression',
+		'n_estimators': '30',
+		'max_depth': '3',
+		'learning_rate': '0.2',
+		'seed': '7',
+		'feature_names': 'x_signal,x_noise'
+	}
+) AS model
+FROM train;
+
+statement ok
+SET VARIABLE importance_model = (SELECT model FROM models);
+
+# Model JSON persists split gain/cover for importance
+query I
+SELECT getvariable('importance_model') LIKE '%"gain":%' AND getvariable('importance_model') LIKE '%"cover":%';
+----
+true
+
+# Tidy importance table: signal feature ranks first by default
+query II
+SELECT variable, feature_index
+FROM duckboost_importance(getvariable('importance_model'))
+ORDER BY importance DESC, feature_index
+LIMIT 1;
+----
+x_signal	0
+
+# Both predictors appear when include_unused is default
+query I
+SELECT COUNT(*) FROM duckboost_importance(getvariable('importance_model'));
+----
+2
+
+# Normalized importance sums to ~1
+query I
+SELECT abs(sum(importance) - 1.0) < 1e-9
+FROM duckboost_importance(getvariable('importance_model'));
+----
+true
+
+# Signal has strictly more gain than noise on this synthetic data
+query I
+SELECT
+	(SELECT gain FROM duckboost_importance(getvariable('importance_model')) WHERE variable = 'x_signal')
+	>
+	(SELECT gain FROM duckboost_importance(getvariable('importance_model')) WHERE variable = 'x_noise');
+----
+true
+
+# Frequency / cover columns are populated for used splits
+query I
+SELECT frequency > 0 AND cover > 0
+FROM duckboost_importance(getvariable('importance_model'))
+WHERE variable = 'x_signal';
+----
+true
+
+# Options: metric=frequency + sort=name
+query II
+SELECT variable, importance >= 0
+FROM duckboost_importance(
+	getvariable('importance_model'),
+	MAP {'metric': 'frequency', 'sort': 'name', 'normalize': 'false'}
+);
+----
+x_noise	true
+x_signal	true
+
+# Positional options map also works
+query I
+SELECT abs(sum(importance) - 1.0) < 1e-9
+FROM duckboost_importance(
+	getvariable('importance_model'),
+	MAP {'metric': 'cover', 'normalize': 'true'}
+);
+----
+true
+
+# include_unused=false still keeps used features
+query I
+SELECT COUNT(*) >= 1 AND bool_and(frequency > 0)
+FROM duckboost_importance(
+	getvariable('importance_model'),
+	MAP {'include_unused': 'false'}
+);
+----
+true
