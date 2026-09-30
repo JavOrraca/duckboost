@@ -58,6 +58,59 @@ SELECT training_supported FROM duckboost_backends() WHERE backend = 'xgboost';
 ----
 true
 
+# The learned intercept (boost_from_average) comes from XGBoosterSaveJsonConfig, not the tree dump.
+# Expected values are from xgboost.train() with the same parameters.
+statement ok
+CREATE TABLE imbalanced AS
+SELECT * FROM (VALUES
+	(1, 0.0, 0.0, 0.0),
+	(2, 0.0, 1.0, 0.0),
+	(3, 0.0, 0.0, 1.0),
+	(4, 1.0, 1.0, 1.0),
+	(5, 0.0, 2.0, 1.0),
+	(6, 0.0, 2.0, 0.0),
+	(7, 0.0, 0.5, 0.5),
+	(8, 1.0, 1.5, 1.5)
+) t(id, y, x1, x2);
+
+query I
+SELECT bool_and(abs(duckboost_predict(m.model, [x1, x2]) - 0.25) < 1e-6)
+FROM (
+	SELECT duckboost_train(y, [x1, x2], MAP {'backend': 'xgboost', 'task': 'binary', 'n_estimators': '1', 'learning_rate': '0.2'}) AS model
+	FROM imbalanced
+) m, imbalanced;
+----
+true
+
+query I
+SELECT list(round(duckboost_predict(m.model, [x1, x2]), 6) ORDER BY id)
+FROM (
+	SELECT duckboost_train(y, [x1, x2], MAP {'backend': 'xgboost', 'n_estimators': '1', 'learning_rate': '0.2'}) AS model
+	FROM imbalanced
+) m, imbalanced;
+----
+[0.2, 0.2, 0.2, 0.3, 0.3, 0.2, 0.2, 0.4]
+
+statement error
+SELECT duckboost_train(y, [x1, x2], MAP {'backend': 'xgboost', 'early_stopping_rounds': '3'}) FROM train;
+----
+<REGEX>:.*early_stopping_rounds and validation_fraction require backend='reference'.*
+
+# class_weight is folded into the sample weights for native trainers.
+query I
+SELECT
+	(SELECT avg(duckboost_predict(m.model, [x1, x2])) FROM imbalanced, (
+		SELECT duckboost_train(y, [x1, x2], MAP {'backend': 'xgboost', 'task': 'binary', 'n_estimators': '1', 'class_weight': '1,3'}) AS model
+		FROM imbalanced) m)
+	> 0.4;
+----
+true
+
+statement error
+SELECT duckboost_train(y, [x1, x2], MAP {'backend': 'xgboost', 'class_weight': 'balanced'}) FROM train;
+----
+<REGEX>:.*class_weight is only supported for binary and multiclass tasks.*
+
 # LightGBM
 query I
 SELECT enabled FROM duckboost_build_info() WHERE name = 'native_lightgbm_linked';
@@ -90,6 +143,54 @@ query I
 SELECT training_supported FROM duckboost_backends() WHERE backend = 'lightgbm';
 ----
 true
+
+# LightGBM option mapping: quantile alpha, leaf-wise growth, and Dataset-level categorical features.
+statement ok
+CREATE TABLE lgb_rich AS
+SELECT i % 4 AS cat, (i % 7)::DOUBLE AS num, ((i % 4) * 2.0 + (i % 7) * 0.5 + (i % 3)) AS y
+FROM range(200) t(i);
+
+query I
+SELECT model LIKE '%"objective":"quantile","objective_alpha":0.8%'
+FROM (
+	SELECT duckboost_train(y, [cat::DOUBLE, num], MAP {
+		'backend': 'lightgbm', 'objective': 'quantile', 'quantile_alpha': '0.8', 'n_estimators': '5'
+	}) AS model FROM lgb_rich
+);
+----
+true
+
+query I
+SELECT model LIKE '%"category_cast":"lightgbm"%' AND model LIKE '%"compare":"in"%'
+FROM (
+	SELECT duckboost_train(y, [cat::DOUBLE, num], MAP {
+		'backend': 'lightgbm', 'n_estimators': '5', 'feature_names': 'cat,num', 'categorical_features': 'cat',
+		'min_samples_leaf': '5'
+	}) AS model FROM lgb_rich
+);
+----
+true
+
+query I
+SELECT duckboost_evaluate_agg(m.model, y, [cat::DOUBLE, num], MAP {'metric': 'rmse'}) < 1.5
+FROM (
+	SELECT duckboost_train(y, [cat::DOUBLE, num], MAP {
+		'backend': 'lightgbm', 'n_estimators': '30', 'growth_policy': 'lossguide', 'max_leaves': '4',
+		'min_samples_leaf': '5', 'learning_rate': '0.3'
+	}) AS model FROM lgb_rich
+) m, lgb_rich;
+----
+true
+
+statement error
+SELECT duckboost_train(y, [cat::DOUBLE, num], MAP {'backend': 'lightgbm', 'objective': 'expectile'}) FROM lgb_rich;
+----
+<REGEX>:.*expectile is supported by the reference backend only.*
+
+statement error
+SELECT duckboost_train(y, [cat::DOUBLE, num], MAP {'backend': 'lightgbm', 'validation_fraction': '0.2'}) FROM lgb_rich;
+----
+<REGEX>:.*early_stopping_rounds and validation_fraction require backend='reference'.*
 
 # CatBoost has no public train C API (or is not compiled in)
 statement error
