@@ -24,7 +24,9 @@ duckboost_train(y DOUBLE, features DOUBLE[], weight DOUBLE, options MAP(VARCHAR,
 | `objective` | `loss` | `squared_error` | Regression loss: `squared_error` (`l2`, `mse`, `reg:squarederror`), `absolute_error` (`mae`, `l1`, `regression_l1`, `reg:absoluteerror`), `quantile` (`pinball`, `reg:quantileerror`), or `expectile`. Legacy task names such as `binary` remain accepted. Non-squared objectives require the reference backend and `task=regression`. |
 | `quantile_alpha` | `expectile_alpha`, `tau` | `0.5` | Quantile or expectile level in `(0, 1)`. Only valid with those objectives. `alpha` remains an alias for `reg_alpha`. |
 | `n_estimators` | `num_boost_round`, `iterations` | `10` | Number of boosting rounds. Must be > 0. |
-| `max_depth` | `depth` | `3` | Maximum tree depth. Must be > 0. |
+| `growth_policy` | `grow_policy` | `depthwise` | Tree growth order: `depthwise` (`depth_wise`, `levelwise`) or loss-guided leaf-wise growth via `lossguide` (`leafwise`, `leaf_wise`, `best_first`). Reference backend only. |
+| `max_leaves` | `num_leaves`, `max_leaf_nodes` | `31` with `lossguide` | Maximum leaves per loss-guided tree. Must be >= 2 and cannot be set with depth-wise growth. Reference backend only. |
+| `max_depth` | `depth` | `3`; unlimited with `lossguide` when omitted | Maximum tree depth. Must be > 0 for depth-wise growth. Loss-guided growth accepts `0` for unlimited depth. |
 | `learning_rate` | `eta`, `lr` | `0.1` | Must be > 0. |
 | `min_samples_leaf` | `min_data_in_leaf` | `1` | Minimum rows in a leaf. |
 | `min_child_weight` | | `0` | Minimum sum of hessians in a child (XGBoost-style). |

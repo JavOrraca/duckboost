@@ -23,6 +23,8 @@ enum class BoostTask : uint8_t { REGRESSION = 0, BINARY = 1, MULTICLASS = 2 };
 
 enum class RegressionLoss : uint8_t { SQUARED_ERROR = 0, ABSOLUTE_ERROR = 1, QUANTILE = 2, EXPECTILE = 3 };
 
+enum class GrowthPolicy : uint8_t { DEPTHWISE = 0, LOSSGUIDE = 1 };
+
 //! LESS: feature < threshold → left. EQUAL/IN: matching values → right, all others → left.
 enum class SplitCompare : uint8_t { LESS = 0, EQUAL = 1, IN = 2 };
 
@@ -124,6 +126,11 @@ struct TrainOptions {
 	bool objective_alpha_set = false;
 	idx_t n_estimators = 10;
 	idx_t max_depth = 3;
+	bool max_depth_set = false;
+	GrowthPolicy growth_policy = GrowthPolicy::DEPTHWISE;
+	bool growth_policy_set = false;
+	idx_t max_leaves = 31;
+	bool max_leaves_set = false;
 	double learning_rate = 0.1;
 	idx_t min_samples_leaf = 1;
 	//! Min sum of hessians in a child (XGBoost min_child_weight). 0 = disabled beyond min_samples_leaf.

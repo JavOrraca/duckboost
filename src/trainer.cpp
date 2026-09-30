@@ -9,6 +9,7 @@
 #include <cmath>
 #include <limits>
 #include <numeric>
+#include <queue>
 #include <utility>
 
 namespace duckdb {
@@ -293,9 +294,9 @@ void PartitionRows(const vector<vector<double>> &x, const vector<idx_t> &rows, c
 	}
 }
 
-idx_t BuildTree(BoostTree &tree, const vector<vector<double>> &x, const vector<double> &gradients,
-                const vector<double> &hessians, const vector<idx_t> &rows, const vector<idx_t> &feature_subset,
-                const vector<bool> &categorical_features, idx_t depth, const TrainOptions &options) {
+idx_t GrowDepthwise(BoostTree &tree, const vector<vector<double>> &x, const vector<double> &gradients,
+                    const vector<double> &hessians, const vector<idx_t> &rows, const vector<idx_t> &feature_subset,
+                    const vector<bool> &categorical_features, idx_t depth, const TrainOptions &options) {
 	auto parent = SumStats(gradients, hessians, rows);
 	if (depth >= options.max_depth || rows.size() < 2 * options.min_samples_leaf) {
 		return BuildLeaf(tree, LeafWeight(parent, options));
@@ -321,11 +322,100 @@ idx_t BuildTree(BoostTree &tree, const vector<vector<double>> &x, const vector<d
 	node.cover = parent.h;
 	auto node_idx = tree.nodes.size();
 	tree.nodes.push_back(node);
-	tree.nodes[node_idx].left =
-	    BuildTree(tree, x, gradients, hessians, left_rows, feature_subset, categorical_features, depth + 1, options);
-	tree.nodes[node_idx].right =
-	    BuildTree(tree, x, gradients, hessians, right_rows, feature_subset, categorical_features, depth + 1, options);
+	tree.nodes[node_idx].left = GrowDepthwise(tree, x, gradients, hessians, left_rows, feature_subset,
+	                                          categorical_features, depth + 1, options);
+	tree.nodes[node_idx].right = GrowDepthwise(tree, x, gradients, hessians, right_rows, feature_subset,
+	                                           categorical_features, depth + 1, options);
 	return node_idx;
+}
+
+struct LossguideCandidate {
+	idx_t node_idx;
+	idx_t depth;
+	SplitCandidate split;
+	vector<idx_t> rows;
+};
+
+struct LossguideCandidateCompare {
+	bool operator()(const LossguideCandidate &a, const LossguideCandidate &b) const {
+		if (a.split.gain != b.split.gain) {
+			return a.split.gain < b.split.gain;
+		}
+		return a.node_idx > b.node_idx;
+	}
+};
+
+using LossguideQueue = std::priority_queue<LossguideCandidate, vector<LossguideCandidate>, LossguideCandidateCompare>;
+
+void EnqueueLossguideCandidate(LossguideQueue &candidates, const vector<vector<double>> &x,
+                               const vector<double> &gradients, const vector<double> &hessians, vector<idx_t> rows,
+                               const vector<idx_t> &feature_subset, const vector<bool> &categorical_features,
+                               idx_t node_idx, idx_t depth, const TrainOptions &options) {
+	if ((options.max_depth > 0 && depth >= options.max_depth) || rows.size() < 2 * options.min_samples_leaf) {
+		return;
+	}
+	auto split = FindBestSplit(x, gradients, hessians, rows, feature_subset, categorical_features, options);
+	if (!std::isfinite(split.gain) || split.gain <= 0) {
+		return;
+	}
+	candidates.push({node_idx, depth, split, std::move(rows)});
+}
+
+void GrowLossguide(BoostTree &tree, const vector<vector<double>> &x, const vector<double> &gradients,
+                   const vector<double> &hessians, const vector<idx_t> &rows, const vector<idx_t> &feature_subset,
+                   const vector<bool> &categorical_features, const TrainOptions &options) {
+	auto root_stat = SumStats(gradients, hessians, rows);
+	BuildLeaf(tree, LeafWeight(root_stat, options));
+
+	LossguideQueue candidates;
+	EnqueueLossguideCandidate(candidates, x, gradients, hessians, rows, feature_subset, categorical_features, 0, 0,
+	                          options);
+	idx_t leaf_count = 1;
+	while (leaf_count < options.max_leaves && !candidates.empty()) {
+		auto candidate = candidates.top();
+		candidates.pop();
+
+		vector<idx_t> left_rows;
+		vector<idx_t> right_rows;
+		PartitionRows(x, candidate.rows, candidate.split, left_rows, right_rows);
+		if (left_rows.empty() || right_rows.empty()) {
+			continue;
+		}
+
+		auto parent = SumStats(gradients, hessians, candidate.rows);
+		auto left_stat = SumStats(gradients, hessians, left_rows);
+		auto right_stat = SumStats(gradients, hessians, right_rows);
+		auto left_idx = BuildLeaf(tree, LeafWeight(left_stat, options));
+		auto right_idx = BuildLeaf(tree, LeafWeight(right_stat, options));
+
+		TreeNode node;
+		node.is_leaf = false;
+		node.feature = candidate.split.feature;
+		node.threshold = candidate.split.threshold;
+		node.compare = candidate.split.compare;
+		node.default_left = candidate.split.default_left;
+		node.gain = candidate.split.gain;
+		node.cover = parent.h;
+		node.left = left_idx;
+		node.right = right_idx;
+		tree.nodes[candidate.node_idx] = node;
+		leaf_count++;
+
+		EnqueueLossguideCandidate(candidates, x, gradients, hessians, std::move(left_rows), feature_subset,
+		                          categorical_features, left_idx, candidate.depth + 1, options);
+		EnqueueLossguideCandidate(candidates, x, gradients, hessians, std::move(right_rows), feature_subset,
+		                          categorical_features, right_idx, candidate.depth + 1, options);
+	}
+}
+
+void GrowTree(BoostTree &tree, const vector<vector<double>> &x, const vector<double> &gradients,
+              const vector<double> &hessians, const vector<idx_t> &rows, const vector<idx_t> &feature_subset,
+              const vector<bool> &categorical_features, const TrainOptions &options) {
+	if (options.growth_policy == GrowthPolicy::LOSSGUIDE) {
+		GrowLossguide(tree, x, gradients, hessians, rows, feature_subset, categorical_features, options);
+		return;
+	}
+	GrowDepthwise(tree, x, gradients, hessians, rows, feature_subset, categorical_features, 0, options);
 }
 
 vector<idx_t> SampleRows(const vector<idx_t> &pool, double subsample, SimpleRng &rng) {
@@ -742,7 +832,7 @@ BoostModel TrainReference(const vector<double> &y, const vector<vector<double>> 
 					hessians[i] = weights[i] * std::max(p * (1.0 - p), 1e-6);
 				}
 				BoostTree tree;
-				BuildTree(tree, x, gradients, hessians, grow_rows, feature_subset, categorical_features, 0, options);
+				GrowTree(tree, x, gradients, hessians, grow_rows, feature_subset, categorical_features, options);
 				for (idx_t i = 0; i < y.size(); i++) {
 					prediction[i][c] += options.learning_rate * ApplyTree(tree, x[i]);
 				}
@@ -838,7 +928,7 @@ BoostModel TrainReference(const vector<double> &y, const vector<vector<double>> 
 		auto grow_rows = SampleRows(train_rows, options.subsample, rng);
 		auto feature_subset = SampleFeatures(n_features, options.colsample_bytree, rng);
 		BoostTree tree;
-		BuildTree(tree, x, gradients, hessians, grow_rows, feature_subset, categorical_features, 0, options);
+		GrowTree(tree, x, gradients, hessians, grow_rows, feature_subset, categorical_features, options);
 		if (options.task == BoostTask::REGRESSION &&
 		    (options.loss == RegressionLoss::ABSOLUTE_ERROR || options.loss == RegressionLoss::QUANTILE)) {
 			auto alpha = options.loss == RegressionLoss::ABSOLUTE_ERROR ? 0.5 : options.objective_alpha;
@@ -903,6 +993,10 @@ BoostModel TrainModel(const vector<double> &y, const vector<vector<double>> &x, 
                       const vector<double> &weights) {
 	if (options.backend == BoostBackend::REFERENCE) {
 		return TrainReference(y, x, options, weights);
+	}
+	if (options.growth_policy_set || options.max_leaves_set || options.growth_policy != GrowthPolicy::DEPTHWISE) {
+		throw NotImplementedException(
+		    "duckboost: growth_policy and max_leaves are supported by the reference backend only");
 	}
 	if (options.loss != RegressionLoss::SQUARED_ERROR || options.objective_alpha_set) {
 		throw NotImplementedException("duckboost: objective '%s' is supported by the reference backend only",
