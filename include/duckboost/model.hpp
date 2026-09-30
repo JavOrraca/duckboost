@@ -32,6 +32,12 @@ struct TreeNode {
 	double value = 0;
 	bool is_leaf = true;
 	SplitCompare compare = SplitCompare::LESS;
+	//! When feature is NaN/missing, take left if true else right (XGBoost-style learned default).
+	bool default_left = true;
+	//! Loss reduction from this split (reference trainer); 0 for imports without stats.
+	double gain = 0;
+	//! Parent hessian mass covered by this split (reference trainer); 0 if unknown.
+	double cover = 0;
 };
 
 struct BoostTree {
@@ -104,9 +110,28 @@ struct TrainOptions {
 	idx_t max_depth = 3;
 	double learning_rate = 0.1;
 	idx_t min_samples_leaf = 1;
+	//! Min sum of hessians in a child (XGBoost min_child_weight). 0 = disabled beyond min_samples_leaf.
+	double min_child_weight = 0.0;
 	idx_t max_bins = 256;
+	//! L2 regularization on leaf weights (0 preserves historical unregularized behavior).
+	double reg_lambda = 0.0;
+	//! L1 regularization on leaf weights.
+	double reg_alpha = 0.0;
+	//! Minimum loss reduction required to make a split (XGBoost gamma).
+	double min_split_gain = 0.0;
+	//! Row subsample ratio per tree in (0, 1].
+	double subsample = 1.0;
+	//! Column subsample ratio per tree in (0, 1].
+	double colsample_bytree = 1.0;
+	//! Hold out this fraction of rows for early stopping (0 = disabled).
+	double validation_fraction = 0.0;
+	//! Stop if validation metric does not improve for this many rounds (0 = disabled).
+	idx_t early_stopping_rounds = 0;
+	uint64_t seed = 0;
 	//! Multiclass only. 0 means max(label) + 1.
 	idx_t n_classes = 0;
+	//! "balanced" or comma-separated per-class multipliers; empty = none.
+	string class_weight;
 	vector<string> feature_names;
 
 	static TrainOptions FromMap(const unordered_map<string, string> &options);
@@ -126,6 +151,31 @@ struct SqlExportOptions {
 	static SqlExportOptions FromMap(const unordered_map<string, string> &options);
 };
 
+//! Options for duckboost_importance (tidy / vip-style feature ranking).
+struct ImportanceOptions {
+	//! Column that feeds the normalized `importance` score: gain | cover | frequency.
+	string metric = "gain";
+	//! Divide `importance` by the column sum so values add to 1 (default true).
+	bool normalize = true;
+	//! Emit unused features with zeros (default true).
+	bool include_unused = true;
+	//! Sort key: importance | gain | cover | frequency | name | index.
+	string sort = "importance";
+	static ImportanceOptions FromMap(const unordered_map<string, string> &options);
+};
+
+struct FeatureImportance {
+	string variable;
+	idx_t feature_index = 0;
+	double gain = 0;
+	double cover = 0;
+	idx_t frequency = 0;
+	double importance = 0;
+};
+
+//! Aggregate split gain / cover / frequency per feature.
+vector<FeatureImportance> ComputeFeatureImportance(const BoostModel &model, const ImportanceOptions &options = {});
+
 string BackendToString(BoostBackend backend);
 BoostBackend BackendFromString(const string &name);
 string TaskToString(BoostTask task);
@@ -134,7 +184,9 @@ BoostTask TaskFromString(const string &name);
 bool BackendTrainingSupported(BoostBackend backend);
 string BackendCapabilityNote(BoostBackend backend);
 
-BoostModel TrainModel(const vector<double> &y, const vector<vector<double>> &x, const TrainOptions &options);
+//! weights empty ⇒ unit weights.
+BoostModel TrainModel(const vector<double> &y, const vector<vector<double>> &x, const TrainOptions &options,
+                      const vector<double> &weights = {});
 double EvaluateModel(const BoostModel &model, const vector<double> &y, const vector<vector<double>> &x,
                      const EvalOptions &options);
 string ExportModelSQL(const BoostModel &model, const string &table_name, const vector<string> &feature_columns,

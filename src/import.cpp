@@ -99,6 +99,8 @@ struct XGBNode {
 	idx_t nodeid = 0;
 	idx_t yes = 0;
 	idx_t no = 0;
+	idx_t missing = 0;
+	bool has_missing = false;
 	string split;
 	double split_condition = 0;
 	double leaf = 0;
@@ -129,6 +131,9 @@ XGBNode ParseXGBNode(JsonParser &p) {
 			node.yes = static_cast<idx_t>(p.ParseNumber());
 		} else if (key == "no") {
 			node.no = static_cast<idx_t>(p.ParseNumber());
+		} else if (key == "missing") {
+			node.missing = static_cast<idx_t>(p.ParseNumber());
+			node.has_missing = true;
 		} else if (key == "children") {
 			p.Expect('[');
 			bool first_child = true;
@@ -179,6 +184,8 @@ idx_t ConvertXGBNode(const XGBNode &node, BoostTree &tree, unordered_map<string,
 		yes_child = &node.children[0];
 		no_child = &node.children[1];
 	}
+	// XGBoost: yes = feature < threshold (left), no = else (right). missing points at yes or no.
+	tree.nodes[idx].default_left = !node.has_missing || node.missing == node.yes;
 	tree.nodes[idx].left = ConvertXGBNode(*yes_child, tree, name_to_idx, n_features);
 	tree.nodes[idx].right = ConvertXGBNode(*no_child, tree, name_to_idx, n_features);
 	return idx;
