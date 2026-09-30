@@ -275,8 +275,7 @@ idx_t BuildTree(BoostTree &tree, const vector<vector<double>> &x, const vector<d
 	node.cover = parent.h;
 	auto node_idx = tree.nodes.size();
 	tree.nodes.push_back(node);
-	tree.nodes[node_idx].left =
-	    BuildTree(tree, x, gradients, hessians, left_rows, feature_subset, depth + 1, options);
+	tree.nodes[node_idx].left = BuildTree(tree, x, gradients, hessians, left_rows, feature_subset, depth + 1, options);
 	tree.nodes[node_idx].right =
 	    BuildTree(tree, x, gradients, hessians, right_rows, feature_subset, depth + 1, options);
 	return node_idx;
@@ -495,8 +494,8 @@ BoostModel TrainReference(const vector<double> &y, const vector<vector<double>> 
 			idx_t j = i + rng.Bounded(shuffled.size() - i);
 			std::swap(shuffled[i], shuffled[j]);
 		}
-		idx_t valid_n =
-		    MaxValue<idx_t>(1, static_cast<idx_t>(std::floor(options.validation_fraction * static_cast<double>(y.size()))));
+		idx_t valid_n = MaxValue<idx_t>(
+		    1, static_cast<idx_t>(std::floor(options.validation_fraction * static_cast<double>(y.size()))));
 		valid_n = MinValue<idx_t>(valid_n, y.size() - 1);
 		valid_rows.assign(shuffled.begin(), shuffled.begin() + valid_n);
 		train_rows.assign(shuffled.begin() + valid_n, shuffled.end());
