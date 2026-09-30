@@ -21,10 +21,13 @@ bool NodeGoesLeft(const TreeNode &node, double value) {
 	if (node.compare == SplitCompare::EQUAL) {
 		return value != node.threshold;
 	}
+	if (node.compare == SplitCompare::IN) {
+		return !std::binary_search(node.categories.begin(), node.categories.end(), value);
+	}
 	if (node.missing_type == SplitMissingType::ZERO && (std::isnan(value) || value == 0.0)) {
 		return node.default_left;
 	}
-	if (node.missing_type == SplitMissingType::NAN && std::isnan(value)) {
+	if (node.missing_type == SplitMissingType::NAN_VALUE && std::isnan(value)) {
 		return node.default_left;
 	}
 	if (node.missing_type == SplitMissingType::NONE && std::isnan(value)) {
@@ -54,6 +57,21 @@ string TreeToSQL(const BoostTree &tree, const vector<string> &feature_columns, i
 	auto left = TreeToSQL(tree, feature_columns, node.left);
 	auto right = TreeToSQL(tree, feature_columns, node.right);
 	auto missing_branch = node.default_left ? left : right;
+	if (node.compare == SplitCompare::IN) {
+		if (node.categories.empty()) {
+			return "CASE WHEN " + feature + " IS NULL OR isnan(" + feature + ") THEN " + missing_branch + " ELSE " +
+			       left + " END";
+		}
+		std::ostringstream categories;
+		for (idx_t i = 0; i < node.categories.size(); i++) {
+			if (i > 0) {
+				categories << ',';
+			}
+			categories << FormatDouble(node.categories[i]);
+		}
+		return "CASE WHEN " + feature + " IS NULL OR isnan(" + feature + ") THEN " + missing_branch + " WHEN " +
+		       feature + " IN (" + categories.str() + ") THEN " + right + " ELSE " + left + " END";
+	}
 	if (node.compare == SplitCompare::EQUAL) {
 		// OneHot True (equal) → right; NULL/NaN follow learned default_left.
 		return "CASE WHEN " + feature + " IS NULL OR isnan(" + feature + ") THEN " + missing_branch + " WHEN " +
@@ -678,6 +696,15 @@ string BoostModel::ToJSON() const {
 			out << ",\"value\":" << FormatDouble(node.value);
 			if (node.compare == SplitCompare::EQUAL) {
 				out << ",\"compare\":\"equal\"";
+			} else if (node.compare == SplitCompare::IN) {
+				out << ",\"compare\":\"in\",\"categories\":[";
+				for (idx_t i = 0; i < node.categories.size(); i++) {
+					if (i > 0) {
+						out << ',';
+					}
+					out << FormatDouble(node.categories[i]);
+				}
+				out << ']';
 			}
 			if (!node.is_leaf) {
 				out << ",\"default_left\":" << (node.default_left ? "true" : "false");
@@ -860,14 +887,31 @@ BoostModel BoostModel::FromJSON(const string &json) {
 								node.value = p.ParseNumber();
 							} else if (node_key == "compare") {
 								auto cmp = StringUtil::Lower(p.ParseString());
-								node.compare = (cmp == "equal" || cmp == "eq" || cmp == "==") ? SplitCompare::EQUAL
-								                                                              : SplitCompare::LESS;
+								if (cmp == "less" || cmp == "lt" || cmp == "<") {
+									node.compare = SplitCompare::LESS;
+								} else if (cmp == "equal" || cmp == "eq" || cmp == "==") {
+									node.compare = SplitCompare::EQUAL;
+								} else if (cmp == "in" || cmp == "set") {
+									node.compare = SplitCompare::IN;
+								} else {
+									throw InvalidInputException("duckboost: unknown split compare '%s'", cmp);
+								}
+							} else if (node_key == "categories") {
+								p.Expect('[');
+								bool first_category = true;
+								while (!p.TryConsume(']')) {
+									if (!first_category) {
+										p.Expect(',');
+									}
+									first_category = false;
+									node.categories.push_back(p.ParseNumber());
+								}
 							} else if (node_key == "default_left") {
 								node.default_left = p.ParseBool();
 							} else if (node_key == "missing_type") {
 								auto missing = StringUtil::Lower(p.ParseString());
 								if (missing == "nan") {
-									node.missing_type = SplitMissingType::NAN;
+									node.missing_type = SplitMissingType::NAN_VALUE;
 								} else if (missing == "zero") {
 									node.missing_type = SplitMissingType::ZERO;
 								} else if (missing == "none") {
@@ -882,6 +926,11 @@ BoostModel BoostModel::FromJSON(const string &json) {
 							} else {
 								p.SkipValue();
 							}
+						}
+						if (node.compare == SplitCompare::IN) {
+							std::sort(node.categories.begin(), node.categories.end());
+							node.categories.erase(std::unique(node.categories.begin(), node.categories.end()),
+							                      node.categories.end());
 						}
 						tree.nodes.push_back(node);
 					}

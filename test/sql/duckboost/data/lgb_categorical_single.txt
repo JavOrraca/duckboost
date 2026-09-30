@@ -1,0 +1,24 @@
+tree
+version=v4
+num_class=1
+num_tree_per_iteration=1
+label_index=0
+max_feature_idx=0
+objective=regression
+feature_names=category
+feature_infos=none
+
+Tree=0
+num_leaves=2
+num_cat=1
+split_feature=0
+threshold=0
+decision_type=1
+left_child=-1
+right_child=-2
+leaf_value=8 9
+cat_boundaries=0 1
+cat_threshold=16
+shrinkage=1
+
+end of trees
