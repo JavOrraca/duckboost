@@ -1289,9 +1289,9 @@ BoostModel BoostModel::FromJSON(const string &json) {
 		model.duckboost_version = 1;
 	}
 	if (model.duckboost_version > DUCKBOOST_FORMAT_VERSION) {
-		throw InvalidInputException(
-		    "duckboost: model format version %llu is newer than this build supports (max %llu)",
-		    (unsigned long long)model.duckboost_version, (unsigned long long)DUCKBOOST_FORMAT_VERSION);
+		throw InvalidInputException("duckboost: model format version %llu is newer than this build supports (max %llu)",
+		                            (unsigned long long)model.duckboost_version,
+		                            (unsigned long long)DUCKBOOST_FORMAT_VERSION);
 	}
 	if (model.n_features == 0 && !model.feature_names.empty()) {
 		model.n_features = model.feature_names.size();

@@ -489,8 +489,7 @@ bool NativeTrainerLinked(BoostBackend backend) {
 BoostModel TrainNative(const vector<double> &y, const vector<vector<double>> &x, const TrainOptions &options,
                        const vector<double> &weights) {
 	if (!options.categorical_features.empty() && options.backend != BoostBackend::LIGHTGBM) {
-		throw NotImplementedException(
-		    "duckboost: categorical_features requires backend='lightgbm' or 'reference'");
+		throw NotImplementedException("duckboost: categorical_features requires backend='lightgbm' or 'reference'");
 	}
 	if (!NativeTrainerCompiled(options.backend)) {
 		throw NotImplementedException("duckboost: native training for backend '%s' is not linked in this build. "

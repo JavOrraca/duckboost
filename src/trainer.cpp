@@ -1005,8 +1005,7 @@ BoostModel TrainModel(const vector<double> &y, const vector<vector<double>> &x, 
 			    RegressionLossToString(options.loss));
 		}
 		if (!options.categorical_features.empty()) {
-			throw NotImplementedException(
-			    "duckboost: categorical_features requires backend='lightgbm' or 'reference'");
+			throw NotImplementedException("duckboost: categorical_features requires backend='lightgbm' or 'reference'");
 		}
 	}
 	if (options.backend == BoostBackend::LIGHTGBM && options.loss == RegressionLoss::EXPECTILE) {
