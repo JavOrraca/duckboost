@@ -13,6 +13,8 @@ Aggregate. Returns one model JSON `VARCHAR` for the whole input.
 ```text
 duckboost_train(y DOUBLE, features DOUBLE[]) -> VARCHAR
 duckboost_train(y DOUBLE, features DOUBLE[], options MAP(VARCHAR, VARCHAR)) -> VARCHAR
+duckboost_train(y DOUBLE, features DOUBLE[], weight DOUBLE) -> VARCHAR
+duckboost_train(y DOUBLE, features DOUBLE[], weight DOUBLE, options MAP(VARCHAR, VARCHAR)) -> VARCHAR
 ```
 
 | Option | Aliases | Default | Meaning |
@@ -23,11 +25,23 @@ duckboost_train(y DOUBLE, features DOUBLE[], options MAP(VARCHAR, VARCHAR)) -> V
 | `max_depth` | `depth` | `3` | Maximum tree depth. Must be > 0. |
 | `learning_rate` | `eta`, `lr` | `0.1` | Must be > 0. |
 | `min_samples_leaf` | `min_data_in_leaf` | `1` | Minimum rows in a leaf. |
+| `min_child_weight` | | `0` | Minimum sum of hessians in a child (XGBoost-style). |
 | `max_bins` | | `256` | Most candidate split thresholds per feature and node. A feature with at most `max_bins + 1` distinct values in a node is split exactly; otherwise thresholds are taken at evenly spaced quantiles of its distinct values. LightGBM receives it as `max_bin`. |
+| `reg_lambda` | `lambda`, `lambda_l2` | `0` | L2 regularization on leaf weights. |
+| `reg_alpha` | `alpha`, `lambda_l1` | `0` | L1 regularization on leaf weights. |
+| `min_split_gain` | `gamma` | `0` | Minimum loss reduction required to make a split. |
+| `subsample` | `bagging_fraction` | `1` | Row subsample ratio per tree in `(0, 1]`. |
+| `colsample_bytree` | `colsample`, `feature_fraction` | `1` | Column subsample ratio per tree in `(0, 1]`. |
+| `validation_fraction` | `valid_fraction` | `0` | Hold-out fraction for early stopping. Defaults to `0.2` when `early_stopping_rounds > 0` and this is unset. |
+| `early_stopping_rounds` | `early_stopping` | `0` | Stop if the hold-out metric does not improve for this many rounds; keep the best iteration. |
+| `seed` | `random_seed` | `0` | RNG seed for subsampling and the validation hold-out. |
+| `class_weight` | `class_weights` | | `balanced` or comma-separated per-class multipliers (binary / multiclass). |
 | `n_classes` | `num_class`, `num_classes` | max label + 1 | Multiclass only; ignored for other tasks. Must be >= 2 and greater than every label. Set it when a class is absent from the training rows. |
 | `feature_names` | | `f0,f1,...` | Comma-separated names. The count must match the feature width. |
 
 Unknown keys raise `duckboost: unknown train option`. Values are strings inside the MAP.
+
+Feature `NULL`s become NaN and the reference trainer learns a per-split `default_left` missing direction (same idea as XGBoost). Sample `weight` must be non-NULL and `>= 0`.
 
 Regression uses squared error. Binary uses logistic loss and requires labels in `{0, 1}`. `duckboost_predict` then returns the class probability, not a 0/1 label.
 
@@ -270,6 +284,54 @@ FROM (
     MAP {'task': 'regression', 'base_score': '0.0'}
   ) AS model
 );
+""")
+```
+
+## `duckboost_importance`
+
+Table function. Returns one row per feature with gain / cover / frequency and a tidy `importance` score (vip-style).
+
+```text
+duckboost_importance(model VARCHAR) -> TABLE(...)
+duckboost_importance(model VARCHAR, options MAP(VARCHAR, VARCHAR)) -> TABLE(...)
+```
+
+| Column | Type | Meaning |
+| --- | --- | --- |
+| `variable` | `VARCHAR` | Feature name (`feature_names`, else `f0`, `f1`, …) |
+| `feature_index` | `BIGINT` | Zero-based feature index |
+| `gain` | `DOUBLE` | Sum of split gains (0 for imports without persisted stats) |
+| `cover` | `DOUBLE` | Sum of parent hessian mass at splits |
+| `frequency` | `BIGINT` | Number of times the feature was used for a split |
+| `importance` | `DOUBLE` | Selected metric, normalized to sum to 1 by default |
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `metric` | `gain` | `gain`, `cover`, or `frequency` (aliases `weight` / `count` → frequency). If `metric=gain` but all gains are 0 (typical for imports), frequency is used. |
+| `normalize` | `true` | Divide `importance` by the column sum. |
+| `include_unused` | `true` | Keep features that never split. |
+| `sort` | `importance` | `importance`, `gain`, `cover`, `frequency`, `name`, or `index`. |
+
+```{python}
+#| echo: false
+#| output: asis
+from _helpers.duckrun import show
+
+show("""
+LOAD 'build/release/extension/duckboost/duckboost.duckdb_extension';
+CREATE TABLE train AS
+SELECT i::DOUBLE AS x_signal, ((i * 17) % 11)::DOUBLE AS x_noise, (3.0 * i)::DOUBLE AS y
+FROM range(40) t(i);
+CREATE TABLE models AS
+SELECT duckboost_train(
+  y, [x_signal, x_noise],
+  MAP {'n_estimators': '20', 'max_depth': '3', 'feature_names': 'x_signal,x_noise', 'seed': '7'}
+) AS model
+FROM train;
+SET VARIABLE trained_model = (SELECT model FROM models);
+SELECT variable, round(importance, 3) AS importance, frequency
+FROM duckboost_importance(getvariable('trained_model'))
+ORDER BY importance DESC;
 """)
 ```
 
