@@ -1,0 +1,89 @@
+# name: test/sql/duckboost/format_version.test
+# description: duckboost JSON format versioning (v1/v2 gate)
+# group: [duckboost]
+
+require duckboost
+
+# Plain squared-error models stay on format v1 for older-build portability.
+statement ok
+CREATE TABLE plain_models AS
+SELECT duckboost_train(
+	y, [x],
+	MAP {'n_estimators': '1', 'max_depth': '1', 'learning_rate': '1', 'feature_names': 'x'}
+) AS model
+FROM (SELECT i::DOUBLE AS x, i::DOUBLE AS y FROM range(8) t(i));
+
+query I
+SELECT model LIKE '%"duckboost_version":1%' FROM plain_models;
+----
+true
+
+# IN splits, non-L2 losses, and non-nan missing_type bump the written version to 2.
+statement ok
+CREATE TABLE quantile_v2 AS
+SELECT duckboost_train(
+	y, [0.0],
+	MAP {'objective': 'quantile', 'quantile_alpha': '0.9', 'n_estimators': '1'}
+) AS model
+FROM (SELECT i::DOUBLE AS y FROM range(10) t(i));
+
+query I
+SELECT model LIKE '%"duckboost_version":2%' AND model LIKE '%"objective":"quantile"%'
+FROM quantile_v2;
+----
+true
+
+statement ok
+CREATE TABLE in_v2 AS
+SELECT duckboost_import(
+	'reference',
+	'{"duckboost_version":1,"backend":"reference","task":"regression","base_score":0,"learning_rate":1,"n_features":1,"n_classes":1,"feature_names":["f0"],"trees":[{"nodes":[{"is_leaf":false,"feature":0,"threshold":0,"left":1,"right":2,"value":0,"compare":"in","categories":[1,3],"default_left":true},{"is_leaf":true,"feature":0,"threshold":0,"left":0,"right":0,"value":10},{"is_leaf":true,"feature":0,"threshold":0,"left":0,"right":0,"value":20}]}]}'
+) AS model;
+
+query II
+SELECT
+	model LIKE '%"duckboost_version":2%',
+	duckboost_predict(model, [1.0])
+FROM in_v2;
+----
+true	20.0
+
+# Missing version is treated as 1; newer versions are rejected.
+statement ok
+SELECT duckboost_import(
+	'reference',
+	'{"backend":"reference","task":"regression","base_score":0,"learning_rate":1,"n_features":0,"n_classes":1,"feature_names":[],"trees":[{"nodes":[{"is_leaf":true,"feature":0,"threshold":0,"left":0,"right":0,"value":1}]}]}'
+);
+
+statement error
+SELECT duckboost_import(
+	'reference',
+	'{"duckboost_version":3,"backend":"reference","task":"regression","base_score":0,"learning_rate":1,"n_features":0,"n_classes":1,"feature_names":[],"trees":[{"nodes":[{"is_leaf":true,"feature":0,"threshold":0,"left":0,"right":0,"value":1}]}]}'
+);
+----
+<REGEX>:.*model format version 3 is newer than this build supports \(max 2\).*
+
+statement error
+SELECT duckboost_import(
+	'reference',
+	'{"duckboost_version":0,"backend":"reference","task":"regression","base_score":0,"learning_rate":1,"n_features":0,"n_classes":1,"feature_names":[],"trees":[{"nodes":[{"is_leaf":true,"feature":0,"threshold":0,"left":0,"right":0,"value":1}]}]}'
+);
+----
+<REGEX>:.*duckboost_version must be a positive integer.*
+
+statement error
+SELECT duckboost_import(
+	'reference',
+	'{"duckboost_version":"2","backend":"reference","task":"regression","base_score":0,"learning_rate":1,"n_features":0,"n_classes":1,"feature_names":[],"trees":[{"nodes":[{"is_leaf":true,"feature":0,"threshold":0,"left":0,"right":0,"value":1}]}]}'
+);
+----
+<REGEX>:.*duckboost_version must be a positive integer.*
+
+# Unknown node fields fail loudly.
+statement error
+SELECT duckboost_import(
+	'reference',
+	'{"duckboost_version":1,"backend":"reference","task":"regression","base_score":0,"learning_rate":1,"n_features":0,"n_classes":1,"feature_names":[],"trees":[{"nodes":[{"is_leaf":true,"feature":0,"threshold":0,"left":0,"right":0,"value":1,"mystery":1}]}]}'
+);
+----
+<REGEX>:.*unknown node field 'mystery'.*

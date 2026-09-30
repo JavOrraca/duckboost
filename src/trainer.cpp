@@ -994,16 +994,29 @@ BoostModel TrainModel(const vector<double> &y, const vector<vector<double>> &x, 
 	if (options.backend == BoostBackend::REFERENCE) {
 		return TrainReference(y, x, options, weights);
 	}
-	if (options.growth_policy_set || options.max_leaves_set || options.growth_policy != GrowthPolicy::DEPTHWISE) {
-		throw NotImplementedException(
-		    "duckboost: growth_policy and max_leaves are supported by the reference backend only");
+	if (options.backend == BoostBackend::XGBOOST || options.backend == BoostBackend::CATBOOST) {
+		if (options.growth_policy_set || options.max_leaves_set || options.growth_policy != GrowthPolicy::DEPTHWISE) {
+			throw NotImplementedException(
+			    "duckboost: growth_policy and max_leaves require backend='lightgbm' or 'reference'");
+		}
+		if (options.loss != RegressionLoss::SQUARED_ERROR || options.objective_alpha_set) {
+			throw NotImplementedException(
+			    "duckboost: objective '%s' requires backend='lightgbm' or 'reference' for native training",
+			    RegressionLossToString(options.loss));
+		}
+		if (!options.categorical_features.empty()) {
+			throw NotImplementedException(
+			    "duckboost: categorical_features requires backend='lightgbm' or 'reference'");
+		}
 	}
-	if (options.loss != RegressionLoss::SQUARED_ERROR || options.objective_alpha_set) {
-		throw NotImplementedException("duckboost: objective '%s' is supported by the reference backend only",
-		                              RegressionLossToString(options.loss));
-	}
-	if (!options.categorical_features.empty()) {
-		throw NotImplementedException("duckboost: categorical_features is supported by the reference backend only");
+	if (options.backend == BoostBackend::LIGHTGBM) {
+		if (options.loss == RegressionLoss::EXPECTILE) {
+			throw NotImplementedException("duckboost: expectile is supported by the reference backend only");
+		}
+		if (options.early_stopping_rounds > 0) {
+			throw NotImplementedException(
+			    "duckboost: early_stopping_rounds is not supported by the lightgbm native backend yet");
+		}
 	}
 	if (NativeTrainerCompiled(options.backend)) {
 		return TrainNative(y, x, options, weights);

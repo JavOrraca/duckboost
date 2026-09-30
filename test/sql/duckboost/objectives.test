@@ -161,4 +161,4 @@ statement error
 SELECT duckboost_train(y, [x], MAP {'objective': 'not_a_loss'})
 FROM objective_train;
 ----
-<REGEX>:.*unknown task 'not_a_loss'.*
+<REGEX>:.*unknown objective 'not_a_loss'.*

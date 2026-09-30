@@ -14,15 +14,58 @@
 namespace duckdb {
 namespace duckboost {
 
+namespace {
+
+bool CategoryMatches(const TreeNode &node, double value) {
+	double casted = value;
+	if (node.category_cast == CategoryCast::LIGHTGBM) {
+		casted = std::trunc(value);
+	} else if (node.category_cast == CategoryCast::XGBOOST) {
+		if (value < 0.0) {
+			return false;
+		}
+		casted = std::trunc(value);
+	}
+	if (node.compare == SplitCompare::EQUAL) {
+		return casted == node.threshold;
+	}
+	return std::binary_search(node.categories.begin(), node.categories.end(), casted);
+}
+
+string CategoryMembershipSQL(const TreeNode &node, const string &feature) {
+	string membership_value = feature;
+	if (node.category_cast == CategoryCast::LIGHTGBM || node.category_cast == CategoryCast::XGBOOST) {
+		membership_value = "trunc(" + feature + ")";
+	}
+	string membership;
+	if (node.compare == SplitCompare::EQUAL) {
+		membership = membership_value + " = " + FormatDouble(node.threshold);
+	} else if (node.categories.empty()) {
+		membership = "false";
+	} else {
+		std::ostringstream categories;
+		for (idx_t i = 0; i < node.categories.size(); i++) {
+			if (i > 0) {
+				categories << ',';
+			}
+			categories << FormatDouble(node.categories[i]);
+		}
+		membership = membership_value + " IN (" + categories.str() + ")";
+	}
+	if (node.category_cast == CategoryCast::XGBOOST) {
+		membership = "(" + feature + " >= 0 AND " + membership + ")";
+	}
+	return membership;
+}
+
+} // namespace
+
 bool NodeGoesLeft(const TreeNode &node, double value) {
 	if (node.compare != SplitCompare::LESS && std::isnan(value)) {
 		return node.default_left;
 	}
-	if (node.compare == SplitCompare::EQUAL) {
-		return value != node.threshold;
-	}
-	if (node.compare == SplitCompare::IN) {
-		return !std::binary_search(node.categories.begin(), node.categories.end(), value);
+	if (node.compare == SplitCompare::EQUAL || node.compare == SplitCompare::IN) {
+		return !CategoryMatches(node, value);
 	}
 	if (node.missing_type == SplitMissingType::ZERO && (std::isnan(value) || value == 0.0)) {
 		return node.default_left;
@@ -57,25 +100,13 @@ string TreeToSQL(const BoostTree &tree, const vector<string> &feature_columns, i
 	auto left = TreeToSQL(tree, feature_columns, node.left);
 	auto right = TreeToSQL(tree, feature_columns, node.right);
 	auto missing_branch = node.default_left ? left : right;
-	if (node.compare == SplitCompare::IN) {
-		if (node.categories.empty()) {
+	if (node.compare == SplitCompare::IN || node.compare == SplitCompare::EQUAL) {
+		if (node.compare == SplitCompare::IN && node.categories.empty()) {
 			return "CASE WHEN " + feature + " IS NULL OR isnan(" + feature + ") THEN " + missing_branch + " ELSE " +
 			       left + " END";
 		}
-		std::ostringstream categories;
-		for (idx_t i = 0; i < node.categories.size(); i++) {
-			if (i > 0) {
-				categories << ',';
-			}
-			categories << FormatDouble(node.categories[i]);
-		}
 		return "CASE WHEN " + feature + " IS NULL OR isnan(" + feature + ") THEN " + missing_branch + " WHEN " +
-		       feature + " IN (" + categories.str() + ") THEN " + right + " ELSE " + left + " END";
-	}
-	if (node.compare == SplitCompare::EQUAL) {
-		// OneHot True (equal) → right; NULL/NaN follow learned default_left.
-		return "CASE WHEN " + feature + " IS NULL OR isnan(" + feature + ") THEN " + missing_branch + " WHEN " +
-		       feature + " = " + FormatDouble(node.threshold) + " THEN " + right + " ELSE " + left + " END";
+		       CategoryMembershipSQL(node, feature) + " THEN " + right + " ELSE " + left + " END";
 	}
 	auto missing_test = feature + " IS NULL OR isnan(" + feature + ")";
 	if (node.missing_type == SplitMissingType::ZERO) {
@@ -405,6 +436,7 @@ string BackendCapabilityNote(BoostBackend backend) {
 
 TrainOptions TrainOptions::FromMap(const unordered_map<string, string> &options) {
 	TrainOptions result;
+	string max_leaves_key = "max_leaves";
 	for (auto &entry : options) {
 		auto key = StringUtil::Lower(entry.first);
 		auto &value = entry.second;
@@ -414,10 +446,28 @@ TrainOptions TrainOptions::FromMap(const unordered_map<string, string> &options)
 			result.task = TaskFromString(value);
 		} else if (key == "objective" || key == "loss") {
 			// Legacy objective values (binary/multiclass/regression) remain task aliases.
+			auto lower = StringUtil::Lower(value);
+			if (lower == "binary:logistic" || lower == "binary_logistic") {
+				throw InvalidInputException(
+				    "duckboost: unknown objective '%s'; did you mean objective='binary'? "
+				    "supported: squared_error, absolute_error, quantile, expectile, binary, multiclass, regression",
+				    value);
+			}
+			if (lower == "poisson" || lower == "tweedie" || lower == "gamma" || lower == "lambdarank" ||
+			    lower == "rank_xendcg" || lower.find("rank") != string::npos) {
+				throw InvalidInputException("duckboost: objective '%s' is not supported", value);
+			}
 			try {
 				result.loss = RegressionLossFromString(value);
 			} catch (const InvalidInputException &) {
-				result.task = TaskFromString(value);
+				try {
+					result.task = TaskFromString(value);
+				} catch (const InvalidInputException &) {
+					throw InvalidInputException(
+					    "duckboost: unknown objective '%s'; supported: squared_error, absolute_error, quantile, "
+					    "expectile, binary, multiclass, regression",
+					    value);
+				}
 			}
 		} else if (key == "quantile_alpha" || key == "expectile_alpha" || key == "tau") {
 			result.objective_alpha = std::stod(value);
@@ -433,6 +483,7 @@ TrainOptions TrainOptions::FromMap(const unordered_map<string, string> &options)
 		} else if (key == "max_leaves" || key == "num_leaves" || key == "max_leaf_nodes") {
 			result.max_leaves = static_cast<idx_t>(std::stoull(value));
 			result.max_leaves_set = true;
+			max_leaves_key = entry.first;
 		} else if (key == "learning_rate" || key == "eta" || key == "lr") {
 			result.learning_rate = std::stod(value);
 		} else if (key == "min_samples_leaf" || key == "min_data_in_leaf") {
@@ -481,9 +532,14 @@ TrainOptions TrainOptions::FromMap(const unordered_map<string, string> &options)
 	if (result.n_estimators == 0) {
 		throw InvalidInputException("duckboost: n_estimators must be > 0");
 	}
-	if (result.backend != BoostBackend::REFERENCE && (result.growth_policy_set || result.max_leaves_set)) {
+	if (result.backend == BoostBackend::XGBOOST && (result.growth_policy_set || result.max_leaves_set)) {
 		throw NotImplementedException(
-		    "duckboost: growth_policy and max_leaves are supported by the reference backend only");
+		    "duckboost: growth_policy and max_leaves are not supported by the xgboost backend "
+		    "(use backend='lightgbm' or 'reference')");
+	}
+	if (result.backend == BoostBackend::CATBOOST && (result.growth_policy_set || result.max_leaves_set)) {
+		throw NotImplementedException(
+		    "duckboost: growth_policy and max_leaves are not supported by the catboost backend");
 	}
 	if (result.growth_policy == GrowthPolicy::DEPTHWISE) {
 		if (result.max_depth == 0) {
@@ -491,7 +547,9 @@ TrainOptions TrainOptions::FromMap(const unordered_map<string, string> &options)
 			    "duckboost: max_depth=0 (unlimited) is only supported with growth_policy=lossguide");
 		}
 		if (result.max_leaves_set) {
-			throw InvalidInputException("duckboost: max_leaves is only valid with growth_policy=lossguide");
+			throw InvalidInputException(
+			    "duckboost: %s=%llu requires growth_policy='lossguide' (depthwise growth is bounded by max_depth)",
+			    max_leaves_key, (unsigned long long)result.max_leaves);
 		}
 	} else {
 		if (!result.max_depth_set) {
@@ -570,6 +628,16 @@ SqlExportOptions SqlExportOptions::FromMap(const unordered_map<string, string> &
 			}
 		} else if (key == "prediction_alias" || key == "alias") {
 			result.prediction_alias = entry.second;
+		} else if (key == "keep_columns" || key == "keep" || key == "passthrough") {
+			result.keep_columns = entry.second;
+		} else if (key == "proba" || key == "probabilities" || key == "predict_proba") {
+			if (value == "true" || value == "1" || value == "yes") {
+				result.proba = true;
+			} else if (value == "false" || value == "0" || value == "no") {
+				result.proba = false;
+			} else {
+				throw InvalidInputException("duckboost: proba must be true/false");
+			}
 		} else {
 			throw InvalidInputException("duckboost: unknown to_sql option '%s'", entry.first);
 		}
@@ -743,7 +811,8 @@ vector<FeatureImportance> ComputeFeatureImportance(const BoostModel &model, cons
 
 string BoostModel::ToJSON() const {
 	std::ostringstream out;
-	out << "{\"duckboost_version\":" << duckboost_version;
+	const idx_t version = RequiredFormatVersion();
+	out << "{\"duckboost_version\":" << version;
 	out << ",\"backend\":\"" << EscapeJSON(BackendToString(backend)) << "\"";
 	out << ",\"task\":\"" << EscapeJSON(TaskToString(task)) << "\"";
 	if (loss != RegressionLoss::SQUARED_ERROR) {
@@ -814,6 +883,11 @@ string BoostModel::ToJSON() const {
 				if (node.cover > 0) {
 					out << ",\"cover\":" << FormatDouble(node.cover);
 				}
+				if (node.category_cast == CategoryCast::LIGHTGBM) {
+					out << ",\"category_cast\":\"lightgbm\"";
+				} else if (node.category_cast == CategoryCast::XGBOOST) {
+					out << ",\"category_cast\":\"xgboost\"";
+				}
 			}
 			out << '}';
 		}
@@ -883,11 +957,32 @@ string BoostModel::ToJSON() const {
 	return out.str();
 }
 
+idx_t BoostModel::RequiredFormatVersion() const {
+	if (loss != RegressionLoss::SQUARED_ERROR) {
+		return 2;
+	}
+	for (auto &tree : trees) {
+		for (auto &node : tree.nodes) {
+			if (node.compare == SplitCompare::IN) {
+				return 2;
+			}
+			if (node.missing_type != SplitMissingType::NAN_VALUE) {
+				return 2;
+			}
+			if (node.category_cast != CategoryCast::EXACT) {
+				return 2;
+			}
+		}
+	}
+	return 1;
+}
+
 BoostModel BoostModel::FromJSON(const string &json) {
 	JsonParser p(json);
 	p.Expect('{');
 	BoostModel model;
 	bool first = true;
+	bool version_seen = false;
 	while (!p.TryConsume('}')) {
 		if (!first) {
 			p.Expect(',');
@@ -896,7 +991,20 @@ BoostModel BoostModel::FromJSON(const string &json) {
 		auto key = p.ParseString();
 		p.Expect(':');
 		if (key == "duckboost_version") {
-			model.duckboost_version = static_cast<idx_t>(p.ParseNumber());
+			if (p.Peek() == '"') {
+				throw InvalidInputException("duckboost: duckboost_version must be a positive integer");
+			}
+			auto raw_version = p.ParseNumber();
+			if (!std::isfinite(raw_version) || raw_version <= 0 || std::floor(raw_version) != raw_version) {
+				throw InvalidInputException("duckboost: duckboost_version must be a positive integer");
+			}
+			model.duckboost_version = static_cast<idx_t>(raw_version);
+			version_seen = true;
+			if (model.duckboost_version > DUCKBOOST_FORMAT_VERSION) {
+				throw InvalidInputException(
+				    "duckboost: model format version %llu is newer than this build supports (max %llu)",
+				    (unsigned long long)model.duckboost_version, (unsigned long long)DUCKBOOST_FORMAT_VERSION);
+			}
 		} else if (key == "backend") {
 			model.backend = BackendFromString(p.ParseString());
 		} else if (key == "task") {
@@ -952,8 +1060,7 @@ BoostModel BoostModel::FromJSON(const string &json) {
 					auto tree_key = p.ParseString();
 					p.Expect(':');
 					if (tree_key != "nodes") {
-						p.SkipValue();
-						continue;
+						throw InvalidInputException("duckboost: unknown tree field '%s'", tree_key);
 					}
 					p.Expect('[');
 					bool first_node = true;
@@ -965,6 +1072,8 @@ BoostModel BoostModel::FromJSON(const string &json) {
 						p.Expect('{');
 						TreeNode node;
 						bool first_node_field = true;
+						bool categories_seen = false;
+						bool category_cast_seen = false;
 						while (!p.TryConsume('}')) {
 							if (!first_node_field) {
 								p.Expect(',');
@@ -996,6 +1105,7 @@ BoostModel BoostModel::FromJSON(const string &json) {
 									throw InvalidInputException("duckboost: unknown split compare '%s'", cmp);
 								}
 							} else if (node_key == "categories") {
+								categories_seen = true;
 								p.Expect('[');
 								bool first_category = true;
 								while (!p.TryConsume(']')) {
@@ -1018,13 +1128,31 @@ BoostModel BoostModel::FromJSON(const string &json) {
 								} else {
 									throw InvalidInputException("duckboost: unknown split missing_type '%s'", missing);
 								}
+							} else if (node_key == "category_cast") {
+								category_cast_seen = true;
+								auto cast = StringUtil::Lower(p.ParseString());
+								if (cast == "exact") {
+									node.category_cast = CategoryCast::EXACT;
+								} else if (cast == "lightgbm") {
+									node.category_cast = CategoryCast::LIGHTGBM;
+								} else if (cast == "xgboost") {
+									node.category_cast = CategoryCast::XGBOOST;
+								} else {
+									throw InvalidInputException("duckboost: unknown category_cast '%s'", cast);
+								}
 							} else if (node_key == "gain") {
 								node.gain = p.ParseNumber();
 							} else if (node_key == "cover") {
 								node.cover = p.ParseNumber();
 							} else {
-								p.SkipValue();
+								throw InvalidInputException("duckboost: unknown node field '%s'", node_key);
 							}
+						}
+						if (categories_seen && node.compare != SplitCompare::IN) {
+							throw InvalidInputException("duckboost: categories are only valid on compare=in nodes");
+						}
+						if (category_cast_seen && node.compare == SplitCompare::LESS) {
+							throw InvalidInputException("duckboost: category_cast is only valid on equal/in nodes");
 						}
 						if (node.compare == SplitCompare::IN) {
 							std::sort(node.categories.begin(), node.categories.end());
@@ -1156,6 +1284,14 @@ BoostModel BoostModel::FromJSON(const string &json) {
 		} else {
 			p.SkipValue();
 		}
+	}
+	if (!version_seen) {
+		model.duckboost_version = 1;
+	}
+	if (model.duckboost_version > DUCKBOOST_FORMAT_VERSION) {
+		throw InvalidInputException(
+		    "duckboost: model format version %llu is newer than this build supports (max %llu)",
+		    (unsigned long long)model.duckboost_version, (unsigned long long)DUCKBOOST_FORMAT_VERSION);
 	}
 	if (model.n_features == 0 && !model.feature_names.empty()) {
 		model.n_features = model.feature_names.size();
@@ -1310,6 +1446,9 @@ string ExportModelSQL(const BoostModel &model, const string &table_name, const v
 	if (table_name.empty()) {
 		throw InvalidInputException("duckboost: table_name must not be empty");
 	}
+	if (options.proba && model.task == BoostTask::REGRESSION) {
+		throw InvalidInputException("duckboost: proba requires a binary or multiclass model");
+	}
 	vector<string> raw_columns = feature_columns;
 	if (raw_columns.empty()) {
 		raw_columns = model.feature_names;
@@ -1320,6 +1459,62 @@ string ExportModelSQL(const BoostModel &model, const string &table_name, const v
 		                            (unsigned long long)required_raw);
 	}
 
+	auto keep_columns_lower = options.keep_columns;
+	StringUtil::Trim(keep_columns_lower);
+	const bool keep_all = StringUtil::Lower(keep_columns_lower) == "*";
+	vector<string> keep_list;
+	if (!options.keep_columns.empty() && !keep_all) {
+		keep_list = StringUtil::Split(options.keep_columns, ',');
+		for (auto &name : keep_list) {
+			StringUtil::Trim(name);
+			if (name.empty()) {
+				throw InvalidInputException("duckboost: keep_columns contains an empty name");
+			}
+			if (name == options.prediction_alias) {
+				throw InvalidInputException("duckboost: keep_columns cannot include prediction alias '%s'",
+				                            options.prediction_alias);
+			}
+			if (StringUtil::StartsWith(name, "__duckboost_")) {
+				throw InvalidInputException("duckboost: keep_columns cannot use reserved prefix __duckboost_");
+			}
+		}
+		for (idx_t i = 0; i < keep_list.size(); i++) {
+			for (idx_t j = i + 1; j < keep_list.size(); j++) {
+				if (keep_list[i] == keep_list[j]) {
+					throw InvalidInputException("duckboost: duplicate keep_columns entry '%s'", keep_list[i]);
+				}
+			}
+		}
+	}
+	if (options.proba) {
+		const idx_t n_proba = model.task == BoostTask::BINARY ? 2 : model.n_classes;
+		for (idx_t c = 0; c < n_proba; c++) {
+			auto proba_name = "proba_" + std::to_string(c);
+			if (proba_name == options.prediction_alias) {
+				throw InvalidInputException("duckboost: prediction alias collides with %s", proba_name);
+			}
+			for (auto &kept : keep_list) {
+				if (kept == proba_name) {
+					throw InvalidInputException("duckboost: keep_columns cannot include '%s'", proba_name);
+				}
+			}
+		}
+	}
+
+	auto select_prefix = [&](bool include_star) -> string {
+		if (keep_all && include_star) {
+			return "*, ";
+		}
+		if (keep_list.empty()) {
+			return "";
+		}
+		std::ostringstream out;
+		for (auto &name : keep_list) {
+			out << QuoteIdent(name) << ", ";
+		}
+		return out.str();
+	};
+
 	vector<string> columns = raw_columns;
 	if (columns.size() < model.n_features) {
 		columns.resize(model.n_features);
@@ -1329,7 +1524,7 @@ string ExportModelSQL(const BoostModel &model, const string &table_name, const v
 			columns.resize(ctr.feature_index + 1);
 		}
 		if (columns[ctr.feature_index].empty()) {
-			columns[ctr.feature_index] = "_duckboost_ctr_" + std::to_string(ctr.feature_index);
+			columns[ctr.feature_index] = "__duckboost_ctr_" + std::to_string(ctr.feature_index);
 		}
 	}
 
@@ -1352,7 +1547,8 @@ string ExportModelSQL(const BoostModel &model, const string &table_name, const v
 		}
 		const idx_t n_rounds = model.trees.size() / model.n_classes;
 		std::ostringstream inner;
-		inner << "SELECT ";
+		inner << "SELECT " << select_prefix(true);
+		vector<string> score_names;
 		for (idx_t c = 0; c < model.n_classes; c++) {
 			if (c > 0) {
 				inner << ", ";
@@ -1362,11 +1558,12 @@ string ExportModelSQL(const BoostModel &model, const string &table_name, const v
 				expr += " + " + FormatDouble(model.learning_rate) + " * (" +
 				        TreeToSQL(model.trees[round * model.n_classes + c], columns, 0) + ")";
 			}
-			inner << "(" << expr << ") AS " << QuoteIdent("score_" + std::to_string(c));
+			auto score_name = "__duckboost_score_" + std::to_string(c);
+			score_names.push_back(score_name);
+			inner << "(" << expr << ") AS " << QuoteIdent(score_name);
 		}
 		inner << " FROM " << from_sql;
 
-		// Argmax over class scores (ties → lowest class index).
 		string argmax = "0";
 		for (idx_t c = 1; c < model.n_classes; c++) {
 			string cond;
@@ -1374,13 +1571,52 @@ string ExportModelSQL(const BoostModel &model, const string &table_name, const v
 				if (prev > 0) {
 					cond += " AND ";
 				}
-				cond += QuoteIdent("score_" + std::to_string(c)) + " > " + QuoteIdent("score_" + std::to_string(prev));
+				cond += QuoteIdent(score_names[c]) + " > " + QuoteIdent(score_names[prev]);
 			}
 			argmax = "CASE WHEN " + cond + " THEN " + std::to_string(c) + " ELSE " + argmax + " END";
 		}
-		return "SELECT (" + argmax + ") AS " + alias + " FROM (" + inner.str() + ") AS " +
-		       QuoteIdent("_duckboost_scores");
+
+		std::ostringstream outer_keep_sql;
+		if (keep_all) {
+			outer_keep_sql << "* EXCLUDE (";
+			for (idx_t c = 0; c < score_names.size(); c++) {
+				if (c > 0) {
+					outer_keep_sql << ", ";
+				}
+				outer_keep_sql << QuoteIdent(score_names[c]);
+			}
+			outer_keep_sql << "), ";
+		} else {
+			outer_keep_sql << select_prefix(false);
+		}
+
+		std::ostringstream result;
+		result << "SELECT " << outer_keep_sql.str() << "(" << argmax << ") AS " << alias;
+		if (options.proba) {
+			string max_expr = QuoteIdent(score_names[0]);
+			for (idx_t c = 1; c < score_names.size(); c++) {
+				max_expr = "greatest(" + max_expr + ", " + QuoteIdent(score_names[c]) + ")";
+			}
+			string sum_expr;
+			for (idx_t c = 0; c < score_names.size(); c++) {
+				if (c > 0) {
+					sum_expr += " + ";
+				}
+				sum_expr += "exp(" + QuoteIdent(score_names[c]) + " - " + max_expr + ")";
+			}
+			for (idx_t c = 0; c < score_names.size(); c++) {
+				result << ", (exp(" << QuoteIdent(score_names[c]) << " - " << max_expr << ") / (" << sum_expr
+				       << ")) AS " << QuoteIdent("proba_" + std::to_string(c));
+			}
+		}
+		result << " FROM (" << inner.str() << ") AS " << QuoteIdent("_duckboost_scores");
+		return result.str();
 	}
+
+	auto emit_binary_proba = [&](std::ostringstream &result, const string &prob_expr) {
+		result << ", (1.0 - (" << prob_expr << ")) AS " << QuoteIdent("proba_0");
+		result << ", (" << prob_expr << ") AS " << QuoteIdent("proba_1");
+	};
 
 	if (!options.separate_trees) {
 		string expr = FormatDouble(model.ClassBias(0));
@@ -1390,32 +1626,66 @@ string ExportModelSQL(const BoostModel &model, const string &table_name, const v
 		if (model.task == BoostTask::BINARY) {
 			expr = "1.0 / (1.0 + EXP(-(" + expr + ")))";
 		}
-		return "SELECT (" + expr + ") AS " + alias + " FROM " + from_sql;
+		std::ostringstream result;
+		result << "SELECT " << select_prefix(true) << "(" << expr << ") AS " << alias;
+		if (options.proba) {
+			emit_binary_proba(result, expr);
+		}
+		result << " FROM " << from_sql;
+		return result.str();
 	}
 
 	std::ostringstream inner;
-	inner << "SELECT ";
+	inner << "SELECT " << select_prefix(true);
+	vector<string> tree_names;
 	for (idx_t t = 0; t < model.trees.size(); t++) {
 		if (t > 0) {
 			inner << ", ";
 		}
-		inner << "(" << TreeToSQL(model.trees[t], columns, 0) << ") AS " << QuoteIdent("tree_" + std::to_string(t));
+		auto tree_name = "__duckboost_tree_" + std::to_string(t);
+		tree_names.push_back(tree_name);
+		inner << "(" << TreeToSQL(model.trees[t], columns, 0) << ") AS " << QuoteIdent(tree_name);
 	}
 	if (model.trees.empty()) {
-		inner << FormatDouble(model.ClassBias(0)) << " AS " << QuoteIdent("base_score");
+		inner << FormatDouble(model.ClassBias(0)) << " AS " << QuoteIdent("__duckboost_base");
 	} else {
-		inner << ", " << FormatDouble(model.ClassBias(0)) << " AS " << QuoteIdent("base_score");
+		inner << ", " << FormatDouble(model.ClassBias(0)) << " AS " << QuoteIdent("__duckboost_base");
 	}
 	inner << " FROM " << from_sql;
 
-	string sum_expr = QuoteIdent("base_score");
-	for (idx_t t = 0; t < model.trees.size(); t++) {
-		sum_expr += " + " + FormatDouble(model.learning_rate) + " * " + QuoteIdent("tree_" + std::to_string(t));
+	string sum_expr = QuoteIdent("__duckboost_base");
+	for (idx_t t = 0; t < tree_names.size(); t++) {
+		sum_expr += " + " + FormatDouble(model.learning_rate) + " * " + QuoteIdent(tree_names[t]);
 	}
+	string pred_expr = sum_expr;
 	if (model.task == BoostTask::BINARY) {
-		sum_expr = "1.0 / (1.0 + EXP(-(" + sum_expr + ")))";
+		pred_expr = "1.0 / (1.0 + EXP(-(" + sum_expr + ")))";
 	}
-	return "SELECT (" + sum_expr + ") AS " + alias + " FROM (" + inner.str() + ") AS " + QuoteIdent("_duckboost_trees");
+
+	std::ostringstream outer_keep_sql;
+	if (keep_all) {
+		outer_keep_sql << "* EXCLUDE (";
+		for (idx_t t = 0; t < tree_names.size(); t++) {
+			if (t > 0) {
+				outer_keep_sql << ", ";
+			}
+			outer_keep_sql << QuoteIdent(tree_names[t]);
+		}
+		if (!tree_names.empty()) {
+			outer_keep_sql << ", ";
+		}
+		outer_keep_sql << QuoteIdent("__duckboost_base") << "), ";
+	} else {
+		outer_keep_sql << select_prefix(false);
+	}
+
+	std::ostringstream result;
+	result << "SELECT " << outer_keep_sql.str() << "(" << pred_expr << ") AS " << alias;
+	if (options.proba) {
+		emit_binary_proba(result, pred_expr);
+	}
+	result << " FROM (" << inner.str() << ") AS " << QuoteIdent("_duckboost_trees");
+	return result.str();
 }
 
 } // namespace duckboost

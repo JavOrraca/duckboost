@@ -31,6 +31,15 @@ enum class SplitCompare : uint8_t { LESS = 0, EQUAL = 1, IN = 2 };
 //! How a numerical split recognizes missing values. NONE follows LightGBM's NaN-as-zero behavior.
 enum class SplitMissingType : uint8_t { NAN_VALUE = 0, ZERO = 1, NONE = 2 };
 
+//! How EQUAL/IN category membership casts continuous values before matching.
+//! EXACT: value must equal a category bit-for-bit (reference trainer).
+//! LIGHTGBM: trunc(value) must be in the set (vendor LightGBM categorical).
+//! XGBOOST: trunc(value) must be in the set and value >= 0 (vendor XGBoost categorical).
+enum class CategoryCast : uint8_t { EXACT = 0, LIGHTGBM = 1, XGBOOST = 2 };
+
+//! Highest duckboost JSON format version this build can write/read.
+static constexpr idx_t DUCKBOOST_FORMAT_VERSION = 2;
+
 struct TreeNode {
 	idx_t feature = 0;
 	double threshold = 0;
@@ -44,6 +53,8 @@ struct TreeNode {
 	//! When the split recognizes a missing value, take left if true else right.
 	bool default_left = true;
 	SplitMissingType missing_type = SplitMissingType::NAN_VALUE;
+	//! How EQUAL/IN nodes cast feature values before membership checks.
+	CategoryCast category_cast = CategoryCast::EXACT;
 	//! Loss reduction from this split (reference trainer); 0 for imports without stats.
 	double gain = 0;
 	//! Parent hessian mass covered by this split (reference trainer); 0 if unknown.
@@ -105,6 +116,8 @@ struct BoostModel {
 	vector<BoostTree> trees;
 	vector<CtrFeatureSpec> ctr_features;
 
+	//! Lowest format version that can represent this model (1 or 2).
+	idx_t RequiredFormatVersion() const;
 	string ToJSON() const;
 	static BoostModel FromJSON(const string &json);
 
@@ -173,6 +186,10 @@ struct EvalOptions {
 struct SqlExportOptions {
 	bool separate_trees = true;
 	string prediction_alias = "prediction";
+	//! Comma-separated column names (or "*") to keep alongside the prediction.
+	string keep_columns;
+	//! Emit per-class probability columns (binary/multiclass only).
+	bool proba = false;
 	static SqlExportOptions FromMap(const unordered_map<string, string> &options);
 };
 

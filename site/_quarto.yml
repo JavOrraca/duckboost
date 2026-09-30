@@ -42,6 +42,8 @@ website:
             href: vignettes/datasets.qmd
           - text: Import model dumps
             href: vignettes/import-dumps.qmd
+          - text: Prediction intervals
+            href: vignettes/prediction-intervals.qmd
       - text: SQL reference
         href: reference.qmd
 

@@ -242,7 +242,7 @@ statement error
 SELECT duckboost_train(y, [x], MAP {'max_leaves': '4'})
 FROM skewed_steps;
 ----
-<REGEX>:.*max_leaves is only valid with growth_policy=lossguide.*
+<REGEX>:.*requires growth_policy='lossguide'.*
 
 statement error
 SELECT duckboost_train(y, [x], MAP {'growth_policy': 'depthwise', 'max_depth': '0'})
@@ -257,4 +257,4 @@ SELECT duckboost_train(
 )
 FROM skewed_steps;
 ----
-<REGEX>:.*growth_policy and max_leaves are supported by the reference backend only.*
+<REGEX>:.*growth_policy and max_leaves are not supported by the xgboost backend.*

@@ -186,4 +186,4 @@ SELECT duckboost_train(
 )
 FROM cat_train;
 ----
-categorical_features is supported by the reference backend only
+categorical_features requires backend='lightgbm' or 'reference'
