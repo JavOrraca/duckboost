@@ -10,8 +10,8 @@ SELECT
 	i::DOUBLE AS x,
 	CASE
 		WHEN i < 16 THEN 0.0
-		WHEN i < 32 THEN 5.0
-		WHEN i < 48 THEN 15.0
+		WHEN i < 32 THEN 10.0
+		WHEN i < 48 THEN 20.0
 		ELSE 30.0
 	END AS y
 FROM range(64) t(i);
