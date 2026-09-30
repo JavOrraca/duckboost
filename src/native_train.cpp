@@ -30,6 +30,7 @@ int XGBoosterDumpModelEx(BoosterHandle handle, const char *fmap, int with_stats,
                          const char ***out_dump_array);
 int XGBoosterDumpModelExWithFeatures(BoosterHandle handle, int fnum, const char **fname, const char **ftype,
                                      int with_stats, const char *format, bst_ulong *out_len, const char ***out_models);
+int XGBoosterSaveJsonConfig(BoosterHandle handle, bst_ulong *out_len, const char **out_str);
 }
 #endif
 
@@ -240,10 +241,21 @@ BoostModel TrainWithXGBoost(const vector<double> &y, const vector<vector<double>
 	}
 	dump += "]";
 
+	// The dump omits the learned intercept (boost_from_average) and objective; the config carries both.
+	bst_ulong config_len = 0;
+	const char *config_str = nullptr;
+	if (XGBoosterSaveJsonConfig(booster, &config_len, &config_str) != 0 || !config_str) {
+		XGBoosterFree(booster);
+		XGDMatrixFree(dmat);
+		ThrowXGBoostError("XGBoosterSaveJsonConfig");
+	}
+	string config(config_str, static_cast<size_t>(config_len));
+
 	XGBoosterFree(booster);
 	XGDMatrixFree(dmat);
 
 	auto import_options = ImportOptionsFromTrain(options);
+	import_options.config = std::move(config);
 	if (options.task == BoostTask::MULTICLASS) {
 		import_options.n_classes = n_classes;
 		import_options.n_classes_set = true;

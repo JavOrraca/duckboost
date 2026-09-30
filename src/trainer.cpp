@@ -1009,17 +1009,25 @@ BoostModel TrainModel(const vector<double> &y, const vector<vector<double>> &x, 
 			    "duckboost: categorical_features requires backend='lightgbm' or 'reference'");
 		}
 	}
-	if (options.backend == BoostBackend::LIGHTGBM) {
-		if (options.loss == RegressionLoss::EXPECTILE) {
-			throw NotImplementedException("duckboost: expectile is supported by the reference backend only");
-		}
-		if (options.early_stopping_rounds > 0) {
-			throw NotImplementedException(
-			    "duckboost: early_stopping_rounds is not supported by the lightgbm native backend yet");
-		}
+	if (options.backend == BoostBackend::LIGHTGBM && options.loss == RegressionLoss::EXPECTILE) {
+		throw NotImplementedException("duckboost: expectile is supported by the reference backend only");
+	}
+	if (options.early_stopping_rounds > 0 || options.validation_fraction > 0) {
+		throw NotImplementedException(
+		    "duckboost: early_stopping_rounds and validation_fraction require backend='reference' (native "
+		    "backends train on every row)");
 	}
 	if (NativeTrainerCompiled(options.backend)) {
-		return TrainNative(y, x, options, weights);
+		if (options.class_weight.empty()) {
+			return TrainNative(y, x, options, weights);
+		}
+		if (options.task == BoostTask::REGRESSION) {
+			throw InvalidInputException("duckboost: class_weight is only supported for binary and multiclass tasks");
+		}
+		auto native_weights = NormalizeWeights(y, weights);
+		ApplyClassWeights(native_weights, y, options,
+		                  options.task == BoostTask::MULTICLASS ? ResolveClassCount(y, options) : 2);
+		return TrainNative(y, x, options, native_weights);
 	}
 	throw NotImplementedException(
 	    "duckboost: native training for backend '%s' is not linked in this build. "
