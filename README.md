@@ -219,15 +219,17 @@ Native XGBoost / LightGBM linking is opt-in via `DUCKBOOST_WITH_*`. Linked build
 ### Dump import notes
 
 - Imported models set `learning_rate = 1.0`. XGBoost and LightGBM dump leaf values already include their learning-rate shrinkage, so they are imported unchanged; CatBoost `scale_and_bias` is applied at import.
-- LightGBM numerical `<=` splits preserve `default_left` and `missing_type` (`None`, `Zero`, or `NaN`) while converting to duckboost `<` via `nextafter(threshold, +∞)`. Categorical bitsets import as `IN` set-membership nodes (single-category sets remain `EQUAL`).
+- Unknown XGBoost dump fields and LightGBM tree fields fail loudly (no silent skips). Named XGBoost dumps require `feature_names` in scoring-column order; positional `f0..fN` dumps do not.
+- XGBoost categorical splits (`split_condition` arrays) import as `EQUAL`/`IN` nodes with `category_cast=xgboost` (`trunc(x)` for `x >= 0`). Pass `config` from `Booster.save_config()` to recover `base_score` / objective / `num_class`.
+- LightGBM numerical `<=` splits preserve `default_left` and `missing_type` (`None`, `Zero`, or `NaN`) while converting to duckboost `<` via `nextafter(threshold, +∞)`. Categorical bitsets import as `IN` set-membership nodes with `category_cast=lightgbm` (`trunc(x)` membership). Unsupported objectives (`poisson`, `multiclassova`, ranking, RF `average_output`, linear trees) are rejected.
 - CatBoost support: `FloatFeature`, `OneHotFeature`, and `OnlineCtr` (Counter/Borders). CTR combinations may include `cat_feature_value`, `float_feature`, and `cat_feature_exact_value`. Pass categorical CityHash values as numeric features.
 - Multiclass CatBoost JSON uses class-blocked `leaf_values` (`2^depth` values per class). Import expands each oblivious tree into `n_classes` duckboost trees (layout `[round][class]`).
 - OnlineCtr requires `ctr_data` in the dump (`save_model(..., pool=...)`). `duckboost_to_sql` inlines CTR hash lookups via `UHUGEINT` modular arithmetic.
-- Optional import map keys: `task`, `base_score`, `learning_rate`, `feature_names`, `n_classes`.
+- Optional import map keys: `task`, `base_score`, `learning_rate`, `feature_names`, `n_classes`, `config` (XGBoost `save_config()` JSON; mutually exclusive with `base_score`).
 
 ## Model format
 
-Models are opaque `VARCHAR` JSON documents:
+Models are opaque `VARCHAR` JSON documents. `ToJSON` writes the lowest format version that can represent the model (`1` for plain LESS/NaN/L2 trees; `2` when the model uses `IN` splits, non-NaN `missing_type`, non-L2 objectives, or non-exact `category_cast`). `FromJSON` rejects versions newer than this build supports.
 
 ```json
 {
@@ -243,15 +245,16 @@ Models are opaque `VARCHAR` JSON documents:
 }
 ```
 
-For `task: "multiclass"`, `n_classes >= 2`, optional `base_scores` holds per-class bias, and trees are stored as `round * n_classes + class`. `duckboost_predict` returns the argmax class index; `duckboost_to_sql` exports an argmax over per-class score expressions.
+For `task: "multiclass"`, `n_classes >= 2`, optional `base_scores` holds per-class bias, and trees are stored as `round * n_classes + class`. `duckboost_predict` returns the argmax class index; `duckboost_to_sql` exports an argmax over per-class score expressions. Pass `keep_columns` (comma-separated names or `*`) to retain identity columns, and `proba=true` for binary/multiclass probability columns beside the prediction.
 
-Split nodes may use `"compare":"equal"` with `threshold`, or `"compare":"in"` with a sorted, unique `categories` array. Equality and membership matches route right; non-matches route left.
+Split nodes may use `"compare":"equal"` with `threshold`, or `"compare":"in"` with a sorted, unique `categories` array. Equality and membership matches route right; non-matches route left. Optional `"category_cast":"lightgbm"|"xgboost"` controls fractional-category truncation.
 
 ## Design notes
 
 - **Layout**: standalone community extension ([extension-template](https://github.com/duckdb/extension-template)) so optional vendor ML libraries stay out of core DuckDB builds. The `duckdb` submodule tracks DuckDB 2.0 (`v2.0-cyanoptera`).
 - **SQL export** mirrors orbital's `separate_trees` idea so DuckDB can evaluate ensemble members as independent columns.
-- **Reference trainer** is a didactic histogram/quantile-split GBDT (squared-error, absolute-error, quantile, expectile, logistic, and softmax losses) with depth-wise or loss-guided leaf-wise growth, missing-value defaults, L1/L2/`gamma`, sample weights, and early stopping. Set `categorical_features` to comma-separated feature names or zero-based indices to train exact one-vs-rest equality splits on numeric category values. It is not a replacement for production XGBoost/LightGBM/CatBoost quality, but it exercises the full train → evaluate → inspect → SQL path.
+- **Reference trainer** is a didactic histogram/quantile-split GBDT (squared-error, absolute-error, quantile, expectile, logistic, and softmax losses) with depth-wise or loss-guided leaf-wise growth, missing-value defaults, L1/L2/`gamma`, sample weights, and early stopping. Set `categorical_features` to comma-separated feature names or zero-based indices to train exact one-vs-rest equality splits on numeric category values. It buffers all rows in memory (peak ~2× for the sorted working copy), trains single-threaded, and is not a replacement for production XGBoost/LightGBM/CatBoost quality — but it exercises the full train → evaluate → inspect → SQL path. For large scoring jobs prefer `duckboost_to_sql` over per-row `duckboost_predict`.
+- **Native LightGBM** maps absolute_error / quantile / lossguide / `categorical_features` / `subsample` (`bagging_freq=1`) / seed. Native XGBoost still focuses on L2 depth-wise trees (plus seed / `max_bin` / sample weights).
 - **Table macros** `duckboost_fit` / `duckboost_score` wrap `duckboost_train` / `duckboost_predict` with `query_table` for a compact SQL workflow.
 - **Split and preprocessing macros** are plain SQL macros registered by the extension. Splits rank rows by a hash of the row's values mixed with `seed`, so they are reproducible and independent of physical row order.
 
@@ -262,4 +265,5 @@ Split nodes may use `"compare":"equal"` with `threshold`, or `"compare":"in"` wi
 - [x] Standalone extension-template repository (`Makefile`, `extension_config.cmake`, [`docs/community_extensions_description.yml`](docs/community_extensions_description.yml))
 - [x] Split helpers (train/test, train/validation/test, v-fold) and preprocessing helpers (dummy/one-hot, integer encoding, rare-level pooling)
 - [x] Missing-value aware splits, sample weights / `class_weight`, early stopping, regularization, and `duckboost_importance`
+- [x] Fail-loud vendor imports, categorical cast semantics, model format v2, deployable `to_sql` (`keep_columns` / `proba`), vendor parity fixtures
 - [ ] Submit [`docs/community_extensions_description.yml`](docs/community_extensions_description.yml) to `duckdb/community-extensions` after DuckDB 2.0 is released

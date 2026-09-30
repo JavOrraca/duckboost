@@ -1,0 +1,164 @@
+---
+title: "Prediction intervals with quantile models"
+---
+
+Quantile regression gives a direct path to prediction intervals inside DuckDB: train several pinball models, check coverage, and optionally apply split-conformal calibration. Export with `keep_columns` so scored rows keep their identity keys.
+
+```{python}
+#| echo: false
+#| output: asis
+from _helpers.duckrun import show, LOAD
+
+setup = f"""
+{LOAD}
+CREATE TABLE series AS
+SELECT
+	i::DOUBLE AS x,
+	(0.5 * i + 3.0 * sin(i / 5.0) + (i % 7) * 0.2)::DOUBLE AS y,
+	i AS id
+FROM range(1, 101) t(i);
+"""
+
+show(
+	"""
+CREATE TABLE quantile_models AS
+SELECT
+	duckboost_train(y, [x], MAP {
+		'objective': 'quantile', 'quantile_alpha': '0.05',
+		'n_estimators': '30', 'max_depth': '3', 'feature_names': 'x'
+	}) AS q05,
+	duckboost_train(y, [x], MAP {
+		'objective': 'quantile', 'quantile_alpha': '0.50',
+		'n_estimators': '30', 'max_depth': '3', 'feature_names': 'x'
+	}) AS q50,
+	duckboost_train(y, [x], MAP {
+		'objective': 'quantile', 'quantile_alpha': '0.95',
+		'n_estimators': '30', 'max_depth': '3', 'feature_names': 'x'
+	}) AS q95
+FROM series;
+""",
+	setup=setup,
+)
+```
+
+Empirical coverage and mean interval width on the training rows:
+
+```{python}
+#| echo: false
+#| output: asis
+from _helpers.duckrun import show, LOAD
+
+setup = f"""
+{LOAD}
+CREATE TABLE series AS
+SELECT
+	i::DOUBLE AS x,
+	(0.5 * i + 3.0 * sin(i / 5.0) + (i % 7) * 0.2)::DOUBLE AS y,
+	i AS id
+FROM range(1, 101) t(i);
+CREATE TABLE quantile_models AS
+SELECT
+	duckboost_train(y, [x], MAP {{
+		'objective': 'quantile', 'quantile_alpha': '0.05',
+		'n_estimators': '30', 'max_depth': '3', 'feature_names': 'x'
+	}}) AS q05,
+	duckboost_train(y, [x], MAP {{
+		'objective': 'quantile', 'quantile_alpha': '0.50',
+		'n_estimators': '30', 'max_depth': '3', 'feature_names': 'x'
+	}}) AS q50,
+	duckboost_train(y, [x], MAP {{
+		'objective': 'quantile', 'quantile_alpha': '0.95',
+		'n_estimators': '30', 'max_depth': '3', 'feature_names': 'x'
+	}}) AS q95
+FROM series;
+"""
+
+show(
+	"""
+SELECT
+	round(avg((y >= lo AND y <= hi)::INTEGER), 2) AS coverage,
+	round(avg(hi - lo), 2) AS mean_width,
+	round(avg((lo <= mid AND mid <= hi)::INTEGER), 2) AS ordered_bands
+FROM (
+	SELECT
+		s.y,
+		duckboost_predict(m.q05, [s.x]) AS lo,
+		duckboost_predict(m.q50, [s.x]) AS mid,
+		duckboost_predict(m.q95, [s.x]) AS hi
+	FROM series s, quantile_models m
+);
+""",
+	setup=setup,
+)
+```
+
+Pinball loss via `duckboost_evaluate` follows the stored `objective_alpha`:
+
+```{python}
+#| echo: false
+#| output: asis
+from _helpers.duckrun import show, LOAD
+
+setup = f"""
+{LOAD}
+CREATE TABLE series AS
+SELECT i::DOUBLE AS x, (0.5 * i)::DOUBLE AS y FROM range(1, 51) t(i);
+CREATE TABLE q90 AS
+SELECT duckboost_train(
+	y, [x],
+	MAP {{'objective': 'quantile', 'quantile_alpha': '0.9', 'n_estimators': '10'}}
+) AS model
+FROM series;
+"""
+
+show(
+	"""
+SELECT
+	duckboost_evaluate_agg(model, y, [x]) AS auto_pinball,
+	duckboost_evaluate_agg(model, y, [x], MAP {'metric': 'pinball'}) AS pinball
+FROM q90, series;
+""",
+	setup=setup,
+)
+```
+
+When independently trained quantiles cross, enforce order with `least` / `greatest` before reporting the interval. For deployment, keep the row id beside the prediction:
+
+```{python}
+#| echo: false
+#| output: asis
+from _helpers.duckrun import show, LOAD
+
+setup = f"""
+{LOAD}
+CREATE TABLE series AS
+SELECT i::DOUBLE AS x, (0.5 * i)::DOUBLE AS y, i AS id FROM range(1, 21) t(i);
+CREATE TABLE q50 AS
+SELECT duckboost_train(
+	y, [x],
+	MAP {{'objective': 'quantile', 'quantile_alpha': '0.5', 'n_estimators': '8', 'feature_names': 'x'}}
+) AS model
+FROM series;
+"""
+
+show(
+	"""
+SELECT duckboost_to_sql(
+	model,
+	'series',
+	['x'],
+	MAP {
+		'separate_trees': 'false',
+		'prediction_alias': 'q50',
+		'keep_columns': 'id'
+	}
+) AS export_sql
+FROM q50;
+""",
+	setup=setup,
+)
+```
+
+## Scale note
+
+The reference trainer buffers every training row in memory and keeps a sorted working copy while scanning candidate splits, so peak memory is roughly 2× the feature matrix. Training is single-threaded. `duckboost_predict` re-parses the model JSON on every row; for large scoring jobs prefer `duckboost_to_sql` (optionally with `keep_columns` / `proba`) and run the generated SQL without the extension.
