@@ -452,8 +452,7 @@ BoostModel ImportLightGBMText(const string &dump, const ImportOptions &options) 
 		vector<idx_t> cat_boundaries;
 		vector<uint32_t> cat_threshold;
 		if (num_cat == 0) {
-			if ((!raw_cat_boundaries.empty() &&
-			     (raw_cat_boundaries.size() != 1 || raw_cat_boundaries[0] != 0)) ||
+			if ((!raw_cat_boundaries.empty() && (raw_cat_boundaries.size() != 1 || raw_cat_boundaries[0] != 0)) ||
 			    !raw_cat_threshold.empty()) {
 				throw InvalidInputException("duckboost: lightgbm categorical arrays present with num_cat=0");
 			}
@@ -464,8 +463,7 @@ BoostModel ImportLightGBMText(const string &dump, const ImportOptions &options) 
 			}
 			for (idx_t i = 0; i < raw_cat_boundaries.size(); i++) {
 				auto boundary = raw_cat_boundaries[i];
-				if (boundary < 0 || (i == 0 && boundary != 0) ||
-				    (i > 0 && boundary <= raw_cat_boundaries[i - 1]) ||
+				if (boundary < 0 || (i == 0 && boundary != 0) || (i > 0 && boundary <= raw_cat_boundaries[i - 1]) ||
 				    static_cast<uint64_t>(boundary) > raw_cat_threshold.size()) {
 					throw InvalidInputException("duckboost: malformed lightgbm cat_boundaries");
 				}
