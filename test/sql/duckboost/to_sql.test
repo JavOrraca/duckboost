@@ -85,3 +85,76 @@ SELECT duckboost_to_sql(
 ) ILIKE '%CASE WHEN%';
 ----
 true
+
+# keep_columns preserves identity columns for deployable joining
+statement ok
+CREATE TABLE score_with_id AS
+SELECT row_number() OVER (ORDER BY x1, x2) AS id, x1, x2 FROM score;
+
+statement ok
+SET VARIABLE keep_sql = (
+	SELECT duckboost_to_sql(
+		model,
+		'score_with_id',
+		['x1', 'x2'],
+		MAP {'separate_trees': 'true', 'prediction_alias': 'pred', 'keep_columns': 'id'}
+	)
+	FROM models
+);
+
+statement ok
+CREATE TABLE keep_pred AS SELECT * FROM query(getvariable('keep_sql'));
+
+query I
+SELECT bool_and(abs(n.pred - k.pred) < 1e-8)
+FROM (
+	SELECT id, duckboost_predict(m.model, [s.x1, s.x2]) AS pred
+	FROM score_with_id s, models m
+) n
+JOIN keep_pred k USING (id);
+----
+true
+
+# Binary/multiclass proba columns match predict_proba
+statement ok
+CREATE TABLE bin_train AS
+SELECT i::DOUBLE AS x, (i > 10)::DOUBLE AS y FROM range(20) t(i);
+
+statement ok
+CREATE TABLE bin_models AS
+SELECT duckboost_train(y, [x], MAP {'task': 'binary', 'n_estimators': '5', 'feature_names': 'x'}) AS model
+FROM bin_train;
+
+statement ok
+CREATE TABLE bin_score AS SELECT i AS id, i::DOUBLE AS x FROM range(20) t(i);
+
+statement ok
+SET VARIABLE bin_proba_sql = (
+	SELECT duckboost_to_sql(
+		model, 'bin_score', ['x'],
+		MAP {'separate_trees': 'false', 'prediction_alias': 'pred', 'keep_columns': 'id', 'proba': 'true'}
+	)
+	FROM bin_models
+);
+
+statement ok
+CREATE TABLE bin_sql_pred AS SELECT * FROM query(getvariable('bin_proba_sql'));
+
+query I
+SELECT bool_and(
+	abs(list_extract(p, 1) - s.proba_0) < 1e-12 AND
+	abs(list_extract(p, 2) - s.proba_1) < 1e-12 AND
+	abs(duckboost_predict(m.model, [b.x]) - s.pred) < 1e-12
+)
+FROM bin_score b, bin_models m, bin_sql_pred s,
+LATERAL (SELECT duckboost_predict_proba(m.model, [b.x]) AS p)
+WHERE b.id = s.id;
+----
+true
+
+statement error
+SELECT duckboost_to_sql(
+	(SELECT model FROM models), 'score', ['x1', 'x2'], MAP {'proba': 'true'}
+);
+----
+<REGEX>:.*proba requires a binary or multiclass model.*

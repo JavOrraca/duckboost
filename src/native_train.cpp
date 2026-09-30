@@ -7,6 +7,7 @@
 
 #include <cmath>
 #include <cstring>
+#include <cctype>
 #include <limits>
 #include <string>
 #include <vector>
@@ -104,16 +105,24 @@ string ObjectiveForXGBoost(BoostTask task, idx_t n_classes) {
 	}
 }
 
-string ObjectiveForLightGBM(BoostTask task, idx_t n_classes) {
-	switch (task) {
-	case BoostTask::BINARY:
+string ObjectiveForLightGBM(const TrainOptions &options, idx_t n_classes) {
+	if (options.task == BoostTask::BINARY) {
 		return "binary";
-	case BoostTask::MULTICLASS:
+	}
+	if (options.task == BoostTask::MULTICLASS) {
 		if (n_classes < 2) {
 			throw InvalidInputException("duckboost: lightgbm multiclass train requires n_classes >= 2");
 		}
 		return "multiclass";
-	case BoostTask::REGRESSION:
+	}
+	switch (options.loss) {
+	case RegressionLoss::ABSOLUTE_ERROR:
+		return "regression_l1";
+	case RegressionLoss::QUANTILE:
+		return "quantile";
+	case RegressionLoss::EXPECTILE:
+		throw NotImplementedException("duckboost: expectile is supported by the reference backend only");
+	case RegressionLoss::SQUARED_ERROR:
 	default:
 		return "regression";
 	}
@@ -199,6 +208,8 @@ BoostModel TrainWithXGBoost(const vector<double> &y, const vector<vector<double>
 	set_param("subsample", std::to_string(options.subsample));
 	set_param("colsample_bytree", std::to_string(options.colsample_bytree));
 	set_param("objective", ObjectiveForXGBoost(options.task, n_classes));
+	set_param("seed", std::to_string(options.seed));
+	set_param("max_bin", std::to_string(MaxValue<idx_t>(options.max_bins, 2)));
 	if (options.task == BoostTask::MULTICLASS) {
 		set_param("num_class", std::to_string(n_classes));
 	}
@@ -213,19 +224,8 @@ BoostModel TrainWithXGBoost(const vector<double> &y, const vector<vector<double>
 
 	bst_ulong out_len = 0;
 	const char **out_dump = nullptr;
-	int dump_rc = 0;
-	if (!options.feature_names.empty() && options.feature_names.size() == ncol) {
-		vector<const char *> fnames(ncol);
-		vector<const char *> ftypes(ncol, "q");
-		for (idx_t i = 0; i < ncol; i++) {
-			fnames[i] = options.feature_names[i].c_str();
-		}
-		dump_rc = XGBoosterDumpModelExWithFeatures(booster, static_cast<int>(ncol), fnames.data(), ftypes.data(), 0,
-		                                           "json", &out_len, &out_dump);
-	} else {
-		dump_rc = XGBoosterDumpModelEx(booster, "", 0, "json", &out_len, &out_dump);
-	}
-	if (dump_rc != 0 || !out_dump) {
+	// Always dump with f0..fN names so feature indices stay positional; attach names on import.
+	if (XGBoosterDumpModelEx(booster, "", 0, "json", &out_len, &out_dump) != 0 || !out_dump) {
 		XGBoosterFree(booster);
 		XGDMatrixFree(dmat);
 		ThrowXGBoostError("XGBoosterDumpModelEx");
@@ -313,16 +313,66 @@ BoostModel TrainWithLightGBM(const vector<double> &y, const vector<vector<double
 		}
 	}
 
+	idx_t num_leaves = MaxValue<idx_t>(2, 1ULL << MinValue<idx_t>(options.max_depth == 0 ? 10 : options.max_depth, 10));
+	int64_t max_depth = static_cast<int64_t>(options.max_depth);
+	if (options.growth_policy == GrowthPolicy::LOSSGUIDE || options.max_leaves_set) {
+		num_leaves = MaxValue<idx_t>(options.max_leaves, 2);
+		if (!options.max_depth_set || options.max_depth == 0) {
+			max_depth = -1;
+		}
+	}
 	string params = StringUtil::Format(
-	    "objective=%s learning_rate=%g num_leaves=%llu max_depth=%llu min_data_in_leaf=%llu "
+	    "objective=%s learning_rate=%g num_leaves=%llu max_depth=%lld min_data_in_leaf=%llu "
 	    "lambda_l2=%g lambda_l1=%g min_gain_to_split=%g bagging_fraction=%g feature_fraction=%g "
-	    "verbosity=-1 force_col_wise=true",
-	    ObjectiveForLightGBM(options.task, n_classes), options.learning_rate,
-	    (unsigned long long)MaxValue<idx_t>(2, 1ULL << MinValue<idx_t>(options.max_depth, 10)),
-	    (unsigned long long)options.max_depth, (unsigned long long)MaxValue<idx_t>(options.min_samples_leaf, 1),
-	    options.reg_lambda, options.reg_alpha, options.min_split_gain, options.subsample, options.colsample_bytree);
+	    "verbosity=-1 force_col_wise=true seed=%llu deterministic=true",
+	    ObjectiveForLightGBM(options, n_classes), options.learning_rate, (unsigned long long)num_leaves,
+	    (long long)max_depth, (unsigned long long)MaxValue<idx_t>(options.min_samples_leaf, 1), options.reg_lambda,
+	    options.reg_alpha, options.min_split_gain, options.subsample, options.colsample_bytree,
+	    (unsigned long long)options.seed);
 	if (options.task == BoostTask::MULTICLASS) {
 		params += " num_class=" + std::to_string(n_classes);
+	}
+	if (options.loss == RegressionLoss::QUANTILE) {
+		params += " alpha=" + std::to_string(options.objective_alpha);
+	}
+	if (options.min_child_weight > 0) {
+		params += " min_sum_hessian_in_leaf=" + std::to_string(options.min_child_weight);
+	}
+	if (options.subsample < 1.0) {
+		params += " bagging_freq=1";
+	}
+	if (!options.categorical_features.empty()) {
+		auto resolved = options.categorical_features;
+		params += " categorical_feature=";
+		for (idx_t i = 0; i < resolved.size(); i++) {
+			if (i > 0) {
+				params += ",";
+			}
+			auto token = resolved[i];
+			bool all_digits = !token.empty();
+			for (char c : token) {
+				if (!std::isdigit(static_cast<unsigned char>(c))) {
+					all_digits = false;
+					break;
+				}
+			}
+			if (all_digits) {
+				params += token;
+			} else {
+				idx_t found = ncol;
+				for (idx_t f = 0; f < options.feature_names.size(); f++) {
+					if (options.feature_names[f] == token) {
+						found = f;
+						break;
+					}
+				}
+				if (found >= static_cast<idx_t>(ncol)) {
+					LGBM_DatasetFree(dataset);
+					throw InvalidInputException("duckboost: unknown categorical feature '%s'", token);
+				}
+				params += std::to_string(found);
+			}
+		}
 	}
 
 	BoosterHandle booster = nullptr;
