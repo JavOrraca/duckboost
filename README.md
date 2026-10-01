@@ -46,10 +46,10 @@ Optional native trainer flags (XGBoost / LightGBM train via vendor C API → dum
 
 ```bash
 # Link real libraries (pip wheels work; set ROOT or rely on auto-detect under ~/.local)
-EXTRA_CMAKE_VARIABLES='-DDUCKBOOST_WITH_XGBOOST=ON -DDUCKBOOST_WITH_LIGHTGBM=ON' make
+EXT_FLAGS='-DDUCKBOOST_WITH_XGBOOST=ON -DDUCKBOOST_WITH_LIGHTGBM=ON' make release
 
 # Compile #ifdef paths without linking vendor libraries
-EXTRA_CMAKE_VARIABLES='-DDUCKBOOST_WITH_XGBOOST=ON -DDUCKBOOST_NATIVE_STUB_ONLY=ON' make
+EXT_FLAGS='-DDUCKBOOST_WITH_XGBOOST=ON -DDUCKBOOST_NATIVE_STUB_ONLY=ON' make release
 ```
 
 CatBoost has no public in-process training C API — use `duckboost_import('catboost', ...)`.
@@ -61,12 +61,14 @@ SELECT * FROM duckboost_build_info();
 SELECT * FROM duckboost_backends();
 ```
 
-Native train tests (linked builds only):
+Native train tests (linked builds only). GitHub Actions workflow **Native trainers** builds with the pinned pip wheels and runs the same test:
 
 ```bash
 export LD_LIBRARY_PATH="$HOME/.local/lib/python3.12/site-packages/xgboost/lib:$HOME/.local/lib/python3.12/site-packages/lightgbm/lib:${LD_LIBRARY_PATH}"
 DUCKBOOST_NATIVE_TRAIN_TEST=1 make test T=test/sql/duckboost/native_train.test
 ```
+
+Before opening a PR that touches C++ sources, run `make format-check` (or `make format-fix`) so CI Format Check stays green.
 
 See [`PACKAGING.md`](PACKAGING.md) for the community-extension descriptor and native-trainer flags.
 
@@ -254,7 +256,7 @@ Split nodes may use `"compare":"equal"` with `threshold`, or `"compare":"in"` wi
 - **Layout**: standalone community extension ([extension-template](https://github.com/duckdb/extension-template)) so optional vendor ML libraries stay out of core DuckDB builds. The `duckdb` submodule tracks DuckDB 2.0 (`v2.0-cyanoptera`).
 - **SQL export** mirrors orbital's `separate_trees` idea so DuckDB can evaluate ensemble members as independent columns.
 - **Reference trainer** is a didactic histogram/quantile-split GBDT (squared-error, absolute-error, quantile, expectile, logistic, and softmax losses) with depth-wise or loss-guided leaf-wise growth, missing-value defaults, L1/L2/`gamma`, sample weights, and early stopping. Set `categorical_features` to comma-separated feature names or zero-based indices to train exact one-vs-rest equality splits on numeric category values. It buffers all rows in memory (peak ~2× for the sorted working copy), trains single-threaded, and is not a replacement for production XGBoost/LightGBM/CatBoost quality — but it exercises the full train → evaluate → inspect → SQL path. For large scoring jobs prefer `duckboost_to_sql` over per-row `duckboost_predict`.
-- **Native LightGBM** maps absolute_error / quantile / lossguide / `categorical_features` / `subsample` (`bagging_freq=1`) / seed. Native XGBoost still focuses on L2 depth-wise trees (plus seed / `max_bin` / sample weights).
+- **Native LightGBM** maps absolute_error / quantile / lossguide / `categorical_features` / `subsample` (`bagging_freq=1`) / seed. Native XGBoost focuses on L2 depth-wise trees (plus seed / `max_bin` / sample weights / `SaveJsonConfig` intercept). Both native backends honor `early_stopping_rounds` + `validation_fraction` (hold out a validation slice; LightGBM uses `early_stopping_round`, XGBoost evaluates each iter and truncates the dump). `class_weight` is folded into sample weights.
 - **Table macros** `duckboost_fit` / `duckboost_score` wrap `duckboost_train` / `duckboost_predict` with `query_table` for a compact SQL workflow.
 - **Split and preprocessing macros** are plain SQL macros registered by the extension. Splits rank rows by a hash of the row's values mixed with `seed`, so they are reproducible and independent of physical row order.
 
@@ -266,4 +268,5 @@ Split nodes may use `"compare":"equal"` with `threshold`, or `"compare":"in"` wi
 - [x] Split helpers (train/test, train/validation/test, v-fold) and preprocessing helpers (dummy/one-hot, integer encoding, rare-level pooling)
 - [x] Missing-value aware splits, sample weights / `class_weight`, early stopping, regularization, and `duckboost_importance`
 - [x] Fail-loud vendor imports, categorical cast semantics, model format v2, deployable `to_sql` (`keep_columns` / `proba`), vendor parity fixtures
+- [x] Native-linked CI, native early stopping, LightGBM `kZeroThreshold` predict parity
 - [ ] Submit [`docs/community_extensions_description.yml`](docs/community_extensions_description.yml) to `duckdb/community-extensions` after DuckDB 2.0 is released

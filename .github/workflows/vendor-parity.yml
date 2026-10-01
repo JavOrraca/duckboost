@@ -12,6 +12,11 @@ on:
     paths:
       - 'scripts/vendor_parity/**'
       - 'test/sql/duckboost/data/parity/**'
+      - 'test/sql/duckboost/vendor_parity.test'
+      - 'src/import.cpp'
+      - 'src/model.cpp'
+      - 'include/duckboost/import.hpp'
+      - 'include/duckboost/model.hpp'
       - '.github/workflows/vendor-parity.yml'
   schedule:
     - cron: '0 6 * * 1'

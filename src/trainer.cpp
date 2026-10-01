@@ -1011,11 +1011,6 @@ BoostModel TrainModel(const vector<double> &y, const vector<vector<double>> &x, 
 	if (options.backend == BoostBackend::LIGHTGBM && options.loss == RegressionLoss::EXPECTILE) {
 		throw NotImplementedException("duckboost: expectile is supported by the reference backend only");
 	}
-	if (options.early_stopping_rounds > 0 || options.validation_fraction > 0) {
-		throw NotImplementedException(
-		    "duckboost: early_stopping_rounds and validation_fraction require backend='reference' (native "
-		    "backends train on every row)");
-	}
 	if (NativeTrainerCompiled(options.backend)) {
 		if (options.class_weight.empty()) {
 			return TrainNative(y, x, options, weights);

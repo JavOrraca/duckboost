@@ -91,10 +91,22 @@ FROM (
 ----
 [0.2, 0.2, 0.2, 0.3, 0.3, 0.2, 0.2, 0.4]
 
-statement error
-SELECT duckboost_train(y, [x1, x2], MAP {'backend': 'xgboost', 'early_stopping_rounds': '3'}) FROM train;
+# Native early stopping holds out validation_fraction and truncates to the best round.
+statement ok
+CREATE TABLE early_xgb AS
+SELECT i::DOUBLE AS x1, ((i % 2) + 0.01 * i)::DOUBLE AS y
+FROM range(40) t(i);
+
+query I
+SELECT length(regexp_extract_all(model, '"split_condition"')) < 50
+FROM (
+	SELECT duckboost_train(y, [x1], MAP {
+		'backend': 'xgboost', 'n_estimators': '50', 'max_depth': '2', 'learning_rate': '0.3',
+		'early_stopping_rounds': '3', 'validation_fraction': '0.3', 'seed': '7'
+	}) AS model FROM early_xgb
+);
 ----
-<REGEX>:.*early_stopping_rounds and validation_fraction require backend='reference'.*
+true
 
 # class_weight is folded into the sample weights for native trainers.
 query I
@@ -187,10 +199,17 @@ SELECT duckboost_train(y, [cat::DOUBLE, num], MAP {'backend': 'lightgbm', 'objec
 ----
 <REGEX>:.*expectile is supported by the reference backend only.*
 
-statement error
-SELECT duckboost_train(y, [cat::DOUBLE, num], MAP {'backend': 'lightgbm', 'validation_fraction': '0.2'}) FROM lgb_rich;
+# LightGBM early stopping (vendor early_stopping_round + valid set).
+query I
+SELECT length(regexp_extract_all(model, 'Tree=')) < 50
+FROM (
+	SELECT duckboost_train(y, [x1], MAP {
+		'backend': 'lightgbm', 'n_estimators': '50', 'max_depth': '2', 'learning_rate': '0.3',
+		'min_samples_leaf': '1', 'early_stopping_rounds': '3', 'validation_fraction': '0.3', 'seed': '7'
+	}) AS model FROM early_xgb
+);
 ----
-<REGEX>:.*early_stopping_rounds and validation_fraction require backend='reference'.*
+true
 
 # CatBoost has no public train C API (or is not compiled in)
 statement error

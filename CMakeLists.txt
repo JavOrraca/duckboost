@@ -73,10 +73,34 @@ if(DUCKBOOST_WITH_XGBOOST)
       HINTS ${XGBOOST_ROOT} ENV XGBOOST_ROOT
       PATH_SUFFIXES lib lib64)
     if(NOT XGBOOST_LIBRARY)
+      # Pip / setup-python wheels are not always under ~/.local (e.g. GitHub
+      # Actions hostedtoolcache). Ask the active interpreter for the package lib
+      # dir.
+      find_package(
+        Python3
+        COMPONENTS Interpreter
+        QUIET)
+      if(Python3_Interpreter_FOUND)
+        execute_process(
+          COMMAND
+            ${Python3_EXECUTABLE} -c
+            "import pathlib,xgboost; print(pathlib.Path(xgboost.__file__).parent/'lib'/'libxgboost.so')"
+          OUTPUT_VARIABLE XGBOOST_PY_LIB
+          OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET
+          RESULT_VARIABLE XGBOOST_PY_STATUS)
+        if(XGBOOST_PY_STATUS EQUAL 0 AND EXISTS "${XGBOOST_PY_LIB}")
+          set(XGBOOST_LIBRARY "${XGBOOST_PY_LIB}")
+        endif()
+      endif()
+    endif()
+    if(NOT XGBOOST_LIBRARY)
       file(
-        GLOB XGBOOST_LIBRARY_CANDIDATES
+        GLOB
+        XGBOOST_LIBRARY_CANDIDATES
         "$ENV{HOME}/.local/lib/python*/site-packages/xgboost/lib/libxgboost.so"
-        "/usr/local/lib/libxgboost.so" "/usr/lib/libxgboost.so")
+        "/opt/hostedtoolcache/Python/*/x64/lib/python*/site-packages/xgboost/lib/libxgboost.so"
+        "/usr/local/lib/libxgboost.so"
+        "/usr/lib/libxgboost.so")
       if(XGBOOST_LIBRARY_CANDIDATES)
         list(GET XGBOOST_LIBRARY_CANDIDATES 0 XGBOOST_LIBRARY)
       endif()
@@ -130,10 +154,29 @@ if(DUCKBOOST_WITH_LIGHTGBM)
       HINTS ${LIGHTGBM_ROOT} ENV LIGHTGBM_ROOT
       PATH_SUFFIXES lib lib64)
     if(NOT LIGHTGBM_LIBRARY)
+      find_package(
+        Python3
+        COMPONENTS Interpreter
+        QUIET)
+      if(Python3_Interpreter_FOUND)
+        execute_process(
+          COMMAND
+            ${Python3_EXECUTABLE} -c
+            "import pathlib,lightgbm; print(pathlib.Path(lightgbm.__file__).parent/'lib'/'lib_lightgbm.so')"
+          OUTPUT_VARIABLE LIGHTGBM_PY_LIB
+          OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET
+          RESULT_VARIABLE LIGHTGBM_PY_STATUS)
+        if(LIGHTGBM_PY_STATUS EQUAL 0 AND EXISTS "${LIGHTGBM_PY_LIB}")
+          set(LIGHTGBM_LIBRARY "${LIGHTGBM_PY_LIB}")
+        endif()
+      endif()
+    endif()
+    if(NOT LIGHTGBM_LIBRARY)
       file(
         GLOB
         LIGHTGBM_LIBRARY_CANDIDATES
         "$ENV{HOME}/.local/lib/python*/site-packages/lightgbm/lib/lib_lightgbm.so"
+        "/opt/hostedtoolcache/Python/*/x64/lib/python*/site-packages/lightgbm/lib/lib_lightgbm.so"
         "/usr/local/lib/lib_lightgbm.so"
         "/usr/lib/lib_lightgbm.so")
       if(LIGHTGBM_LIBRARY_CANDIDATES)

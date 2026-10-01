@@ -1,0 +1,97 @@
+# Build duckboost with pip-wheel XGBoost / LightGBM linked and run native_train.test.
+# Default distribution binaries omit vendor libs; this job is the regression net for
+# the C API train bridges (config intercept, class_weight, early stopping, etc.).
+name: Native trainers
+on:
+  pull_request:
+    paths:
+      - 'src/native_train.cpp'
+      - 'src/trainer.cpp'
+      - 'src/import.cpp'
+      - 'src/model.cpp'
+      - 'include/duckboost/**'
+      - 'CMakeLists.txt'
+      - 'test/sql/duckboost/native_train.test'
+      - 'scripts/vendor_parity/requirements.txt'
+      - '.github/workflows/native-train.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'src/native_train.cpp'
+      - 'src/trainer.cpp'
+      - 'src/import.cpp'
+      - 'src/model.cpp'
+      - 'include/duckboost/**'
+      - 'CMakeLists.txt'
+      - 'test/sql/duckboost/native_train.test'
+      - 'scripts/vendor_parity/requirements.txt'
+      - '.github/workflows/native-train.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-linux-amd64:
+    name: Linked XGBoost / LightGBM (linux_amd64)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: scripts/vendor_parity/requirements.txt
+
+      - name: Install pinned vendor wheels
+        run: |
+          python -m pip install -r scripts/vendor_parity/requirements.txt
+          python - <<'PY'
+          import pathlib, xgboost, lightgbm
+          print('xgboost', xgboost.__version__, pathlib.Path(xgboost.__file__).parent / 'lib')
+          print('lightgbm', lightgbm.__version__, pathlib.Path(lightgbm.__file__).parent / 'lib')
+          PY
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ninja-build ccache
+
+      - name: Build release with native trainers
+        env:
+          GEN: ninja
+          # extension-ci-tools makefile forwards EXT_FLAGS into DuckDB's cmake configure.
+          EXT_FLAGS: '-DDUCKBOOST_WITH_XGBOOST=ON -DDUCKBOOST_WITH_LIGHTGBM=ON'
+          CMAKE_BUILD_PARALLEL_LEVEL: '4'
+        run: |
+          # setup-python installs wheels under hostedtoolcache, not ~/.local — point
+          # CMake at those package roots (CMakeLists also probes `python3` as fallback).
+          export XGBOOST_ROOT="$(python -c 'import pathlib,xgboost; print(pathlib.Path(xgboost.__file__).parent)')"
+          export LIGHTGBM_ROOT="$(python -c 'import pathlib,lightgbm; print(pathlib.Path(lightgbm.__file__).parent)')"
+          echo "XGBOOST_ROOT=${XGBOOST_ROOT}"
+          echo "LIGHTGBM_ROOT=${LIGHTGBM_ROOT}"
+          ls "${XGBOOST_ROOT}/lib" "${LIGHTGBM_ROOT}/lib"
+          # Drop a stale cache so CMAKE options from EXT_FLAGS are not ignored.
+          rm -rf build/release
+          make release
+
+      - name: Run native_train SQLLogic tests
+        env:
+          DUCKBOOST_NATIVE_TRAIN_TEST: '1'
+        run: |
+          XGB_LIB="$(python -c 'import pathlib,xgboost; print(pathlib.Path(xgboost.__file__).parent / "lib")')"
+          XGB_LIBS="$(python -c 'import pathlib,xgboost; print(pathlib.Path(xgboost.__file__).parent.parent / "xgboost.libs")')"
+          LGB_LIB="$(python -c 'import pathlib,lightgbm; print(pathlib.Path(lightgbm.__file__).parent / "lib")')"
+          export LD_LIBRARY_PATH="${XGB_LIB}:${XGB_LIBS}:${LGB_LIB}:${LD_LIBRARY_PATH}"
+          # Statically linked duckboost in unittest (EXTENSION_STATIC_BUILD=1); no LOCAL_EXTENSION_REPO needed.
+          ./build/release/test/unittest "test/sql/duckboost/native_train.test"
