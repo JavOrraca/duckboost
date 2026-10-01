@@ -984,7 +984,7 @@ vector<bool> ResolveCategoricalFeatures(const vector<string> &tokens, const vect
 }
 
 BoostModel TrainReference(const vector<double> &y, const vector<vector<double>> &x, const TrainOptions &options,
-                          const vector<double> &weights_in) {
+                          const vector<double> &weights_in, const vector<bool> &is_validation) {
 	if (y.size() != x.size()) {
 		throw InvalidInputException("duckboost: y/x row count mismatch");
 	}
@@ -1020,24 +1020,9 @@ BoostModel TrainReference(const vector<double> &y, const vector<vector<double>> 
 	auto weights = NormalizeWeights(y, weights_in);
 	SimpleRng rng(options.seed);
 
-	vector<idx_t> all_rows(y.size());
-	std::iota(all_rows.begin(), all_rows.end(), 0);
-	vector<idx_t> train_rows = all_rows;
+	vector<idx_t> train_rows;
 	vector<idx_t> valid_rows;
-	if (options.validation_fraction > 0 && options.early_stopping_rounds > 0 && y.size() >= 4) {
-		auto shuffled = all_rows;
-		for (idx_t i = 0; i < shuffled.size(); i++) {
-			idx_t j = i + rng.Bounded(shuffled.size() - i);
-			std::swap(shuffled[i], shuffled[j]);
-		}
-		idx_t valid_n = MaxValue<idx_t>(
-		    1, static_cast<idx_t>(std::floor(options.validation_fraction * static_cast<double>(y.size()))));
-		valid_n = MinValue<idx_t>(valid_n, y.size() - 1);
-		valid_rows.assign(shuffled.begin(), shuffled.begin() + valid_n);
-		train_rows.assign(shuffled.begin() + valid_n, shuffled.end());
-		std::sort(train_rows.begin(), train_rows.end());
-		std::sort(valid_rows.begin(), valid_rows.end());
-	}
+	ResolveTrainValidRows(y.size(), options, is_validation, train_rows, valid_rows);
 
 	// Global quantile histogram boundaries (and per-row bin ids) are fixed before boosting.
 	auto binnings = BuildFeatureBinnings(x, train_rows, categorical_features, options.max_bins);
@@ -1101,7 +1086,7 @@ BoostModel TrainReference(const vector<double> &y, const vector<vector<double>> 
 				}
 				model.trees.push_back(std::move(tree));
 			}
-			if (!valid_rows.empty()) {
+			if (!valid_rows.empty() && options.early_stopping_rounds > 0) {
 				auto metric = EvalValidMulticlassLogloss(y, prediction, n_classes, valid_rows, weights);
 				if (metric < best_valid - 1e-12) {
 					best_valid = metric;
@@ -1115,7 +1100,8 @@ BoostModel TrainReference(const vector<double> &y, const vector<vector<double>> 
 				}
 			}
 		}
-		if (!valid_rows.empty() && best_rounds > 0 && best_rounds * n_classes < model.trees.size()) {
+		if (!valid_rows.empty() && options.early_stopping_rounds > 0 && best_rounds > 0 &&
+		    best_rounds * n_classes < model.trees.size()) {
 			model.trees.resize(best_rounds * n_classes);
 		}
 		return model;
@@ -1202,7 +1188,7 @@ BoostModel TrainReference(const vector<double> &y, const vector<vector<double>> 
 		}
 		model.trees.push_back(std::move(tree));
 
-		if (!valid_rows.empty()) {
+		if (!valid_rows.empty() && options.early_stopping_rounds > 0) {
 			double metric =
 			    options.task == BoostTask::BINARY
 			        ? EvalValidBinaryLogloss(y, prediction, valid_rows, weights)
@@ -1220,7 +1206,8 @@ BoostModel TrainReference(const vector<double> &y, const vector<vector<double>> 
 		}
 	}
 
-	if (!valid_rows.empty() && best_rounds > 0 && best_rounds < model.trees.size()) {
+	if (!valid_rows.empty() && options.early_stopping_rounds > 0 && best_rounds > 0 &&
+	    best_rounds < model.trees.size()) {
 		model.trees.resize(best_rounds);
 	}
 	return model;
@@ -1253,9 +1240,13 @@ idx_t ResolveClassCount(const vector<double> &y, const TrainOptions &options) {
 }
 
 BoostModel TrainModel(const vector<double> &y, const vector<vector<double>> &x, const TrainOptions &options,
-                      const vector<double> &weights) {
+                      const vector<double> &weights, const vector<bool> &is_validation) {
+	if (!is_validation.empty() && is_validation.size() != y.size()) {
+		throw InvalidInputException("duckboost: is_validation count (%llu) must match row count (%llu)",
+		                            (unsigned long long)is_validation.size(), (unsigned long long)y.size());
+	}
 	if (options.backend == BoostBackend::REFERENCE) {
-		return TrainReference(y, x, options, weights);
+		return TrainReference(y, x, options, weights, is_validation);
 	}
 	if (options.growth_policy == GrowthPolicy::OBLIVIOUS && options.backend != BoostBackend::REFERENCE) {
 		throw NotImplementedException("duckboost: growth_policy='oblivious' requires backend='reference'");
@@ -1279,7 +1270,7 @@ BoostModel TrainModel(const vector<double> &y, const vector<vector<double>> &x, 
 	}
 	if (NativeTrainerCompiled(options.backend)) {
 		if (options.class_weight.empty()) {
-			return TrainNative(y, x, options, weights);
+			return TrainNative(y, x, options, weights, is_validation);
 		}
 		if (options.task == BoostTask::REGRESSION) {
 			throw InvalidInputException("duckboost: class_weight is only supported for binary and multiclass tasks");
@@ -1287,7 +1278,7 @@ BoostModel TrainModel(const vector<double> &y, const vector<vector<double>> &x, 
 		auto native_weights = NormalizeWeights(y, weights);
 		ApplyClassWeights(native_weights, y, options,
 		                  options.task == BoostTask::MULTICLASS ? ResolveClassCount(y, options) : 2);
-		return TrainNative(y, x, options, native_weights);
+		return TrainNative(y, x, options, native_weights, is_validation);
 	}
 	throw NotImplementedException(
 	    "duckboost: native training for backend '%s' is not linked in this build. "

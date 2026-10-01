@@ -21,8 +21,9 @@ bool NativeTrainerLinked(BoostBackend backend);
 
 //! Train using a vendor library when linked; stub / unlinked builds throw NotImplementedException.
 //! weights empty ⇒ unit weights (forwarded to the vendor library when linked).
+//! is_validation empty ⇒ optional random hold-out via options; otherwise per-row external validation.
 BoostModel TrainNative(const vector<double> &y, const vector<vector<double>> &x, const TrainOptions &options,
-                       const vector<double> &weights = {});
+                       const vector<double> &weights = {}, const vector<bool> &is_validation = {});
 
 } // namespace duckboost
 } // namespace duckdb

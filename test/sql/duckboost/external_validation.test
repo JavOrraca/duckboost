@@ -1,0 +1,135 @@
+# name: test/sql/duckboost/external_validation.test
+# description: external is_validation mask for early stopping
+# group: [duckboost]
+
+require duckboost
+
+statement ok
+CREATE TABLE early_ext AS
+SELECT
+	i::DOUBLE AS x1,
+	((i % 2) + 0.01 * i)::DOUBLE AS y,
+	(i % 5 = 0) AS is_validation
+FROM range(40) t(i);
+
+# External validation mask should early-stop below n_estimators
+statement ok
+CREATE TABLE early_ext_models AS
+SELECT duckboost_train(
+	y, [x1], is_validation,
+	MAP {
+		'n_estimators': '50',
+		'max_depth': '2',
+		'learning_rate': '0.3',
+		'early_stopping_rounds': '3',
+		'seed': '7'
+	}
+) AS model
+FROM early_ext;
+
+query I
+SELECT length(regexp_extract_all(model, '"nodes"')) < 50 FROM early_ext_models;
+----
+true
+
+# Cannot combine is_validation with validation_fraction
+statement error
+SELECT duckboost_train(
+	y, [x1], is_validation,
+	MAP {
+		'n_estimators': '10',
+		'early_stopping_rounds': '2',
+		'validation_fraction': '0.2'
+	}
+)
+FROM early_ext;
+----
+<REGEX>:.*cannot combine is_validation with validation_fraction.*
+
+# early_stopping with is_validation requires at least one true row
+statement error
+SELECT duckboost_train(
+	y, [x1], false,
+	MAP {
+		'n_estimators': '10',
+		'early_stopping_rounds': '2'
+	}
+)
+FROM early_ext;
+----
+<REGEX>:.*requires at least one is_validation=true row.*
+
+# NULL is_validation is rejected
+statement error
+SELECT duckboost_train(y, [x1], NULL::BOOLEAN, MAP {'n_estimators': '2'})
+FROM early_ext;
+----
+<REGEX>:.*is_validation cannot be NULL.*
+
+# Weight + is_validation + options signature
+statement ok
+SELECT duckboost_train(
+	y, [x1], 1.0::DOUBLE, is_validation,
+	MAP {
+		'n_estimators': '20',
+		'max_depth': '2',
+		'early_stopping_rounds': '3',
+		'seed': '1'
+	}
+)
+FROM early_ext;
+
+# Without early_stopping, is_validation still holds rows out of fitting (full n_estimators)
+query I
+SELECT length(regexp_extract_all(model, '"nodes"')) = 8
+FROM (
+	SELECT duckboost_train(
+		y, [x1], is_validation,
+		MAP {'n_estimators': '8', 'max_depth': '2', 'seed': '3'}
+	) AS model
+	FROM early_ext
+);
+----
+true
+
+# Works with duckboost_initial_validation_split train+validation rows
+statement ok
+CREATE TABLE penguins AS
+FROM read_csv('data/penguins.csv', nullstr = 'NA')
+WHERE bill_length_mm IS NOT NULL AND sex IS NOT NULL;
+
+statement ok
+CREATE TABLE penguins_tvt AS
+FROM duckboost_initial_validation_split('penguins', prop := [0.6, 0.2], strata := species, seed := 42);
+
+statement ok
+CREATE TABLE penguins_ext_models AS
+SELECT duckboost_train(
+	(sex = 'male')::DOUBLE,
+	[bill_length_mm, bill_depth_mm, flipper_length_mm, body_mass_g],
+	split = 'validation',
+	MAP {
+		'task': 'binary',
+		'n_estimators': '40',
+		'max_depth': '3',
+		'learning_rate': '0.2',
+		'early_stopping_rounds': '5',
+		'seed': '11',
+		'feature_names': 'bill_length_mm,bill_depth_mm,flipper_length_mm,body_mass_g'
+	}
+) AS model
+FROM penguins_tvt
+WHERE split IN ('train', 'validation');
+
+query I
+SELECT
+	duckboost_evaluate_agg(
+		m.model,
+		(s.sex = 'male')::DOUBLE,
+		[s.bill_length_mm, s.bill_depth_mm, s.flipper_length_mm, s.body_mass_g],
+		MAP {'metric': 'accuracy'}
+	) > 0.7
+FROM penguins_ext_models m, penguins_tvt s
+WHERE s.split = 'test';
+----
+true
