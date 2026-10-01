@@ -8,14 +8,14 @@ project:
 
 website:
   title: "duckboost"
-  description: "Gradient-boosted trees, trained and scored in DuckDB SQL."
+  description: "SQL-native histogram GBDT in DuckDB — train, score, import vendor dumps, export plain SQL."
   # no trailing slash: Quarto joins it with the leading "/" of project-relative image paths
   site-url: https://javorraca.github.io/duckboost
   repo-url: https://github.com/JavOrraca/duckboost
   repo-actions: [edit, issue]
   favicon: images/favicon.png
   image: /images/duckboost-banner.png
-  image-alt: "duckboost: gradient-boosted trees, trained and scored in DuckDB SQL"
+  image-alt: "duckboost: SQL-native gradient-boosted trees in DuckDB"
   open-graph: true
   twitter-card:
     card-style: summary_large_image
@@ -34,6 +34,8 @@ website:
         href: getting-started.qmd
       - section: Vignettes
         contents:
+          - text: Native histogram trainer
+            href: vignettes/native-trainer.qmd
           - text: Train, predict, export
             href: vignettes/train-predict-export.qmd
           - text: Splitting data and preprocessing

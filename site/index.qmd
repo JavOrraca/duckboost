@@ -7,51 +7,62 @@ image-alt: "duckboost: gradient-boosted trees, trained and scored in DuckDB SQL"
 
 <img src="images/duckboost-hex.svg" class="home-hex" alt="duckboost hex logo">
 
-`duckboost` is an experimental [DuckDB](https://duckdb.org/) extension for **in-database gradient boosting**. It trains and scores tree ensembles inside DuckDB, imports dumps from XGBoost, LightGBM, and CatBoost, and exports the trees as ordinary SQL so scoring does not need the extension.
+`duckboost` is an experimental [DuckDB](https://duckdb.org/) extension for **SQL-native gradient boosting**. Train a histogram GBDT inside DuckDB with zero vendor libraries, score with SQL functions, export trees as ordinary SQL, and optionally import XGBoost / LightGBM / CatBoost dumps when you need their full toolbox.
+
+::: {.callout-note}
+## Status
+Experimental. Builds against DuckDB 2.0 alpha (`v2.0-cyanoptera`). PyPI / CRAN DuckDB 1.x cannot load this extension yet. Community `INSTALL` waits on the DuckDB 2.0 release.
+:::
 
 ## Why train inside the database
 
-[Orbital](https://posit-dev.github.io/orbital/) turns an already-trained Python or R pipeline into SQL so production scoring can stay in the warehouse. `duckboost` pulls the training step into DuckDB as well:
+[Orbital](https://posit-dev.github.io/orbital/) turns an already-trained Python or R pipeline into SQL so production scoring can stay in the warehouse. `duckboost` pulls the **training** step into DuckDB as well:
 
-1. Train with a selectable boosting backend.
-2. Measure fit quality in SQL.
+1. Train with the built-in native histogram trainer (or an optional vendor backend / imported dump).
+2. Measure fit quality in SQL (`duckboost_evaluate_agg`, `duckboost_importance`).
 3. Export the trees with `duckboost_to_sql` (`CASE` expressions, optionally one column per tree).
-4. Score later with `duckboost_predict`, or run the exported SQL in any DuckDB session.
+4. Score later with `duckboost_predict`, or run the exported SQL in any DuckDB session — even without the extension.
 
-The built-in **reference** backend is a small histogram-style gradient booster (squared error, logistic, and softmax loss). It is there so the train → evaluate → SQL path works with no extra libraries. It is not a substitute for a production XGBoost, LightGBM, or CatBoost model. Prefer `duckboost_import()` when you already train outside DuckDB.
+## Native-first, import when you need to
+
+The default path is the **native histogram trainer** (`backend = 'native'`, also accepted as `'reference'` for compatibility):
+
+- Global quantile pre-binning and histogram split finding
+- Ordered target-statistic categorical partitions (`EQUAL` / `IN`)
+- Depth-wise, loss-guided, or oblivious / symmetric growth
+- Squared-error, absolute-error, quantile, expectile, logistic, and softmax losses
+- Missing-value defaults, L1/L2/`gamma`, sample weights, early stopping
+
+It is aimed at SQL-native workflows and moderate data sizes, not at replacing LightGBM or XGBoost at every scale. Prefer `duckboost_import()` when you already train outside DuckDB or need vendor features duckboost does not expose.
+
+[Use cases and choosing a trainer](use-cases.qmd) · [Native trainer vignette](vignettes/native-trainer.qmd)
 
 ## Use cases
-
-duckboost is for people and systems that already have their data in DuckDB and want boosted-tree models without leaving SQL:
 
 - **SQL-first analysts and pipelines** that train, evaluate, and retrain as ordinary queries, including one model per group with `GROUP BY`.
 - **Scoring without an ML runtime**: `duckboost_to_sql` turns a model into a plain `SELECT` for views, dbt models, or any DuckDB session.
 - **Teams that train in Python or R** with XGBoost, LightGBM, or CatBoost and want to score next to the data with `duckboost_import`.
-- **Teaching, prototyping, and tests**, where the built-in trainer gives the same model on every run with no dependencies.
-
-[Use cases and choosing a trainer](use-cases.qmd) goes into more detail, including when duckboost is not the right tool and how the built-in trainer compares with XGBoost or LightGBM inside DuckDB and with training outside DuckDB and importing.
+- **Teaching, prototyping, and CI**, where the native trainer gives a deterministic model with no extra dependencies.
 
 ## What you can do
 
 | Piece | What it does |
 | --- | --- |
-| Reference GBDT | `duckboost_train` with `backend = 'reference'` for regression, binary, and multiclass labels |
+| Native GBDT | `duckboost_train` with `backend = 'native'` (default) for regression, binary, and multiclass |
 | Dump import | `duckboost_import` for XGBoost `dump_model` JSON, LightGBM `save_model` text, and CatBoost `save_model` JSON |
 | In-process score | `duckboost_predict` and `duckboost_predict_proba` |
-| Metrics | `duckboost_evaluate` (one row) and `duckboost_evaluate_agg` (a whole table) |
+| Metrics & importance | `duckboost_evaluate` / `duckboost_evaluate_agg`, `duckboost_importance` |
 | SQL export | `duckboost_to_sql` writes a query that reproduces those predictions |
 
-Optional in-process XGBoost and LightGBM training is a compile-time flag (`DUCKBOOST_WITH_XGBOOST`, `DUCKBOOST_WITH_LIGHTGBM`). CatBoost has no public training C API, so it is import-only. A default `make` build ships the reference trainer and dump import, not the vendor libraries.
+Optional in-process XGBoost and LightGBM training is a compile-time flag (`DUCKBOOST_WITH_XGBOOST`, `DUCKBOOST_WITH_LIGHTGBM`). CatBoost has no public training C API, so it is import-only. A default `make` build ships the native trainer and dump import, not the vendor libraries.
 
 ## DuckDB 2.0
 
-This repository tracks the DuckDB 2.0 alpha (`v2.0-cyanoptera` in the `duckdb` submodule). The PyPI and CRAN `duckdb` packages are still 1.x and cannot load this extension. Build the shell in this repo and run examples with `build/release/duckdb`.
-
-Once DuckDB 2.0 is released, the plan is to publish the community descriptor so a released DuckDB can install it with:
+This repository tracks the DuckDB 2.0 alpha. Build the shell in this repo and run examples with `build/release/duckdb`. Until community install is available:
 
 ```sql
-INSTALL duckboost FROM community;
+-- see Getting started for the unsigned local load path
 LOAD duckboost;
 ```
 
-Until then, follow [Getting started](getting-started.qmd) and load the local unsigned extension.
+[Getting started](getting-started.qmd) walks through the build and a hello-world train/predict.

@@ -17,6 +17,8 @@
 namespace duckdb {
 namespace duckboost {
 
+//! REFERENCE is the built-in native histogram trainer. JSON still serializes as "reference";
+//! train/import options also accept the preferred alias "native".
 enum class BoostBackend : uint8_t { REFERENCE = 0, XGBOOST = 1, LIGHTGBM = 2, CATBOOST = 3 };
 
 enum class BoostTask : uint8_t { REGRESSION = 0, BINARY = 1, MULTICLASS = 2 };

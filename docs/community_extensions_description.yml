@@ -4,15 +4,15 @@
 
 extension:
   name: duckboost
-  description: In-database gradient boosting with SQL export (reference GBDT + XGBoost/LightGBM/CatBoost dump import)
+  description: SQL-native histogram GBDT in DuckDB with vendor dump import and plain-SQL export
   version: 0.1.0
   language: C++
   build: cmake
   license: MIT
   maintainers:
     - JavOrraca
-  # Default community builds ship without vendor ML libraries (import + reference trainer).
-  # Optional native trainers are compile-time flags for custom builds.
+  # Default community builds ship without vendor ML libraries (import + native trainer).
+  # Optional in-process XGBoost / LightGBM trainers are compile-time flags for custom builds.
   requires_toolchains: "python3"
 
 repo:
@@ -28,17 +28,24 @@ docs:
     CREATE TABLE models AS
     SELECT duckboost_train(
       y, [x1, x2],
-      MAP {'n_estimators': '20', 'max_depth': '3', 'learning_rate': '0.1', 'feature_names': 'x1,x2'}
+      MAP {
+        'backend': 'native',
+        'n_estimators': '20',
+        'max_depth': '3',
+        'learning_rate': '0.1',
+        'feature_names': 'x1,x2'
+      }
     ) AS model
     FROM train;
     SELECT duckboost_predict(model, [x1, x2]) AS pred
     FROM models, train
     LIMIT 5;
   extended_description: |
-    `duckboost` trains and evaluates tree ensembles inside DuckDB, imports XGBoost /
-    LightGBM / CatBoost dumps, and exports orbital-style SQL (`duckboost_to_sql`) for
-    inference without the extension.
+    `duckboost` trains a dependency-free histogram GBDT inside DuckDB
+    (`backend = 'native'`, alias `'reference'`), evaluates and inspects models in SQL,
+    imports XGBoost / LightGBM / CatBoost dumps, and exports orbital-style SQL
+    (`duckboost_to_sql`) for inference without the extension.
 
-    Default community binaries use the built-in reference GBDT trainer plus dump import.
+    Default community binaries ship the native trainer plus dump import.
     Optional in-process XGBoost / LightGBM training requires rebuilding with
     `DUCKBOOST_WITH_XGBOOST` / `DUCKBOOST_WITH_LIGHTGBM`. CatBoost is import-only.

@@ -37,13 +37,13 @@ from _helpers.duckrun import show
 
 show("""
 LOAD 'build/release/extension/duckboost/duckboost.duckdb_extension';
-SELECT backend, training_supported
+SELECT backend, training_supported, notes
 FROM duckboost_backends()
 ORDER BY backend;
 """)
 ```
 
-`training_supported` is true only for backends this binary can train in-process. A default `make` enables the reference trainer and leaves XGBoost, LightGBM, and CatBoost as import-only.
+`training_supported` is true only for backends this binary can train in-process. A default `make` enables the native histogram trainer (`backend` column still reads `reference` in `duckboost_backends()` / model JSON; pass `backend = 'native'` in train options). XGBoost, LightGBM, and CatBoost stay import-only unless you linked the vendor libraries.
 
 ## Hello world
 
@@ -62,7 +62,13 @@ FROM range(40) t(i);
 CREATE TABLE models AS
 SELECT duckboost_train(
   y, [x1, x2],
-  MAP {'n_estimators': '20', 'max_depth': '3', 'learning_rate': '0.1', 'feature_names': 'x1,x2'}
+  MAP {
+    'backend': 'native',
+    'n_estimators': '20',
+    'max_depth': '3',
+    'learning_rate': '0.1',
+    'feature_names': 'x1,x2'
+  }
 ) AS model
 FROM train;
 SELECT duckboost_predict(model, [x1, x2]) AS pred
@@ -73,6 +79,7 @@ LIMIT 5;
 
 ## Next steps
 
-- [Splitting data and preprocessing](vignettes/split-and-preprocess.qmd) explains train/test versus train/validation/test versus cross-validation, and shows the split, encoding, and imputation helpers.
-- [Example datasets: iris and penguins](vignettes/datasets.qmd) trains multiclass, binary, and regression models on the two CSV files in `data/`, with one-hot encoding, a train/validation/test split, and a grid search in SQL.
-- [Train, predict, export](vignettes/train-predict-export.qmd) exports a model to plain SQL and scores it without the extension.
+- [Native trainer](vignettes/native-trainer.qmd) — categoricals, early stopping, importance, SQL export, and small benchmarks.
+- [Splitting data and preprocessing](vignettes/split-and-preprocess.qmd) — train/test splits and encoding helpers.
+- [Example datasets: iris and penguins](vignettes/datasets.qmd) — multiclass, binary, and regression on real CSVs.
+- [Train, predict, export](vignettes/train-predict-export.qmd) — export a model to plain SQL and score without calling the extension.

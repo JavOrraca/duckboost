@@ -1,0 +1,373 @@
+---
+title: "Native histogram trainer"
+---
+
+The default duckboost trainer is a **dependency-free histogram GBDT**. Pass `backend = 'native'` (or the compatible alias `'reference'`). Model JSON still stores `"backend":"reference"` so older dumps keep loading.
+
+This page walks through a realistic SQL path — categoricals, early stopping, feature importance, SQL export — then publishes small holdout benchmarks against the optional in-process LightGBM backend when it is linked.
+
+## What the native trainer does
+
+| Capability | Option / behavior |
+| --- | --- |
+| Global quantile bins | `max_bins` (default 256); thresholds fixed once from training rows |
+| Categoricals | `categorical_features`: ordered `g/h` partitions → `EQUAL` or `IN` |
+| Growth | `growth_policy`: `depthwise` (default), `lossguide`, `oblivious` / `symmetric` |
+| Losses | squared / absolute / quantile / expectile; binary logistic; multiclass softmax |
+| Regularization | `reg_lambda`, `reg_alpha`, `min_split_gain` (`gamma`) |
+| Sampling | `subsample`, `colsample_bytree`, `class_weight`, `seed` |
+| Early stopping | `early_stopping_rounds` + `validation_fraction` |
+| Missing values | Feature `NULL` → NaN; per-split `default_left` |
+
+Limits to keep in mind: single-threaded, materializes all training rows, no monotonic constraints or CatBoost CTRs. See [Use cases](../use-cases.qmd).
+
+## End-to-end: penguins with a categorical
+
+Encode island as an integer category, mark it categorical, hold out 20% for early stopping, then inspect importance and export SQL.
+
+```{python}
+#| echo: false
+#| output: asis
+from _helpers.duckrun import show
+
+show("""
+LOAD duckboost;
+CREATE TABLE penguins AS
+SELECT
+  body_mass_g::DOUBLE AS y,
+  bill_length_mm::DOUBLE AS bill_length_mm,
+  bill_depth_mm::DOUBLE AS bill_depth_mm,
+  flipper_length_mm::DOUBLE AS flipper_length_mm,
+  CASE island
+    WHEN 'Biscoe' THEN 0.0
+    WHEN 'Dream' THEN 1.0
+    WHEN 'Torgersen' THEN 2.0
+  END AS island_id
+FROM read_csv('data/penguins.csv', nullstr = 'NA')
+WHERE body_mass_g IS NOT NULL
+  AND bill_length_mm IS NOT NULL
+  AND bill_depth_mm IS NOT NULL
+  AND flipper_length_mm IS NOT NULL
+  AND island IS NOT NULL;
+
+CREATE TABLE models AS
+SELECT duckboost_train(
+  y,
+  [bill_length_mm, bill_depth_mm, flipper_length_mm, island_id],
+  MAP {
+    'backend': 'native',
+    'n_estimators': '80',
+    'max_depth': '4',
+    'learning_rate': '0.1',
+    'min_samples_leaf': '5',
+    'reg_lambda': '1.0',
+    'early_stopping_rounds': '8',
+    'validation_fraction': '0.2',
+    'seed': '42',
+    'feature_names': 'bill_length_mm,bill_depth_mm,flipper_length_mm,island',
+    'categorical_features': 'island'
+  }
+) AS model
+FROM penguins;
+
+SELECT
+  model LIKE '%"backend":"reference"%' AS json_backend_reference,
+  length(regexp_extract_all(model, '"is_leaf":false')) AS n_splits,
+  round(duckboost_evaluate_agg(
+    model, y,
+    [bill_length_mm, bill_depth_mm, flipper_length_mm, island_id],
+    MAP {'metric': 'rmse'}
+  ), 1) AS training_rmse_g
+FROM models, penguins
+GROUP BY model;
+
+SET VARIABLE native_model = (SELECT model FROM models);
+SELECT variable, round(importance, 3) AS importance, frequency
+FROM duckboost_importance(getvariable('native_model'))
+ORDER BY importance DESC;
+""")
+```
+
+Export for scoring without calling the extension:
+
+```{python}
+#| echo: false
+#| output: asis
+from _helpers.duckrun import show
+
+show("""
+LOAD duckboost;
+CREATE TABLE penguins AS
+SELECT
+  body_mass_g::DOUBLE AS y,
+  bill_length_mm::DOUBLE AS bill_length_mm,
+  bill_depth_mm::DOUBLE AS bill_depth_mm,
+  flipper_length_mm::DOUBLE AS flipper_length_mm,
+  CASE island
+    WHEN 'Biscoe' THEN 0.0
+    WHEN 'Dream' THEN 1.0
+    WHEN 'Torgersen' THEN 2.0
+  END AS island_id
+FROM read_csv('data/penguins.csv', nullstr = 'NA')
+WHERE body_mass_g IS NOT NULL
+  AND bill_length_mm IS NOT NULL
+  AND bill_depth_mm IS NOT NULL
+  AND flipper_length_mm IS NOT NULL
+  AND island IS NOT NULL;
+
+CREATE TABLE models AS
+SELECT duckboost_train(
+  y,
+  [bill_length_mm, bill_depth_mm, flipper_length_mm, island_id],
+  MAP {
+    'backend': 'native',
+    'n_estimators': '20',
+    'max_depth': '3',
+    'learning_rate': '0.15',
+    'feature_names': 'bill_length_mm,bill_depth_mm,flipper_length_mm,island',
+    'categorical_features': 'island'
+  }
+) AS model
+FROM penguins;
+
+SELECT left(sql, 120) AS sql_prefix
+FROM (
+  SELECT duckboost_to_sql(
+    model,
+    'penguins',
+    ['bill_length_mm', 'bill_depth_mm', 'flipper_length_mm', 'island_id'],
+    MAP {'separate_trees': 'false', 'prediction_alias': 'pred', 'keep_columns': 'y'}
+  ) AS sql
+  FROM models
+);
+""")
+```
+
+## Oblivious trees
+
+CatBoost-style symmetric growth shares one split definition per depth. Useful when you want a compact, regular tree shape.
+
+```{python}
+#| echo: false
+#| output: asis
+from _helpers.duckrun import show
+
+show("""
+LOAD duckboost;
+CREATE TABLE train AS
+SELECT
+  (i % 7)::DOUBLE AS x1,
+  (i % 5)::DOUBLE AS x2,
+  ((i % 7) + 0.5 * (i % 5))::DOUBLE AS y
+FROM range(200) t(i);
+
+CREATE TABLE models AS
+SELECT duckboost_train(
+  y, [x1, x2],
+  MAP {
+    'backend': 'native',
+    'growth_policy': 'oblivious',
+    'n_estimators': '15',
+    'max_depth': '3',
+    'learning_rate': '0.2',
+    'min_samples_leaf': '4'
+  }
+) AS model
+FROM train;
+
+SELECT
+  length(regexp_extract_all(model, '"is_leaf":false')) AS internal_nodes,
+  length(regexp_extract_all(model, '"is_leaf":true')) AS leaves,
+  round(duckboost_evaluate_agg(model, y, [x1, x2], MAP {'metric': 'rmse'}), 3) AS rmse
+FROM models, train
+GROUP BY model;
+""")
+```
+
+## Published benchmarks
+
+Holdout metrics on two repository CSVs. Splits are deterministic (hash of the feature vector + seed) so numbers are stable across renders. When this binary has LightGBM linked, the same grid is also trained with `backend = 'lightgbm'` for a side-by-side check — not a claim that native wins every time.
+
+```{python}
+#| echo: false
+#| output: asis
+from _helpers.duckrun import show
+
+show("""
+LOAD duckboost;
+
+CREATE TABLE iris AS
+SELECT
+  (species = 'setosa')::DOUBLE AS y,
+  [sepal_length, sepal_width, petal_length, petal_width] AS features,
+  hash(sepal_length, sepal_width, petal_length, petal_width, 7) AS h
+FROM read_csv('data/iris.csv');
+
+CREATE TABLE iris_split AS
+SELECT *, CASE WHEN h % 5 = 0 THEN 'test' ELSE 'train' END AS split
+FROM iris;
+
+CREATE TABLE iris_native AS
+SELECT duckboost_train(
+  y, features,
+  MAP {
+    'backend': 'native',
+    'task': 'binary',
+    'n_estimators': '40',
+    'max_depth': '3',
+    'learning_rate': '0.2',
+    'min_samples_leaf': '2',
+    'seed': '7'
+  }
+) AS model
+FROM iris_split WHERE split = 'train';
+
+SELECT
+  'iris-setosa' AS problem,
+  'native' AS trainer,
+  round(duckboost_evaluate_agg(m.model, t.y, t.features, MAP {'metric': 'accuracy'}), 3) AS holdout_metric,
+  'accuracy' AS metric
+FROM iris_native m, iris_split t
+WHERE t.split = 'test';
+""")
+```
+
+```{python}
+#| echo: false
+#| output: asis
+from _helpers.duckrun import show
+
+show("""
+LOAD duckboost;
+
+CREATE TABLE penguins AS
+SELECT
+  body_mass_g::DOUBLE AS y,
+  [bill_length_mm, bill_depth_mm, flipper_length_mm, (sex = 'male')::DOUBLE] AS features,
+  hash(bill_length_mm, bill_depth_mm, flipper_length_mm, sex, 11) AS h
+FROM read_csv('data/penguins.csv', nullstr = 'NA')
+WHERE body_mass_g IS NOT NULL
+  AND bill_length_mm IS NOT NULL
+  AND sex IS NOT NULL;
+
+CREATE TABLE penguins_split AS
+SELECT *, CASE WHEN h % 5 = 0 THEN 'test' ELSE 'train' END AS split
+FROM penguins;
+
+CREATE TABLE penguins_native AS
+SELECT duckboost_train(
+  y, features,
+  MAP {
+    'backend': 'native',
+    'n_estimators': '60',
+    'max_depth': '4',
+    'learning_rate': '0.1',
+    'min_samples_leaf': '4',
+    'reg_lambda': '1.0',
+    'seed': '11'
+  }
+) AS model
+FROM penguins_split WHERE split = 'train';
+
+SELECT
+  'penguins-body-mass' AS problem,
+  'native' AS trainer,
+  round(duckboost_evaluate_agg(m.model, t.y, t.features, MAP {'metric': 'rmse'}), 1) AS holdout_metric,
+  'rmse_g' AS metric
+FROM penguins_native m, penguins_split t
+WHERE t.split = 'test';
+""")
+```
+
+Optional LightGBM comparison (skipped automatically when that backend is not linked):
+
+```{python}
+#| echo: false
+#| output: asis
+from _helpers.duckrun import show, run_sql, parse_json_sets
+
+rows = parse_json_sets(
+    run_sql(
+        """
+LOAD duckboost;
+SELECT CAST(enabled AS BOOLEAN) AS enabled
+FROM duckboost_build_info()
+WHERE name = 'native_lightgbm_linked';
+""",
+        json_output=True,
+    )
+)
+enabled = bool(rows and rows[0] and rows[0][0].get("enabled"))
+
+if not enabled:
+    print(
+        "```text\n"
+        "LightGBM is not linked in this build (native_lightgbm_linked = false).\n"
+        "Rebuild with DUCKBOOST_WITH_LIGHTGBM to refresh the side-by-side numbers.\n"
+        "```"
+    )
+else:
+    show(
+        """
+LOAD duckboost;
+
+CREATE TABLE penguins AS
+SELECT
+  body_mass_g::DOUBLE AS y,
+  [bill_length_mm, bill_depth_mm, flipper_length_mm, (sex = 'male')::DOUBLE] AS features,
+  hash(bill_length_mm, bill_depth_mm, flipper_length_mm, sex, 11) AS h
+FROM read_csv('data/penguins.csv', nullstr = 'NA')
+WHERE body_mass_g IS NOT NULL
+  AND bill_length_mm IS NOT NULL
+  AND sex IS NOT NULL;
+
+CREATE TABLE penguins_split AS
+SELECT *, CASE WHEN h % 5 = 0 THEN 'test' ELSE 'train' END AS split
+FROM penguins;
+
+CREATE TABLE trainer_models AS
+SELECT 'native' AS trainer, duckboost_train(
+  y, features,
+  MAP {
+    'backend': 'native',
+    'n_estimators': '60',
+    'max_depth': '4',
+    'learning_rate': '0.1',
+    'min_samples_leaf': '4',
+    'reg_lambda': '1.0',
+    'seed': '11'
+  }
+) AS model
+FROM penguins_split WHERE split = 'train'
+UNION ALL
+SELECT 'lightgbm' AS trainer, duckboost_train(
+  y, features,
+  MAP {
+    'backend': 'lightgbm',
+    'n_estimators': '60',
+    'max_depth': '4',
+    'learning_rate': '0.1',
+    'min_samples_leaf': '4',
+    'seed': '11'
+  }
+) AS model
+FROM penguins_split WHERE split = 'train';
+
+SELECT
+  b.trainer,
+  round(duckboost_evaluate_agg(b.model, t.y, t.features, MAP {'metric': 'rmse'}), 1) AS holdout_rmse_g
+FROM trainer_models b, penguins_split t
+WHERE t.split = 'test'
+GROUP BY b.trainer, b.model
+ORDER BY b.trainer;
+"""
+    )
+```
+
+These figures are **smoke-level evidence**, not a bake-off. They show the native trainer learns useful structure on the shipped CSVs and stays in the same ballpark as LightGBM under a small shared grid when that backend is available.
+
+## Next
+
+- [SQL reference](../reference.qmd) for the full option map
+- [Import model dumps](import-dumps.qmd) when you outgrow the native surface
+- [Train, predict, export](train-predict-export.qmd) for extension-free scoring
