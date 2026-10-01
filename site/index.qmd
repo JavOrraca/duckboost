@@ -44,6 +44,17 @@ It is aimed at SQL-native workflows and moderate data sizes, not at replacing Li
 - **Teams that train in Python or R** with XGBoost, LightGBM, or CatBoost and want to score next to the data with `duckboost_import`.
 - **Teaching, prototyping, and CI**, where the native trainer gives a deterministic model with no extra dependencies.
 
+## Practice datasets
+
+The repo ships two small CSVs under [`data/`](https://github.com/JavOrraca/duckboost/tree/main/data) so examples stay reproducible without downloads:
+
+| File | Rows | Good for |
+| --- | --- | --- |
+| [`iris.csv`](https://github.com/JavOrraca/duckboost/blob/main/data/iris.csv) | 150 | Multiclass species, binary setosa detection |
+| [`penguins.csv`](https://github.com/JavOrraca/duckboost/blob/main/data/penguins.csv) | 344 | Body-mass regression, binary sex, species classification |
+
+Read penguins with `nullstr = 'NA'`. [Getting started](getting-started.qmd) fits a first penguins model; the [example datasets vignette](vignettes/datasets.qmd) walks through train/test splits for both files.
+
 ## What you can do
 
 | Piece | What it does |
@@ -65,4 +76,4 @@ This repository tracks the DuckDB 2.0 alpha. Build the shell in this repo and ru
 LOAD duckboost;
 ```
 
-[Getting started](getting-started.qmd) walks through the build and a hello-world train/predict.
+[Getting started](getting-started.qmd) walks through the build and a first penguins regression.
