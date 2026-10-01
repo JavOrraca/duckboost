@@ -99,3 +99,18 @@ DUCKBOOST_NATIVE_TRAIN_TEST=1 make test T=test/sql/duckboost/native_train.test
 ```
 
 Vendor parity fixture regeneration also runs on PRs that touch `src/import.cpp` / `src/model.cpp` (not only the generator or committed probes).
+
+## GitHub Pages (`site/`)
+
+`.github/workflows/publish-docs.yml` renders `site/` with Quarto and deploys to Pages. It installs Jupyter but does **not** build DuckDB. Executable examples are stored in `site/_freeze` (`execute.freeze: auto`). Editing any `.qmd` that contains `{python}` cells changes that page's freeze hash and forces re-execution in CI — pages that call `site/_helpers/duckrun.py` then fail unless freeze is refreshed.
+
+After changing those pages:
+
+```bash
+make
+python3 -m venv .venv-quarto
+.venv-quarto/bin/pip install jupyter nbformat nbclient ipykernel
+QUARTO_PYTHON=$PWD/.venv-quarto/bin/python quarto render site
+python3 scripts/check_site_freeze.py   # also runs in Publish docs CI
+git add site/_freeze && git commit
+```

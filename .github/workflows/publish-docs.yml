@@ -1,7 +1,12 @@
 # Publish the Quarto site in site/ with GitHub's Pages deployment.
 # Pages is configured to build and deploy from GitHub Actions (not a gh-pages branch).
-# Executed examples are stored in site/_freeze, so rendering does not run SQL
-# and does not build DuckDB.
+#
+# Executable examples are stored in site/_freeze. With execute.freeze: auto, any edit to a
+# page that contains ```{python} cells invalidates that page's freeze and Quarto will try
+# to re-run the cells. Pages that call site/_helpers/duckrun.py need the release DuckDB
+# binary, which this workflow does not build. After changing those pages, refresh freeze
+# locally (`make && python3 -m pip install jupyter && quarto render site`) and commit
+# site/_freeze/** before merging to main.
 name: Publish docs
 on:
   push:
@@ -9,6 +14,7 @@ on:
       - main
     paths:
       - 'site/**'
+      - 'scripts/check_site_freeze.py'
       - '.github/workflows/publish-docs.yml'
   workflow_dispatch:
 
@@ -29,10 +35,23 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Quarto's jupyter engine imports nbformat even when freeze hits some pages; pure-Python
+      # pages (e.g. benchmarks.qmd) may also re-execute without DuckDB.
+      - name: Install Jupyter for Quarto
+        run: python3 -m pip install --upgrade pip jupyter nbformat nbclient ipykernel
+
       - name: Set up Quarto
         uses: quarto-dev/quarto-actions/setup@v2
         with:
           version: "1.10.18"
+
+      - name: Check committed freeze for duckrun pages
+        run: python3 scripts/check_site_freeze.py
 
       - name: Render Quarto project
         uses: quarto-dev/quarto-actions/render@v2
