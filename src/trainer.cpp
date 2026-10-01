@@ -545,10 +545,86 @@ double LeafSplitGain(const vector<vector<double>> &x, const vector<double> &grad
 	return std::isfinite(gain) && gain > 0 ? gain : 0;
 }
 
+struct ObliviousLeafHist {
+	GradStat parent;
+	GradStat missing_stat;
+	idx_t missing_count = 0;
+	idx_t present_count = 0;
+	vector<GradStat> hist;
+	vector<idx_t> hist_count;
+};
+
+ObliviousLeafHist BuildObliviousLeafHist(idx_t feature, idx_t n_bins, const vector<vector<uint32_t>> &bins,
+                                         const vector<double> &gradients, const vector<double> &hessians,
+                                         const vector<idx_t> &rows) {
+	ObliviousLeafHist leaf;
+	leaf.parent = SumStats(gradients, hessians, rows);
+	leaf.hist.assign(n_bins, {});
+	leaf.hist_count.assign(n_bins, 0);
+	for (auto row : rows) {
+		auto bin = bins[row][feature];
+		if (bin == MISSING_BIN) {
+			leaf.missing_stat.Add(gradients[row], hessians[row]);
+			leaf.missing_count++;
+			continue;
+		}
+		if (bin >= n_bins) {
+			continue;
+		}
+		leaf.hist[bin].Add(gradients[row], hessians[row]);
+		leaf.hist_count[bin]++;
+		leaf.present_count++;
+	}
+	return leaf;
+}
+
+//! Gain for threshold thresholds[threshold_idx] on one oblivious leaf, from its histogram.
+double ObliviousHistogramLeafGain(const ObliviousLeafHist &leaf, idx_t threshold_idx, bool default_left,
+                                  const TrainOptions &options) {
+	if (leaf.present_count < 2 || threshold_idx + 1 >= leaf.hist.size()) {
+		return 0;
+	}
+	GradStat left_present;
+	idx_t left_count = 0;
+	for (idx_t b = 0; b <= threshold_idx; b++) {
+		left_present.Add(leaf.hist[b]);
+		left_count += leaf.hist_count[b];
+	}
+	auto right_count = leaf.present_count - left_count;
+	if (left_count == 0 || right_count == 0) {
+		return 0;
+	}
+	auto right_present = leaf.parent.Without(left_present).Without(leaf.missing_stat);
+	GradStat left;
+	GradStat right;
+	idx_t left_rows;
+	idx_t right_rows;
+	if (default_left) {
+		left = left_present;
+		left.Add(leaf.missing_stat);
+		right = right_present;
+		left_rows = left_count + leaf.missing_count;
+		right_rows = right_count;
+	} else {
+		left = left_present;
+		right = right_present;
+		right.Add(leaf.missing_stat);
+		left_rows = left_count;
+		right_rows = right_count + leaf.missing_count;
+	}
+	if (!ChildFeasible(left, left_rows, options) || !ChildFeasible(right, right_rows, options)) {
+		return 0;
+	}
+	auto gain = SplitGain(left, right, leaf.parent, options);
+	return std::isfinite(gain) && gain > 0 ? gain : 0;
+}
+
 //! CatBoost-style symmetric trees: one shared (feature, threshold) per depth level.
-void GrowOblivious(BoostTree &tree, const vector<vector<double>> &x, const vector<FeatureBinning> &binnings,
-                   const vector<double> &gradients, const vector<double> &hessians, const vector<idx_t> &rows,
-                   const vector<idx_t> &feature_subset, const TrainOptions &options) {
+//! Continuous candidates are scored from precomputed global bins (same path as depthwise/lossguide).
+void GrowOblivious(BoostTree &tree, const vector<vector<double>> &x, const vector<vector<uint32_t>> &bins,
+                   const vector<FeatureBinning> &binnings, const vector<double> &gradients,
+                   const vector<double> &hessians, const vector<idx_t> &rows, const vector<idx_t> &feature_subset,
+                   const TrainOptions &options) {
 	auto root_stat = SumStats(gradients, hessians, rows);
 	BuildLeaf(tree, LeafWeight(root_stat, options));
 
@@ -560,23 +636,27 @@ void GrowOblivious(BoostTree &tree, const vector<vector<double>> &x, const vecto
 		SplitCandidate best;
 		double best_total = -std::numeric_limits<double>::infinity();
 
-		// Evaluate shared continuous candidates from global histogram boundaries.
+		// Shared continuous candidates: one histogram pass per (leaf, feature), then prefix-sum gains.
 		for (auto f : feature_subset) {
 			if (binnings[f].categorical) {
 				continue;
 			}
 			auto &thresholds = binnings[f].thresholds;
+			if (thresholds.empty()) {
+				continue;
+			}
+			const idx_t n_bins = thresholds.size() + 1;
+			vector<ObliviousLeafHist> leaf_hists;
+			leaf_hists.reserve(level_rows.size());
+			for (auto &leaf_rows : level_rows) {
+				leaf_hists.push_back(BuildObliviousLeafHist(f, n_bins, bins, gradients, hessians, leaf_rows));
+			}
 			for (idx_t b = 0; b < thresholds.size(); b++) {
 				for (bool default_left : {true, false}) {
-					SplitCandidate candidate;
-					candidate.feature = f;
-					candidate.threshold = thresholds[b];
-					candidate.compare = SplitCompare::LESS;
-					candidate.default_left = default_left;
 					double total = 0;
 					bool any = false;
-					for (auto &leaf_rows : level_rows) {
-						auto gain = LeafSplitGain(x, gradients, hessians, leaf_rows, candidate, options);
+					for (auto &leaf_hist : leaf_hists) {
+						auto gain = ObliviousHistogramLeafGain(leaf_hist, b, default_left, options);
 						if (gain > 0) {
 							any = true;
 							total += gain;
@@ -584,7 +664,11 @@ void GrowOblivious(BoostTree &tree, const vector<vector<double>> &x, const vecto
 					}
 					if (any && total > best_total) {
 						best_total = total;
-						best = candidate;
+						best.feature = f;
+						best.threshold = thresholds[b];
+						best.compare = SplitCompare::LESS;
+						best.default_left = default_left;
+						best.categories.clear();
 						best.gain = total;
 					}
 				}
@@ -671,7 +755,7 @@ void GrowTree(BoostTree &tree, const vector<vector<double>> &x, const vector<vec
 		return;
 	}
 	if (options.growth_policy == GrowthPolicy::OBLIVIOUS) {
-		GrowOblivious(tree, x, binnings, gradients, hessians, rows, feature_subset, options);
+		GrowOblivious(tree, x, bins, binnings, gradients, hessians, rows, feature_subset, options);
 		return;
 	}
 	GrowDepthwise(tree, x, bins, binnings, gradients, hessians, rows, feature_subset, 0, options);

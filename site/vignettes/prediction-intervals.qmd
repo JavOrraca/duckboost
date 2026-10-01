@@ -106,4 +106,4 @@ FROM q50;
 
 ## Scale note
 
-The reference trainer buffers every training row in memory and keeps a sorted working copy while scanning candidate splits, so peak memory is roughly 2× the feature matrix. Training is single-threaded. `duckboost_predict` re-parses the model JSON on every row; for large scoring jobs prefer `duckboost_to_sql` (optionally with `keep_columns` / `proba`) and run the generated SQL without the extension.
+The native trainer buffers every training row and its bin ids in memory, then finds splits from histograms (including oblivious / symmetric growth). Training is single-threaded. `duckboost_predict` caches a parsed model within each execution chunk when the JSON repeats; for large scoring jobs prefer `duckboost_to_sql` (optionally with `keep_columns` / `proba`) and run the generated SQL without the extension.
