@@ -52,12 +52,17 @@ Docs: https://duckdb.org/community_extensions/documentation.html
 | `extension.version` | `0.1.0` (bump on release) |
 | `extension.license` | `MIT` |
 | `extension.maintainers` | `JavOrraca` |
+| `extension.requires_toolchains` | *(omit)* — default build is dependency-free CMake |
 | `repo.github` | `JavOrraca/duckboost` |
-| `repo.ref` | `561ec27ae1edb5c7f2529a1000c23a13f7389d14` (see `docs/community_extensions_description.yml`) |
+| `repo.ref` | commit SHA to build (see `docs/community_extensions_description.yml`; bump when submitting) |
+| `docs.hello_world` | Native first model on Palmer penguins via the public raw CSV URL |
 
 Default community binaries intentionally omit vendor ML libraries: they ship the
-reference trainer + dump import. Optional `DUCKBOOST_WITH_*` native trainers are for
+native trainer + dump import. Optional `DUCKBOOST_WITH_*` native trainers are for
 custom builds.
+
+Before opening the community-extensions PR, set `repo.ref` to the commit you want
+built, and keep `docs.hello_world` aligned with [Getting Started](https://javorraca.github.io/duckboost/getting-started.html). The catalog snippet loads the CSV over HTTPS (`httpfs` autoload on released DuckDB).
 
 ## Native trainer flags
 
