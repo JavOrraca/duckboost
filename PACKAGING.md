@@ -71,14 +71,16 @@ custom builds.
 Example:
 
 ```bash
-EXTRA_CMAKE_VARIABLES='-DDUCKBOOST_WITH_XGBOOST=ON -DDUCKBOOST_WITH_LIGHTGBM=ON' make
+EXT_FLAGS='-DDUCKBOOST_WITH_XGBOOST=ON -DDUCKBOOST_WITH_LIGHTGBM=ON' make release
 ```
 
 Compile the native `#ifdef` paths without linking vendor libraries:
 
 ```bash
-EXTRA_CMAKE_VARIABLES='-DDUCKBOOST_WITH_XGBOOST=ON -DDUCKBOOST_NATIVE_STUB_ONLY=ON' make
+EXT_FLAGS='-DDUCKBOOST_WITH_XGBOOST=ON -DDUCKBOOST_NATIVE_STUB_ONLY=ON' make release
 ```
+
+`EXT_FLAGS` is the extension-ci-tools makefile knob (passed into DuckDB's cmake). Reconfigure after changing it (`rm -rf build/release` or delete `CMakeCache.txt`) so cached `OFF` options are not reused.
 
 Inspect the active build:
 
@@ -89,9 +91,11 @@ SELECT * FROM duckboost_backends();
 
 Linked XGBoost/LightGBM builds set `training_supported=true` for those backends. CatBoost remains import-only.
 
-Native train tests (linked builds only):
+Native train tests (linked builds only). The **Native trainers** GitHub Actions workflow installs the pinned wheels from `scripts/vendor_parity/requirements.txt`, builds with `DUCKBOOST_WITH_XGBOOST/LIGHTGBM=ON`, and runs:
 
 ```bash
 export LD_LIBRARY_PATH="$HOME/.local/lib/python3.12/site-packages/xgboost/lib:$HOME/.local/lib/python3.12/site-packages/lightgbm/lib:${LD_LIBRARY_PATH}"
 DUCKBOOST_NATIVE_TRAIN_TEST=1 make test T=test/sql/duckboost/native_train.test
 ```
+
+Vendor parity fixture regeneration also runs on PRs that touch `src/import.cpp` / `src/model.cpp` (not only the generator or committed probes).
