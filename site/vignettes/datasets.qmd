@@ -2,7 +2,7 @@
 title: "Example datasets: iris and penguins"
 ---
 
-The repository ships two small, well-known datasets under [`data/`](https://github.com/JavOrraca/duckboost/tree/main/data) so you can try duckboost on real measurements instead of synthetic lines:
+The repository ships two small, well-known datasets under [`data/`](https://github.com/JavOrraca/duckboost/tree/main/data) so you can try duckboost on real measurements instead of synthetic lines. For a URL-loaded support-ticket NLP example that pairs duckboost with community [`quackformers`](https://duckdb.org/community_extensions/extensions/quackformers.html), see [Local ticket NLP](support-tickets-text.qmd).
 
 | File | Rows | Columns | Source |
 | --- | --- | --- | --- |
