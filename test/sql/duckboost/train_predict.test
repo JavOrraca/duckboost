@@ -13,19 +13,20 @@ SELECT
 FROM range(40) t(i);
 
 query III
-SELECT backend, training_supported, notes ILIKE '%reference%'
+SELECT backend, training_supported, notes ILIKE '%native%'
 FROM duckboost_backends()
 WHERE backend = 'reference';
 ----
 reference	true	true
 
+# Preferred public alias; JSON wire format remains "reference" for compatibility.
 statement ok
 CREATE TABLE models AS
 SELECT duckboost_train(
 	y,
 	[x1, x2],
 	MAP {
-		'backend': 'reference',
+		'backend': 'native',
 		'task': 'regression',
 		'n_estimators': '15',
 		'max_depth': '3',
@@ -35,9 +36,22 @@ SELECT duckboost_train(
 ) AS model
 FROM train;
 
-# Model JSON should round-trip and expose backend metadata
 query I
 SELECT model LIKE '%"backend":"reference"%' FROM models;
+----
+true
+
+query I
+SELECT max(abs(
+	duckboost_predict(n.model, [t.x1, t.x2]) - duckboost_predict(r.model, [t.x1, t.x2])
+)) < 1e-12
+FROM models n, train t, (
+	SELECT duckboost_train(
+		y, [x1, x2],
+		MAP {'backend': 'reference', 'n_estimators': '15', 'max_depth': '3', 'learning_rate': '0.2', 'feature_names': 'x1,x2'}
+	) AS model
+	FROM train
+) r;
 ----
 true
 
