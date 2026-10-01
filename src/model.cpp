@@ -394,7 +394,11 @@ static GrowthPolicy GrowthPolicyFromString(const string &name) {
 	if (lower == "lossguide" || lower == "leafwise" || lower == "leaf_wise" || lower == "best_first") {
 		return GrowthPolicy::LOSSGUIDE;
 	}
-	throw InvalidInputException("duckboost: unknown growth policy '%s' (expected depthwise or lossguide)", name);
+	if (lower == "oblivious" || lower == "symmetric" || lower == "depthwise_oblivious") {
+		return GrowthPolicy::OBLIVIOUS;
+	}
+	throw InvalidInputException("duckboost: unknown growth policy '%s' (expected depthwise, lossguide, or oblivious)",
+	                            name);
 }
 
 bool BackendTrainingSupported(BoostBackend backend) {
@@ -407,7 +411,7 @@ bool BackendTrainingSupported(BoostBackend backend) {
 string BackendCapabilityNote(BoostBackend backend) {
 	switch (backend) {
 	case BoostBackend::REFERENCE:
-		return "in-process reference GBDT (train/predict/evaluate/to_sql)";
+		return "in-process native reference GBDT (histogram trainer; train/predict/evaluate/to_sql)";
 	case BoostBackend::XGBOOST:
 		if (NativeTrainerLinked(backend)) {
 			return "native train via XGBoost C API (dump→import); also duckboost_import dump_model JSON";
@@ -541,22 +545,25 @@ TrainOptions TrainOptions::FromMap(const unordered_map<string, string> &options)
 		throw NotImplementedException(
 		    "duckboost: growth_policy and max_leaves are not supported by the catboost backend");
 	}
-	if (result.growth_policy == GrowthPolicy::DEPTHWISE) {
-		if (result.max_depth == 0) {
-			throw InvalidInputException(
-			    "duckboost: max_depth=0 (unlimited) is only supported with growth_policy=lossguide");
-		}
-		if (result.max_leaves_set) {
-			throw InvalidInputException(
-			    "duckboost: %s=%llu requires growth_policy='lossguide' (depthwise growth is bounded by max_depth)",
-			    max_leaves_key, (unsigned long long)result.max_leaves);
-		}
-	} else {
+	if (result.growth_policy == GrowthPolicy::OBLIVIOUS && result.backend != BoostBackend::REFERENCE) {
+		throw NotImplementedException("duckboost: growth_policy='oblivious' requires backend='reference'");
+	}
+	if (result.growth_policy == GrowthPolicy::LOSSGUIDE) {
 		if (!result.max_depth_set) {
 			result.max_depth = 0;
 		}
 		if (result.max_leaves < 2) {
 			throw InvalidInputException("duckboost: max_leaves must be >= 2");
+		}
+	} else {
+		if (result.max_depth == 0) {
+			throw InvalidInputException(
+			    "duckboost: max_depth=0 (unlimited) is only supported with growth_policy=lossguide");
+		}
+		if (result.max_leaves_set) {
+			throw InvalidInputException("duckboost: %s=%llu requires growth_policy='lossguide' "
+			                            "(depthwise/oblivious growth is bounded by max_depth)",
+			                            max_leaves_key, (unsigned long long)result.max_leaves);
 		}
 	}
 	if (!(result.learning_rate > 0)) {

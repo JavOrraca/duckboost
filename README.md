@@ -144,6 +144,11 @@ SELECT duckboost_train(
 	y, features, MAP {'growth_policy': 'lossguide', 'max_leaves': '31'}
 ) AS leafwise_model FROM train;
 
+-- Oblivious / symmetric trees share one split per depth (CatBoost-style)
+SELECT duckboost_train(
+	y, features, MAP {'growth_policy': 'oblivious', 'max_depth': '4'}
+) AS oblivious_model FROM train;
+
 -- Sample weights / class_weight, early stopping, and feature importance
 SELECT duckboost_train(y, features, weight, MAP {
 	'task': 'binary',
@@ -211,12 +216,12 @@ Also `duckboost_integer(x, levels)` (integer encoding) and `duckboost_other(x, l
 
 | Backend | Train in this build | Dump import | Predict / evaluate / `to_sql` |
 | --- | --- | --- | --- |
-| `reference` | Yes (built-in GBDT) | duckboost JSON | Yes |
+| `reference` | Yes (built-in native histogram GBDT) | duckboost JSON | Yes |
 | `xgboost` | Optional (`DUCKBOOST_WITH_XGBOOST`) | `dump_model(..., dump_format='json')` | Yes |
 | `lightgbm` | Optional (`DUCKBOOST_WITH_LIGHTGBM`) | `booster_.save_model()` text | Yes |
 | `catboost` | Optional (`DUCKBOOST_WITH_CATBOOST`) | `save_model(..., format='json')` float trees | Yes |
 
-Native XGBoost / LightGBM linking is opt-in via `DUCKBOOST_WITH_*`. Linked builds train in-process through the vendor C API, then convert the dump into duckboost JSON. CatBoost remains import-only. Prefer `duckboost_import()` when you already train outside DuckDB; use `backend='reference'` for dependency-free experiments. [Use cases and choosing a trainer](https://javorraca.github.io/duckboost/use-cases.html) compares the three paths in detail.
+Native XGBoost / LightGBM linking is opt-in via `DUCKBOOST_WITH_*`. Linked builds train in-process through the vendor C API, then convert the dump into duckboost JSON. CatBoost remains import-only. Prefer `duckboost_import()` when you already train outside DuckDB; use `backend='reference'` for the dependency-free native histogram trainer. [Use cases and choosing a trainer](https://javorraca.github.io/duckboost/use-cases.html) compares the three paths in detail.
 
 ### Dump import notes
 
@@ -255,7 +260,7 @@ Split nodes may use `"compare":"equal"` with `threshold`, or `"compare":"in"` wi
 
 - **Layout**: standalone community extension ([extension-template](https://github.com/duckdb/extension-template)) so optional vendor ML libraries stay out of core DuckDB builds. The `duckdb` submodule tracks DuckDB 2.0 (`v2.0-cyanoptera`).
 - **SQL export** mirrors orbital's `separate_trees` idea so DuckDB can evaluate ensemble members as independent columns.
-- **Reference trainer** is a didactic histogram/quantile-split GBDT (squared-error, absolute-error, quantile, expectile, logistic, and softmax losses) with depth-wise or loss-guided leaf-wise growth, missing-value defaults, L1/L2/`gamma`, sample weights, and early stopping. Set `categorical_features` to comma-separated feature names or zero-based indices to train exact one-vs-rest equality splits on numeric category values. It buffers all rows in memory (peak ~2× for the sorted working copy), trains single-threaded, and is not a replacement for production XGBoost/LightGBM/CatBoost quality — but it exercises the full train → evaluate → inspect → SQL path. For large scoring jobs prefer `duckboost_to_sql` over per-row `duckboost_predict`.
+- **Native reference trainer** (`backend='reference'`) is a dependency-free histogram GBDT: global quantile pre-binning, ordered target-statistic categorical partitions (`EQUAL`/`IN`), and depth-wise, loss-guided, or oblivious/symmetric growth. It supports squared-error, absolute-error, quantile, expectile, logistic, and softmax losses plus missing-value defaults, L1/L2/`gamma`, sample weights, and early stopping. Set `categorical_features` to comma-separated feature names or zero-based indices. It buffers rows and bin ids in memory, trains single-threaded, and is aimed at SQL-native workflows rather than replacing production XGBoost/LightGBM/CatBoost at every scale. For large scoring jobs prefer `duckboost_to_sql` over per-row `duckboost_predict`.
 - **Native LightGBM** maps absolute_error / quantile / lossguide / `categorical_features` / `subsample` (`bagging_freq=1`) / seed. Native XGBoost focuses on L2 depth-wise trees (plus seed / `max_bin` / sample weights / `SaveJsonConfig` intercept). Both native backends honor `early_stopping_rounds` + `validation_fraction` (hold out a validation slice; LightGBM uses `early_stopping_round`, XGBoost evaluates each iter and truncates the dump). `class_weight` is folded into sample weights.
 - **Table macros** `duckboost_fit` / `duckboost_score` wrap `duckboost_train` / `duckboost_predict` with `query_table` for a compact SQL workflow.
 - **Split and preprocessing macros** are plain SQL macros registered by the extension. Splits rank rows by a hash of the row's values mixed with `seed`, so they are reproducible and independent of physical row order.
@@ -269,4 +274,5 @@ Split nodes may use `"compare":"equal"` with `threshold`, or `"compare":"in"` wi
 - [x] Missing-value aware splits, sample weights / `class_weight`, early stopping, regularization, and `duckboost_importance`
 - [x] Fail-loud vendor imports, categorical cast semantics, model format v2, deployable `to_sql` (`keep_columns` / `proba`), vendor parity fixtures
 - [x] Native-linked CI, native early stopping, LightGBM `kZeroThreshold` predict parity
+- [x] Histogram pre-binning, ordered-TS categoricals, oblivious growth, vendor-free quality probes
 - [ ] Submit [`docs/community_extensions_description.yml`](docs/community_extensions_description.yml) to `duckdb/community-extensions` after DuckDB 2.0 is released
