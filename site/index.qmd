@@ -43,6 +43,7 @@ It is aimed at SQL-native workflows and moderate data sizes, not at replacing Li
 - **Scoring without an ML runtime**: `duckboost_to_sql` turns a model into a plain `SELECT` for views, dbt models, or any DuckDB session.
 - **Teams that train in Python or R** with XGBoost, LightGBM, or CatBoost and want to score next to the data with `duckboost_import`.
 - **Teaching, prototyping, and CI**, where the native trainer gives a deterministic model with no extra dependencies.
+- **Local ticket NLP**, by pairing community [`quackformers`](https://duckdb.org/community_extensions/extensions/quackformers.html) embeddings with duckboost (no separate Python scoring loop or hosted embedding API) — [vignette](vignettes/support-tickets-text.qmd).
 
 ## Practice datasets
 
