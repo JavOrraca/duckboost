@@ -1,5 +1,5 @@
 # name: test/sql/duckboost/community_packaging.test
-# description: Sanity-check community packaging metadata is present and loadable
+# description: Community packaging sanity + hello_world shape (local CSV stand-in)
 # group: [duckboost]
 
 require duckboost
@@ -12,5 +12,50 @@ true
 
 query I
 SELECT count(*) >= 10 FROM duckboost_build_info();
+----
+true
+
+# Same loop as docs/community_extensions_description.yml hello_world, using the
+# bundled CSV (community catalog uses the public raw URL + httpfs instead).
+statement ok
+CREATE TABLE penguins AS
+SELECT
+	body_mass_g::DOUBLE AS body_mass_g,
+	[bill_length_mm, bill_depth_mm, flipper_length_mm, (sex = 'male')::DOUBLE] AS features
+FROM read_csv('data/penguins.csv', nullstr = 'NA')
+WHERE body_mass_g IS NOT NULL
+	AND bill_length_mm IS NOT NULL
+	AND sex IS NOT NULL;
+
+statement ok
+CREATE TABLE models AS
+SELECT duckboost_train(
+	body_mass_g, features,
+	MAP {
+		'backend': 'native',
+		'n_estimators': '40',
+		'max_depth': '3',
+		'learning_rate': '0.15',
+		'feature_names': 'bill_length_mm,bill_depth_mm,flipper_length_mm,male'
+	}
+) AS model
+FROM penguins;
+
+query I
+SELECT count(*) = 5 AND bool_and(pred_g IS NOT NULL)
+FROM (
+	SELECT
+		round(body_mass_g, 0) AS body_mass_g,
+		round(duckboost_predict(model, features), 0) AS pred_g
+	FROM models, penguins
+	ORDER BY body_mass_g
+	LIMIT 5
+);
+----
+true
+
+query I
+SELECT duckboost_evaluate_agg(model, body_mass_g, features, MAP {'metric': 'rmse'}) < 500
+FROM models, penguins;
 ----
 true

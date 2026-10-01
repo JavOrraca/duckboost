@@ -285,4 +285,5 @@ Split nodes may use `"compare":"equal"` with `threshold`, or `"compare":"in"` wi
 - [x] Histogram pre-binning, ordered-TS categoricals, oblivious growth, vendor-free quality probes
 - [x] Docs rebrand: `backend='native'` alias, Pages refresh, native-trainer vignette + holdout benchmarks
 - [x] Medium-scale native vs LightGBM holdout benchmark (`scripts/native_benchmark/`)
+- [x] Community descriptor readiness (penguins `hello_world`, current `repo.ref`, no extra toolchain)
 - [ ] Submit [`docs/community_extensions_description.yml`](docs/community_extensions_description.yml) to `duckdb/community-extensions` after DuckDB 2.0 is released
