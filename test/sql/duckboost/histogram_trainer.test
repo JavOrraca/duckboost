@@ -1,0 +1,129 @@
+# name: test/sql/duckboost/histogram_trainer.test
+# description: Global histogram bins, ordered-TS categoricals, and oblivious growth
+# group: [duckboost]
+
+require duckboost
+
+# Global max_bins thinning still changes the stump threshold on iris.
+statement ok
+CREATE TABLE iris AS SELECT (species = 'setosa')::DOUBLE AS y, [petal_length] AS features FROM read_csv('data/iris.csv');
+
+query RR
+SELECT
+	round(regexp_extract(model_default, '"threshold":([0-9.]+)', 1)::DOUBLE, 6),
+	round(regexp_extract(model_16, '"threshold":([0-9.]+)', 1)::DOUBLE, 6)
+FROM (
+	SELECT
+		duckboost_train(y, features, MAP {'n_estimators': '1', 'max_depth': '1'}) AS model_default,
+		duckboost_train(y, features, MAP {'n_estimators': '1', 'max_depth': '1', 'max_bins': '16'}) AS model_16
+	FROM iris
+);
+----
+2.45	3.15
+
+# Ordered target-statistic partitions can emit multi-category IN splits.
+statement ok
+CREATE TABLE two_hot AS
+SELECT
+	(i % 4)::DOUBLE AS cat,
+	CASE WHEN i % 4 IN (1, 3) THEN 10.0 ELSE 0.0 END AS y
+FROM range(80) t(i);
+
+statement ok
+CREATE TABLE in_model AS
+SELECT duckboost_train(
+	y, [cat],
+	MAP {
+		'n_estimators': '1',
+		'max_depth': '1',
+		'learning_rate': '1',
+		'feature_names': 'cat',
+		'categorical_features': 'cat'
+	}
+) AS model
+FROM two_hot;
+
+query I
+SELECT model LIKE '%"compare":"in","categories":[1,3]%'
+FROM in_model;
+----
+true
+
+query IIII
+SELECT
+	round(duckboost_predict(model, [1.0]))::BIGINT,
+	round(duckboost_predict(model, [3.0]))::BIGINT,
+	round(duckboost_predict(model, [0.0]))::BIGINT,
+	round(duckboost_predict(model, [2.0]))::BIGINT
+FROM in_model;
+----
+10	10	0	0
+
+# Oblivious / symmetric growth shares one split definition per depth.
+statement ok
+CREATE TABLE obl_train AS
+SELECT
+	(i % 7)::DOUBLE AS x1,
+	(i % 5)::DOUBLE AS x2,
+	((i % 7) + 0.5 * (i % 5))::DOUBLE AS y
+FROM range(120) t(i);
+
+statement ok
+CREATE TABLE obl_model AS
+SELECT duckboost_train(
+	y, [x1, x2],
+	MAP {
+		'growth_policy': 'oblivious',
+		'n_estimators': '1',
+		'max_depth': '2',
+		'learning_rate': '0.5',
+		'min_samples_leaf': '2'
+	}
+) AS model
+FROM obl_train;
+
+# A complete depth-2 oblivious tree has 3 internal nodes and 4 leaves.
+query II
+SELECT
+	length(regexp_extract_all(model, '"is_leaf":false')),
+	length(regexp_extract_all(model, '"is_leaf":true'))
+FROM obl_model;
+----
+3	4
+
+# Symmetric alias is accepted and produces a usable model.
+query I
+SELECT duckboost_evaluate_agg(m.model, y, [x1, x2], MAP {'metric': 'rmse'}) < 2.5
+FROM (
+	SELECT duckboost_train(
+		y, [x1, x2],
+		MAP {'growth_policy': 'symmetric', 'n_estimators': '5', 'max_depth': '3', 'min_samples_leaf': '2'}
+	) AS model
+	FROM obl_train
+) m, obl_train;
+----
+true
+
+query I
+SELECT duckboost_evaluate_agg(model, y, [x1, x2], MAP {'metric': 'rmse'}) < 2.5
+FROM obl_model, obl_train;
+----
+true
+
+statement error
+SELECT duckboost_train(y, [x1, x2], MAP {'growth_policy': 'oblivious', 'max_leaves': '4'})
+FROM obl_train;
+----
+<REGEX>:.*requires growth_policy='lossguide'.*
+
+statement error
+SELECT duckboost_train(y, [x1, x2], MAP {'backend': 'lightgbm', 'growth_policy': 'oblivious'})
+FROM obl_train;
+----
+<REGEX>:.*growth_policy='oblivious' requires backend='reference'.*
+
+statement error
+SELECT duckboost_train(y, [x1], MAP {'growth_policy': 'sideways'})
+FROM obl_train;
+----
+<REGEX>:.*expected depthwise, lossguide, or oblivious.*

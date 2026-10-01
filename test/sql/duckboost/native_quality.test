@@ -1,0 +1,116 @@
+# name: test/sql/duckboost/native_quality.test
+# description: Vendor-free quality probes for the built-in histogram GBDT
+# group: [duckboost]
+
+require duckboost
+
+# Nonlinear regression: y = x1 + 2*x2 + noise-free interaction pattern.
+statement ok
+CREATE TABLE quality_reg AS
+SELECT
+	(i % 20)::DOUBLE AS x1,
+	((i * 3) % 17)::DOUBLE AS x2,
+	((i % 20) + 2.0 * ((i * 3) % 17) + CASE WHEN i % 20 > 10 THEN 5.0 ELSE 0.0 END) AS y
+FROM range(400) t(i);
+
+statement ok
+CREATE TABLE quality_reg_model AS
+SELECT duckboost_train(
+	y, [x1, x2],
+	MAP {
+		'backend': 'reference',
+		'n_estimators': '40',
+		'max_depth': '4',
+		'learning_rate': '0.15',
+		'min_samples_leaf': '4',
+		'max_bins': '32',
+		'seed': '7'
+	}
+) AS model
+FROM quality_reg;
+
+query I
+SELECT duckboost_evaluate_agg(model, y, [x1, x2], MAP {'metric': 'rmse'}) < 1.25
+FROM quality_reg_model, quality_reg;
+----
+true
+
+# Loss-guided growth should not be worse than a shallow depth-wise stump ensemble on skewed steps.
+statement ok
+CREATE TABLE quality_skew AS
+SELECT
+	i::DOUBLE AS x,
+	CASE
+		WHEN i < 5 THEN 0.0
+		WHEN i < 60 THEN 1.0
+		ELSE 3.0
+	END AS y
+FROM range(80) t(i);
+
+query I
+SELECT
+	duckboost_evaluate_agg(leafwise, y, [x], MAP {'metric': 'rmse'})
+	<= duckboost_evaluate_agg(depthwise, y, [x], MAP {'metric': 'rmse'}) + 0.05
+FROM (
+	SELECT
+		duckboost_train(y, [x], MAP {
+			'growth_policy': 'lossguide', 'max_leaves': '6', 'n_estimators': '20',
+			'learning_rate': '0.2', 'min_samples_leaf': '2'
+		}) AS leafwise,
+		duckboost_train(y, [x], MAP {
+			'growth_policy': 'depthwise', 'max_depth': '2', 'n_estimators': '20',
+			'learning_rate': '0.2', 'min_samples_leaf': '2'
+		}) AS depthwise
+	FROM quality_skew
+) m, quality_skew;
+----
+true
+
+# Binary accuracy on a separable XOR-like categorical/numeric mix.
+statement ok
+CREATE TABLE quality_bin AS
+SELECT
+	(i % 4)::DOUBLE AS cat,
+	(i % 9)::DOUBLE AS num,
+	CASE WHEN ((i % 4) IN (1, 2)) != (i % 9 > 4) THEN 1.0 ELSE 0.0 END AS y
+FROM range(300) t(i);
+
+query I
+SELECT duckboost_evaluate_agg(m.model, y, [cat, num], MAP {'metric': 'accuracy'}) >= 0.9
+FROM (
+	SELECT duckboost_train(
+		y, [cat, num],
+		MAP {
+			'task': 'binary',
+			'n_estimators': '30',
+			'max_depth': '4',
+			'learning_rate': '0.25',
+			'feature_names': 'cat,num',
+			'categorical_features': 'cat',
+			'seed': '3'
+		}
+	) AS model
+	FROM quality_bin
+) m, quality_bin;
+----
+true
+
+# Oblivious trees remain competitive on smooth additive targets.
+query I
+SELECT duckboost_evaluate_agg(m.model, y, [x1, x2], MAP {'metric': 'rmse'}) < 1.5
+FROM (
+	SELECT duckboost_train(
+		y, [x1, x2],
+		MAP {
+			'growth_policy': 'oblivious',
+			'n_estimators': '30',
+			'max_depth': '3',
+			'learning_rate': '0.2',
+			'min_samples_leaf': '4',
+			'seed': '11'
+		}
+	) AS model
+	FROM quality_reg
+) m, quality_reg;
+----
+true
