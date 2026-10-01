@@ -35,7 +35,7 @@ The default path is the **native histogram trainer** (`backend = 'native'`, also
 
 It is aimed at SQL-native workflows and moderate data sizes, not at replacing LightGBM or XGBoost at every scale. Prefer `duckboost_import()` when you already train outside DuckDB or need vendor features duckboost does not expose.
 
-[Use cases and choosing a trainer](use-cases.qmd) · [Native trainer vignette](vignettes/native-trainer.qmd)
+[Use cases and choosing a trainer](use-cases.qmd) · [Native trainer vignette](vignettes/native-trainer.qmd) · [Native vs LightGBM benchmark](benchmarks.qmd)
 
 ## Use cases
 

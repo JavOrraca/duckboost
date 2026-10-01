@@ -1,0 +1,130 @@
+{
+  "generated_at": "2026-10-01T08:09:33.147409+00:00",
+  "host": {
+    "platform": "Linux-6.12.94+-x86_64-with-glibc2.39",
+    "processor": "x86_64",
+    "python": "3.12.3"
+  },
+  "n_rows": 200000,
+  "seed": 7,
+  "shared_options": {
+    "n_estimators": "80",
+    "max_depth": "5",
+    "learning_rate": "0.1",
+    "min_samples_leaf": "20",
+    "max_bins": "64",
+    "reg_lambda": "1.0",
+    "subsample": "0.8",
+    "colsample_bytree": "0.8",
+    "seed": "7"
+  },
+  "runs": [
+    {
+      "backend": "native",
+      "task": "regression",
+      "metric": "rmse",
+      "holdout_metric": 0.238832,
+      "train_seconds": 10.65,
+      "n_train": 160138,
+      "n_test": 39862,
+      "options": {
+        "n_estimators": "80",
+        "max_depth": "5",
+        "learning_rate": "0.1",
+        "min_samples_leaf": "20",
+        "max_bins": "64",
+        "reg_lambda": "1.0",
+        "subsample": "0.8",
+        "colsample_bytree": "0.8",
+        "seed": "7",
+        "backend": "native",
+        "task": "regression",
+        "feature_names": "cat_a,cat_b,cat_c,cat_d,x1,x2,x3,x4,x5,x6,x7,x8",
+        "categorical_features": "cat_a,cat_b,cat_c,cat_d"
+      }
+    },
+    {
+      "backend": "lightgbm",
+      "task": "regression",
+      "metric": "rmse",
+      "holdout_metric": 0.244557,
+      "train_seconds": 16.337,
+      "n_train": 160138,
+      "n_test": 39862,
+      "options": {
+        "n_estimators": "80",
+        "max_depth": "5",
+        "learning_rate": "0.1",
+        "min_samples_leaf": "20",
+        "max_bins": "64",
+        "reg_lambda": "1.0",
+        "subsample": "0.8",
+        "colsample_bytree": "0.8",
+        "seed": "7",
+        "backend": "lightgbm",
+        "task": "regression",
+        "feature_names": "cat_a,cat_b,cat_c,cat_d,x1,x2,x3,x4,x5,x6,x7,x8",
+        "categorical_features": "cat_a,cat_b,cat_c,cat_d"
+      }
+    },
+    {
+      "backend": "native",
+      "task": "binary",
+      "metric": "logloss",
+      "holdout_metric": 0.048162,
+      "train_seconds": 8.343,
+      "n_train": 160138,
+      "n_test": 39862,
+      "options": {
+        "n_estimators": "80",
+        "max_depth": "5",
+        "learning_rate": "0.1",
+        "min_samples_leaf": "20",
+        "max_bins": "64",
+        "reg_lambda": "1.0",
+        "subsample": "0.8",
+        "colsample_bytree": "0.8",
+        "seed": "7",
+        "backend": "native",
+        "task": "binary",
+        "feature_names": "cat_a,cat_b,cat_c,cat_d,x1,x2,x3,x4,x5,x6,x7,x8",
+        "categorical_features": "cat_a,cat_b,cat_c,cat_d"
+      },
+      "secondary_metric_name": "accuracy",
+      "secondary_metric": 0.993703
+    },
+    {
+      "backend": "lightgbm",
+      "task": "binary",
+      "metric": "logloss",
+      "holdout_metric": 0.05763,
+      "train_seconds": 20.416,
+      "n_train": 160138,
+      "n_test": 39862,
+      "options": {
+        "n_estimators": "80",
+        "max_depth": "5",
+        "learning_rate": "0.1",
+        "min_samples_leaf": "20",
+        "max_bins": "64",
+        "reg_lambda": "1.0",
+        "subsample": "0.8",
+        "colsample_bytree": "0.8",
+        "seed": "7",
+        "backend": "lightgbm",
+        "task": "binary",
+        "feature_names": "cat_a,cat_b,cat_c,cat_d,x1,x2,x3,x4,x5,x6,x7,x8",
+        "categorical_features": "cat_a,cat_b,cat_c,cat_d"
+      },
+      "secondary_metric_name": "accuracy",
+      "secondary_metric": 0.992073
+    }
+  ],
+  "notes": [
+    "Synthetic data generated in DuckDB from range(n); ~20% holdout via hash(i, seed) % 5 = 0.",
+    "Train wall time is epoch_ms(current_timestamp) around duckboost_train only (dataset build excluded).",
+    "Holdout metrics use duckboost_evaluate_agg on the test split.",
+    "Categorical features cat_a..cat_d are marked for both backends.",
+    "Same hyperparameter map is passed to both trainers (mapped where the vendor bridge supports it)."
+  ]
+}

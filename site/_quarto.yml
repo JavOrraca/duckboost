@@ -32,6 +32,8 @@ website:
         href: use-cases.qmd
       - text: Getting started
         href: getting-started.qmd
+      - text: Native vs LightGBM benchmark
+        href: benchmarks.qmd
       - section: Vignettes
         contents:
           - text: Native histogram trainer

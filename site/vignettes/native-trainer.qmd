@@ -366,6 +366,8 @@ ORDER BY b.trainer;
 
 These figures are **smoke-level evidence**, not a bake-off. They show the native trainer learns useful structure on the shipped CSVs and stays in the same ballpark as LightGBM under a small shared grid when that backend is available.
 
+For a larger (~200k row) synthetic holdout with wall times, see the [Native vs LightGBM benchmark](../benchmarks.qmd) page (`scripts/native_benchmark/run.py`).
+
 ## Next
 
 - [SQL reference](../reference.qmd) for the full option map
