@@ -293,10 +293,9 @@ void TrainUpdate(Vector inputs[], AggregateInputData &, idx_t input_count, Vecto
 		}
 		if (has_is_validation) {
 			auto v_idx = is_validation_format.sel->get_index(i);
-			if (!is_validation_format.validity.RowIsValid(v_idx)) {
-				throw InvalidInputException("duckboost: is_validation cannot be NULL");
-			}
-			state.data->is_validation.push_back(is_validation_data[v_idx]);
+			// NULL means false so macros can default the argument and omit a mask.
+			const bool flag = is_validation_format.validity.RowIsValid(v_idx) && is_validation_data[v_idx];
+			state.data->is_validation.push_back(flag);
 			state.data->has_is_validation = true;
 		}
 	}
@@ -843,8 +842,8 @@ void BuildInfoFunction(ClientContext &, TableFunctionInput &data, DataChunk &out
 
 // clang-format off
 static const DefaultTableMacro duckboost_table_macros[] = {
-	{DEFAULT_SCHEMA, "duckboost_fit", {"source", "y", "features", nullptr}, {{"options", "MAP {}"}, {nullptr, nullptr}}, R"(
-SELECT duckboost_train(y, features, options) AS model
+	{DEFAULT_SCHEMA, "duckboost_fit", {"source", "y", "features", nullptr}, {{"weight", "NULL"}, {"is_validation", "NULL"}, {"options", "MAP {}"}, {nullptr, nullptr}}, R"(
+SELECT duckboost_train(y, features, coalesce(weight, 1.0), coalesce(is_validation, false), options) AS model
 FROM query_table(source::VARCHAR)
 )"},
 	{DEFAULT_SCHEMA, "duckboost_score", {"model", "source", "features", nullptr}, {{nullptr, nullptr}}, R"(

@@ -46,25 +46,21 @@ FROM early_ext;
 ----
 <REGEX>:.*cannot combine is_validation with validation_fraction.*
 
-# early_stopping with is_validation requires at least one true row
-statement error
+# All-false / NULL is_validation is ignored; early_stopping falls back to validation_fraction default
+statement ok
 SELECT duckboost_train(
 	y, [x1], false,
 	MAP {
 		'n_estimators': '10',
-		'early_stopping_rounds': '2'
+		'early_stopping_rounds': '2',
+		'seed': '1'
 	}
 )
 FROM early_ext;
-----
-<REGEX>:.*requires at least one is_validation=true row.*
 
-# NULL is_validation is rejected
-statement error
+statement ok
 SELECT duckboost_train(y, [x1], NULL::BOOLEAN, MAP {'n_estimators': '2'})
 FROM early_ext;
-----
-<REGEX>:.*is_validation cannot be NULL.*
 
 # Weight + is_validation + options signature
 statement ok

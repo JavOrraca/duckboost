@@ -101,6 +101,50 @@ ORDER BY split;
 
 The [grid search example](datasets.qmd#binary-with-a-grid-search-sex) shows how to use this split: fit each candidate on `'train'`, compare them on `'validation'`, refit the winner on both, and score `'test'` once.
 
+Or pass train and validation rows together and let early stopping use the external mask:
+
+```{python}
+#| echo: false
+#| output: asis
+show("""
+LOAD duckboost;
+CREATE TABLE penguins AS
+FROM read_csv('data/penguins.csv', nullstr = 'NA')
+WHERE bill_length_mm IS NOT NULL AND sex IS NOT NULL;
+CREATE TABLE penguins_tvt AS
+FROM duckboost_initial_validation_split('penguins', prop := [0.6, 0.2], strata := species, seed := 42);
+CREATE VIEW penguins_fit_rows AS
+FROM penguins_tvt WHERE split IN ('train', 'validation');
+
+CREATE TABLE penguins_model AS
+FROM duckboost_fit(
+  'penguins_fit_rows',
+  (sex = 'male')::DOUBLE,
+  [bill_length_mm, bill_depth_mm, flipper_length_mm, body_mass_g],
+  is_validation := (split = 'validation'),
+  options := MAP {
+    'task': 'binary',
+    'n_estimators': '40',
+    'max_depth': '3',
+    'learning_rate': '0.2',
+    'early_stopping_rounds': '5',
+    'seed': '11',
+    'feature_names': 'bill_length_mm,bill_depth_mm,flipper_length_mm,body_mass_g'
+  }
+);
+
+SELECT
+  round(duckboost_evaluate_agg(
+    m.model,
+    (s.sex = 'male')::DOUBLE,
+    [s.bill_length_mm, s.bill_depth_mm, s.flipper_length_mm, s.body_mass_g],
+    MAP {'metric': 'accuracy'}
+  ), 3) AS test_accuracy
+FROM penguins_model m, penguins_tvt s
+WHERE s.split = 'test';
+""")
+```
+
 ### Cross-validation folds
 
 Folds are cut from the *training* rows only, so split first, then pass a view of the training rows to `duckboost_vfold`:

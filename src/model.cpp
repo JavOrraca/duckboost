@@ -616,11 +616,6 @@ void ResolveTrainValidRows(idx_t n_rows, const TrainOptions &options, const vect
 			throw InvalidInputException("duckboost: is_validation count (%llu) must match row count (%llu)",
 			                            (unsigned long long)is_validation.size(), (unsigned long long)n_rows);
 		}
-		if (options.validation_fraction_set) {
-			throw InvalidInputException(
-			    "duckboost: cannot combine is_validation with validation_fraction (omit validation_fraction when "
-			    "passing an external validation mask)");
-		}
 		train_rows.reserve(n_rows);
 		valid_rows.reserve(n_rows);
 		for (idx_t i = 0; i < n_rows; i++) {
@@ -630,16 +625,21 @@ void ResolveTrainValidRows(idx_t n_rows, const TrainOptions &options, const vect
 				train_rows.push_back(i);
 			}
 		}
-		if (train_rows.empty()) {
-			throw InvalidInputException("duckboost: is_validation marked every row as validation; need at least one "
-			                            "training row");
+		if (!valid_rows.empty()) {
+			// External validation mask in use — cannot also set a random hold-out fraction.
+			if (options.validation_fraction_set) {
+				throw InvalidInputException(
+				    "duckboost: cannot combine is_validation with validation_fraction (omit validation_fraction when "
+				    "passing an external validation mask)");
+			}
+			if (train_rows.empty()) {
+				throw InvalidInputException(
+				    "duckboost: is_validation marked every row as validation; need at least one training row");
+			}
+			return;
 		}
-		if (options.early_stopping_rounds > 0 && valid_rows.empty()) {
-			throw InvalidInputException(
-			    "duckboost: early_stopping_rounds > 0 requires at least one is_validation=true row "
-			    "(or omit is_validation and use validation_fraction)");
-		}
-		return;
+		// All-false mask (e.g. duckboost_fit default): fall through to validation_fraction.
+		train_rows.clear();
 	}
 
 	train_rows.resize(n_rows);
