@@ -1,0 +1,117 @@
+---
+title: "Native vs LightGBM benchmark"
+---
+
+Medium-scale holdout comparison of the built-in histogram trainer (`backend = 'native'`) against in-process LightGBM (`backend = 'lightgbm'`) on a deterministic synthetic tabular problem. Numbers come from the committed results file produced by [`scripts/native_benchmark/run.py`](https://github.com/JavOrraca/duckboost/blob/main/scripts/native_benchmark/run.py).
+
+::: {.callout-important}
+## How to read this
+Same hyperparameter MAP for both backends, ~200k rows, ~20% hash holdout. This is evidence that the native path learns useful structure at a moderate scale — not a bake-off that LightGBM loses in general. LightGBM still wins on huge data, GPU, and vendor-only features.
+:::
+
+```{python}
+#| echo: false
+#| output: asis
+import json
+from pathlib import Path
+
+results_path = Path("..") / "scripts" / "native_benchmark" / "results.json"
+payload = json.loads(results_path.read_text())
+
+print(f"**Generated:** `{payload['generated_at']}`  ")
+print(f"**Rows:** {payload['n_rows']:,} (seed `{payload['seed']}`)  ")
+host = payload.get("host", {})
+print(f"**Host:** `{host.get('platform', 'unknown')}`")
+print()
+
+opts = payload["shared_options"]
+print("**Shared train options**")
+print()
+print("| Option | Value |")
+print("| --- | --- |")
+for key in (
+    "n_estimators",
+    "max_depth",
+    "learning_rate",
+    "min_samples_leaf",
+    "max_bins",
+    "reg_lambda",
+    "subsample",
+    "colsample_bytree",
+    "seed",
+):
+    print(f"| `{key}` | `{opts[key]}` |")
+print()
+print("Both runs also set `categorical_features` to `cat_a,cat_b,cat_c,cat_d`.")
+print()
+
+runs = payload["runs"]
+print("## Holdout results")
+print()
+print("| Task | Backend | Metric | Holdout | Secondary | Train seconds |")
+print("| --- | --- | --- | ---: | ---: | ---: |")
+for run in runs:
+    secondary = ""
+    if run.get("secondary_metric") is not None:
+        secondary = f"{run['secondary_metric_name']}={run['secondary_metric']:.4f}"
+    print(
+        f"| {run['task']} | `{run['backend']}` | {run['metric']} | "
+        f"{run['holdout_metric']:.6f} | {secondary} | {run['train_seconds']:.3f} |"
+    )
+
+# Pairwise deltas for the summary callout.
+by_key = {(r["task"], r["backend"]): r for r in runs}
+print()
+print("## Takeaways from this run")
+print()
+if ("regression", "native") in by_key and ("regression", "lightgbm") in by_key:
+    n = by_key[("regression", "native")]
+    l = by_key[("regression", "lightgbm")]
+    print(
+        f"- **Regression RMSE:** native `{n['holdout_metric']:.4f}` vs LightGBM `{l['holdout_metric']:.4f}` "
+        f"(train `{n['train_seconds']:.1f}` s vs `{l['train_seconds']:.1f}` s)."
+    )
+if ("binary", "native") in by_key and ("binary", "lightgbm") in by_key:
+    n = by_key[("binary", "native")]
+    l = by_key[("binary", "lightgbm")]
+    print(
+        f"- **Binary logloss:** native `{n['holdout_metric']:.4f}` vs LightGBM `{l['holdout_metric']:.4f}` "
+        f"(accuracy `{n['secondary_metric']:.4f}` vs `{l['secondary_metric']:.4f}`; "
+        f"train `{n['train_seconds']:.1f}` s vs `{l['train_seconds']:.1f}` s)."
+    )
+```
+
+## Problem design
+
+Synthetic rows from `range(n)`:
+
+| Feature group | Columns | Role |
+| --- | --- | --- |
+| Categorical | `cat_a`…`cat_d` | Low-cardinality integer codes (`% 17`, `% 9`, …) |
+| Continuous | `x1`…`x8` | Sines/cosines, scaled remainders, logs |
+| Regression target | `y_reg` | Additive signal + `sin × cat` interaction + small noise |
+| Binary target | `y_bin` | Threshold on a related score |
+| Split | `split` | `hash(i, seed) % 5 = 0` → `test`, else `train` |
+
+Train wall time is measured with `epoch_ms(current_timestamp)` immediately before and after the `duckboost_train` aggregate (dataset build excluded). Holdout metrics use `duckboost_evaluate_agg` on the test split only.
+
+## Reproduce
+
+```bash
+# LightGBM-linked release build
+EXT_FLAGS='-DDUCKBOOST_WITH_LIGHTGBM=ON' make release
+
+python3 scripts/native_benchmark/run.py --n-rows 200000 --seed 7
+# refreshes scripts/native_benchmark/results.json — re-render this page to update the table
+```
+
+See [`scripts/native_benchmark/README.md`](https://github.com/JavOrraca/duckboost/blob/main/scripts/native_benchmark/README.md) for flags and caveats.
+
+## What this does *not* show
+
+- Public leaderboard datasets (Higgs, airline, …)
+- Multi-million-row throughput or multithreaded native training
+- Vendor-only knobs (monotonic constraints, GPU, GOSS/EFB)
+- Perfect hyperparameter parity — DuckDB maps a shared MAP into each backend
+
+For the SQL walkthrough on real CSVs, see the [native trainer vignette](vignettes/native-trainer.qmd).
