@@ -392,19 +392,36 @@ AggregateFunction GetTrainFunction(bool with_weight, bool with_is_validation, bo
 	return fun;
 }
 
+//! Reuse one parsed model when the JSON string repeats across a chunk (the common constant-model case).
+struct CachedModelParse {
+	string json;
+	BoostModel model;
+	bool valid = false;
+
+	const BoostModel &Get(const string &model_json) {
+		if (!valid || json != model_json) {
+			json = model_json;
+			model = BoostModel::FromJSON(model_json);
+			valid = true;
+		}
+		return model;
+	}
+};
+
 void PredictFunction(DataChunk &args, ExpressionState &, Vector &result) {
 	auto count = args.size();
 	UnifiedVectorFormat model_format;
 	args.data[0].ToUnifiedFormat(model_format);
 	auto model_data = UnifiedVectorFormat::GetData<string_t>(model_format);
 	auto writer = FlatVector::Writer<double>(result, count);
+	CachedModelParse cache;
 	for (idx_t i = 0; i < count; i++) {
 		auto model_idx = model_format.sel->get_index(i);
 		if (!model_format.validity.RowIsValid(model_idx)) {
 			writer.WriteNull();
 			continue;
 		}
-		auto model = BoostModel::FromJSON(model_data[model_idx].GetString());
+		auto &model = cache.Get(model_data[model_idx].GetString());
 		auto features = ReadFeatureList(args.data[1], i);
 		writer.WriteValue(model.Predict(features));
 	}
@@ -417,13 +434,14 @@ void PredictProbaFunction(DataChunk &args, ExpressionState &, Vector &result) {
 	args.data[0].ToUnifiedFormat(model_format);
 	auto model_data = UnifiedVectorFormat::GetData<string_t>(model_format);
 	auto writer = FlatVector::Writer<VectorListType<double>>(result, count);
+	CachedModelParse cache;
 	for (idx_t i = 0; i < count; i++) {
 		auto model_idx = model_format.sel->get_index(i);
 		if (!model_format.validity.RowIsValid(model_idx)) {
 			writer.WriteNull();
 			continue;
 		}
-		auto model = BoostModel::FromJSON(model_data[model_idx].GetString());
+		auto &model = cache.Get(model_data[model_idx].GetString());
 		auto features = ReadFeatureList(args.data[1], i);
 		auto proba = model.PredictProba(features);
 		idx_t class_idx = 0;
@@ -442,6 +460,7 @@ void EvaluateFunction(DataChunk &args, ExpressionState &, Vector &result) {
 	auto model_data = UnifiedVectorFormat::GetData<string_t>(model_format);
 	auto y_data = UnifiedVectorFormat::GetData<double>(y_format);
 	auto writer = FlatVector::Writer<double>(result, count);
+	CachedModelParse cache;
 
 	// Row-wise evaluate is awkward; support a convenience aggregate-style path via lists? For MVP, compute
 	// one-row metrics when users pass scalar model + scalar y + features, and document duckboost_evaluate_agg.
@@ -452,7 +471,7 @@ void EvaluateFunction(DataChunk &args, ExpressionState &, Vector &result) {
 			writer.WriteNull();
 			continue;
 		}
-		auto model = BoostModel::FromJSON(model_data[model_idx].GetString());
+		auto &model = cache.Get(model_data[model_idx].GetString());
 		auto features = ReadFeatureList(args.data[2], i);
 		EvalOptions options;
 		options.metric = "auto";

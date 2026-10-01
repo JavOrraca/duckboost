@@ -12,7 +12,7 @@ This page walks through a realistic SQL path — categoricals, early stopping, f
 | --- | --- |
 | Global quantile bins | `max_bins` (default 256); thresholds fixed once from training rows |
 | Categoricals | `categorical_features`: ordered `g/h` partitions → `EQUAL` or `IN` |
-| Growth | `growth_policy`: `depthwise` (default), `lossguide`, `oblivious` / `symmetric` |
+| Growth | `growth_policy`: `depthwise` (default), `lossguide`, `oblivious` / `symmetric` (all score continuous splits from the same global bins) |
 | Losses | squared / absolute / quantile / expectile; binary logistic; multiclass softmax |
 | Regularization | `reg_lambda`, `reg_alpha`, `min_split_gain` (`gamma`) |
 | Sampling | `subsample`, `colsample_bytree`, `class_weight`, `seed` |
