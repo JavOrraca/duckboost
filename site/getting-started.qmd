@@ -45,9 +45,9 @@ ORDER BY backend;
 
 `training_supported` is true only for backends this binary can train in-process. A default `make` enables the native histogram trainer (`backend` column still reads `reference` in `duckboost_backends()` / model JSON; pass `backend = 'native'` in train options). XGBoost, LightGBM, and CatBoost stay import-only unless you linked the vendor libraries.
 
-## Hello world
+## First model
 
-This is the `hello_world` query from the community-extension descriptor. The default task is regression, so the 0/1 labels are fit as a numeric target. Each block on this site starts a new in-memory database.
+Train a small body-mass regression on the bundled [Palmer penguins](https://allisonhorst.github.io/palmerpenguins/) CSV. Named features, an explicit target, and a holdout-style training RMSE show the usual tabular loop: table → feature list → `duckboost_train` → metric. Each block on this site starts a new in-memory database; run examples from the repository root so `data/penguins.csv` resolves.
 
 ```{python}
 #| echo: false
@@ -56,23 +56,73 @@ from _helpers.duckrun import show
 
 show("""
 LOAD duckboost;
-CREATE TABLE train AS
-SELECT i % 2 AS y, i * 0.1 AS x1, (i % 3) * 0.2 AS x2
-FROM range(40) t(i);
+
+CREATE TABLE penguins AS
+SELECT
+  body_mass_g::DOUBLE AS body_mass_g,
+  [bill_length_mm, bill_depth_mm, flipper_length_mm, (sex = 'male')::DOUBLE] AS features
+FROM read_csv('data/penguins.csv', nullstr = 'NA')
+WHERE body_mass_g IS NOT NULL
+  AND bill_length_mm IS NOT NULL
+  AND sex IS NOT NULL;
+
 CREATE TABLE models AS
 SELECT duckboost_train(
-  y, [x1, x2],
+  body_mass_g, features,
   MAP {
     'backend': 'native',
-    'n_estimators': '20',
+    'n_estimators': '40',
     'max_depth': '3',
-    'learning_rate': '0.1',
-    'feature_names': 'x1,x2'
+    'learning_rate': '0.15',
+    'feature_names': 'bill_length_mm,bill_depth_mm,flipper_length_mm,male'
   }
 ) AS model
-FROM train;
-SELECT duckboost_predict(model, [x1, x2]) AS pred
-FROM models, train
+FROM penguins;
+
+SELECT round(duckboost_evaluate_agg(
+  model, body_mass_g, features, MAP {'metric': 'rmse'}
+), 1) AS rmse_g
+FROM models, penguins;
+""")
+```
+
+A few predictions next to the measured mass:
+
+```{python}
+#| echo: false
+#| output: asis
+from _helpers.duckrun import show
+
+show("""
+LOAD duckboost;
+
+CREATE TABLE penguins AS
+SELECT
+  body_mass_g::DOUBLE AS body_mass_g,
+  [bill_length_mm, bill_depth_mm, flipper_length_mm, (sex = 'male')::DOUBLE] AS features
+FROM read_csv('data/penguins.csv', nullstr = 'NA')
+WHERE body_mass_g IS NOT NULL
+  AND bill_length_mm IS NOT NULL
+  AND sex IS NOT NULL;
+
+CREATE TABLE models AS
+SELECT duckboost_train(
+  body_mass_g, features,
+  MAP {
+    'backend': 'native',
+    'n_estimators': '40',
+    'max_depth': '3',
+    'learning_rate': '0.15',
+    'feature_names': 'bill_length_mm,bill_depth_mm,flipper_length_mm,male'
+  }
+) AS model
+FROM penguins;
+
+SELECT
+  round(body_mass_g, 0) AS body_mass_g,
+  round(duckboost_predict(model, features), 0) AS pred_g
+FROM models, penguins
+ORDER BY body_mass_g
 LIMIT 5;
 """)
 ```
@@ -81,5 +131,5 @@ LIMIT 5;
 
 - [Native trainer](vignettes/native-trainer.qmd) — categoricals, early stopping, importance, SQL export, and small benchmarks.
 - [Splitting data and preprocessing](vignettes/split-and-preprocess.qmd) — train/test splits and encoding helpers.
-- [Example datasets: iris and penguins](vignettes/datasets.qmd) — multiclass, binary, and regression on real CSVs.
+- [Example datasets: iris and penguins](vignettes/datasets.qmd) — multiclass, binary, and regression on the bundled CSVs.
 - [Train, predict, export](vignettes/train-predict-export.qmd) — export a model to plain SQL and score without calling the extension.
