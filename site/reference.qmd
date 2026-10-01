@@ -19,18 +19,18 @@ duckboost_train(y DOUBLE, features DOUBLE[], weight DOUBLE, options MAP(VARCHAR,
 
 | Option | Aliases | Default | Meaning |
 | --- | --- | --- | --- |
-| `backend` | | `reference` | `reference`, `xgboost` / `xgb`, `lightgbm` / `lgbm` / `lgb`, `catboost` / `cb`. Also accepts `duckboost` and `gbdt` for the reference backend. |
+| `backend` | | `reference` | Preferred public name: `native` (built-in histogram GBDT). Stable aliases: `reference`, `duckboost`, `gbdt`. Vendor: `xgboost` / `xgb`, `lightgbm` / `lgbm` / `lgb`, `catboost` / `cb`. Model JSON still serializes the native backend as `"reference"`. |
 | `task` | | `regression` | `regression` (`regressor`, `mse`), `binary` (`classification`, `logistic`, `binomial`), `multiclass` (`multi_class`, `multi-class`, `softmax`) |
-| `objective` | `loss` | `squared_error` | Regression loss: `squared_error` (`l2`, `mse`, `reg:squarederror`), `absolute_error` (`mae`, `l1`, `regression_l1`, `reg:absoluteerror`), `quantile` (`pinball`, `reg:quantileerror`), or `expectile`. Legacy task names such as `binary` remain accepted. Non-squared objectives require the reference backend and `task=regression`. |
+| `objective` | `loss` | `squared_error` | Regression loss: `squared_error` (`l2`, `mse`, `reg:squarederror`), `absolute_error` (`mae`, `l1`, `regression_l1`, `reg:absoluteerror`), `quantile` (`pinball`, `reg:quantileerror`), or `expectile`. Legacy task names such as `binary` remain accepted. Non-squared objectives require the native backend and `task=regression`. |
 | `quantile_alpha` | `expectile_alpha`, `tau` | `0.5` | Quantile or expectile level in `(0, 1)`. Only valid with those objectives. `alpha` remains an alias for `reg_alpha`. |
 | `n_estimators` | `num_boost_round`, `iterations` | `10` | Number of boosting rounds. Must be > 0. |
-| `growth_policy` | `grow_policy` | `depthwise` | Tree growth order: `depthwise` (`depth_wise`, `levelwise`) or loss-guided leaf-wise growth via `lossguide` (`leafwise`, `leaf_wise`, `best_first`). Reference backend only. |
-| `max_leaves` | `num_leaves`, `max_leaf_nodes` | `31` with `lossguide` | Maximum leaves per loss-guided tree. Must be >= 2 and cannot be set with depth-wise growth. Reference backend only. |
-| `max_depth` | `depth` | `3`; unlimited with `lossguide` when omitted | Maximum tree depth. Must be > 0 for depth-wise growth. Loss-guided growth accepts `0` for unlimited depth. |
+| `growth_policy` | `grow_policy` | `depthwise` | Tree growth: `depthwise` (`depth_wise`, `levelwise`), loss-guided `lossguide` (`leafwise`, `leaf_wise`, `best_first`), or CatBoost-style `oblivious` (`symmetric`, `depthwise_oblivious`). Oblivious is native-only; lossguide also works with linked LightGBM. |
+| `max_leaves` | `num_leaves`, `max_leaf_nodes` | `31` with `lossguide` | Maximum leaves per loss-guided tree. Must be >= 2 and cannot be set with depth-wise or oblivious growth. |
+| `max_depth` | `depth` | `3`; unlimited with `lossguide` when omitted | Maximum tree depth. Must be > 0 for depth-wise and oblivious growth. Loss-guided growth accepts `0` for unlimited depth. |
 | `learning_rate` | `eta`, `lr` | `0.1` | Must be > 0. |
 | `min_samples_leaf` | `min_data_in_leaf` | `1` | Minimum rows in a leaf. |
 | `min_child_weight` | | `0` | Minimum sum of hessians in a child (XGBoost-style). |
-| `max_bins` | | `256` | Most candidate split thresholds per feature and node. A feature with at most `max_bins + 1` distinct values in a node is split exactly; otherwise thresholds are taken at evenly spaced quantiles of its distinct values. LightGBM receives it as `max_bin`. |
+| `max_bins` | | `256` | Global quantile histogram bins per continuous feature (computed once from training rows). A feature with at most `max_bins + 1` distinct values keeps every midpoint; otherwise thresholds are thinned to `max_bins` quantiles. LightGBM receives it as `max_bin`. |
 | `reg_lambda` | `lambda`, `lambda_l2` | `0` | L2 regularization on leaf weights. |
 | `reg_alpha` | `alpha`, `lambda_l1` | `0` | L1 regularization on leaf weights. |
 | `min_split_gain` | `gamma` | `0` | Minimum loss reduction required to make a split. |
@@ -42,13 +42,13 @@ duckboost_train(y DOUBLE, features DOUBLE[], weight DOUBLE, options MAP(VARCHAR,
 | `class_weight` | `class_weights` | | `balanced` or comma-separated per-class multipliers (binary / multiclass). |
 | `n_classes` | `num_class`, `num_classes` | max label + 1 | Multiclass only; ignored for other tasks. Must be >= 2 and greater than every label. Set it when a class is absent from the training rows. |
 | `feature_names` | | `f0,f1,...` | Comma-separated names. The count must match the feature width. |
-| `categorical_features` | `cat_features`, `categorical_feature` | | Comma-separated feature names or zero-based indices. The reference trainer evaluates exact one-vs-rest equality splits without `max_bins` capping; native trainers reject this option. |
+| `categorical_features` | `cat_features`, `categorical_feature` | | Comma-separated feature names or zero-based indices. The native trainer orders categories by local target statistic (`g/h`) and emits `EQUAL` or multi-category `IN` splits. Linked LightGBM maps this to Dataset categoricals; XGBoost / CatBoost train reject it (use import). |
 
 Unknown keys raise `duckboost: unknown train option`. Values are strings inside the MAP.
 
-Feature `NULL`s become NaN and the reference trainer learns a per-split `default_left` missing direction (same idea as XGBoost). Sample `weight` must be non-NULL and `>= 0`.
+Feature `NULL`s become NaN and the native trainer learns a per-split `default_left` missing direction (same idea as XGBoost). Sample `weight` must be non-NULL and `>= 0`.
 
-Regression supports squared-error, absolute-error, quantile, and expectile objectives in the reference trainer. Absolute-error and quantile trees renew each grown leaf to the weighted median or requested weighted residual quantile. Binary uses logistic loss and requires labels in `{0, 1}`. `duckboost_predict` then returns the class probability, not a 0/1 label.
+Regression supports squared-error, absolute-error, quantile, and expectile objectives on the native backend. Absolute-error and quantile trees renew each grown leaf to the weighted median or requested weighted residual quantile. Binary uses logistic loss and requires labels in `{0, 1}`. `duckboost_predict` then returns the class probability, not a 0/1 label.
 
 Multiclass uses softmax cross-entropy and requires integer class indices `0, 1, ..., n_classes - 1` as `y`, so map string classes to integers first (for example with `CASE`). Each boosting round fits one tree per class, so a model has `n_estimators * n_classes` trees. Each class's starting score is the log of its share of the training rows. `duckboost_predict` returns the most likely class index and `duckboost_predict_proba` returns one probability per class. The XGBoost and LightGBM trainers apply the same label rules.
 
