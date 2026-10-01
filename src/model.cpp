@@ -310,7 +310,9 @@ string BackendToString(BoostBackend backend) {
 
 BoostBackend BackendFromString(const string &name) {
 	auto lower = StringUtil::Lower(name);
-	if (lower == "reference" || lower == "duckboost" || lower == "gbdt") {
+	// "native" is the preferred public name; "reference" remains the JSON wire value and a
+	// stable alias so existing models and docs keep working.
+	if (lower == "native" || lower == "reference" || lower == "duckboost" || lower == "gbdt") {
 		return BoostBackend::REFERENCE;
 	}
 	if (lower == "xgboost" || lower == "xgb") {
@@ -322,8 +324,8 @@ BoostBackend BackendFromString(const string &name) {
 	if (lower == "catboost" || lower == "cb") {
 		return BoostBackend::CATBOOST;
 	}
-	throw InvalidInputException("duckboost: unknown backend '%s' (expected reference, xgboost, lightgbm, or catboost)",
-	                            name);
+	throw InvalidInputException(
+	    "duckboost: unknown backend '%s' (expected native/reference, xgboost, lightgbm, or catboost)", name);
 }
 
 string TaskToString(BoostTask task) {
@@ -411,7 +413,7 @@ bool BackendTrainingSupported(BoostBackend backend) {
 string BackendCapabilityNote(BoostBackend backend) {
 	switch (backend) {
 	case BoostBackend::REFERENCE:
-		return "in-process native reference GBDT (histogram trainer; train/predict/evaluate/to_sql)";
+		return "in-process native histogram GBDT (backend aliases: native, reference; train/predict/evaluate/to_sql)";
 	case BoostBackend::XGBOOST:
 		if (NativeTrainerLinked(backend)) {
 			return "native train via XGBoost C API (dump→import); also duckboost_import dump_model JSON";

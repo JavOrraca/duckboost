@@ -2,32 +2,30 @@
 title: "Use cases and choosing a trainer"
 ---
 
-duckboost puts gradient-boosted trees (the model family behind XGBoost, LightGBM, and CatBoost) inside DuckDB. A model is trained with a SQL aggregate, stored as a JSON string in a table, scored with a SQL function, and can be exported as a plain SQL query that needs no extension at all. This page explains when that is useful and which of the three training paths to pick.
+duckboost puts gradient-boosted trees inside DuckDB. A model is trained with a SQL aggregate, stored as a JSON string in a table, scored with a SQL function, and can be exported as a plain SQL query that needs no extension at all. This page explains when that is useful and which training path to pick.
 
 ## Who it is for
 
-**People who already work in SQL.** Analysts and analytics engineers whose data and transformations live in DuckDB, dbt, or SQL scripts can fit a model without moving to Python or R, and without keeping two copies of the feature logic. Feature engineering, the train/test split, training, and evaluation are all queries.
+**People who already work in SQL.** Analysts and analytics engineers whose data and transformations live in DuckDB, dbt, or SQL scripts can fit a model without moving to Python or R, and without keeping two copies of the feature logic.
 
-**Systems that have DuckDB but no Python runtime.** A scheduled job, a dbt model, a CLI tool, a desktop app that embeds DuckDB, or a CI check can train and score with the same binary it already ships. There is no model server, no pickle file, and no Python environment to keep in sync.
+**Systems that have DuckDB but no Python runtime.** A scheduled job, a dbt model, a CLI tool, a desktop app that embeds DuckDB, or a CI check can train and score with the same binary it already ships.
 
-**Teams that train elsewhere but want to score in the database.** A data scientist can keep training in Python or R with XGBoost, LightGBM, or CatBoost, export the model, and load it with `duckboost_import`. Scoring then happens next to the data, in SQL, the way [orbital](https://posit-dev.github.io/orbital/) does for scikit-learn and tidymodels pipelines.
+**Teams that train elsewhere but want to score in the database.** Keep training in Python or R with XGBoost, LightGBM, or CatBoost, export the model, and load it with `duckboost_import`. Scoring then happens next to the data, the way [orbital](https://posit-dev.github.io/orbital/) does for scikit-learn and tidymodels pipelines.
 
 ## Common use cases
 
 | Use case | What duckboost provides |
 | --- | --- |
-| Batch scoring inside a warehouse or lakehouse | `duckboost_predict` over a table, or `duckboost_to_sql` to turn the model into a `SELECT` that any DuckDB session can run, including ones without the extension. |
-| Scoring where no ML runtime is allowed | The exported SQL is only `CASE` expressions and arithmetic. It can live in a view, a dbt model, or a BI tool's SQL. |
-| Retraining as a pipeline step | `duckboost_train` is an aggregate, so a nightly retrain is a `CREATE TABLE models AS SELECT duckboost_train(...)` in the same scheduled SQL that builds the features. |
-| One model per group | `GROUP BY` trains a separate model per store, region, or segment in one query (example below). |
+| Batch scoring inside a warehouse or lakehouse | `duckboost_predict` over a table, or `duckboost_to_sql` for a `SELECT` any DuckDB session can run. |
+| Scoring where no ML runtime is allowed | Exported SQL is only `CASE` expressions and arithmetic. |
+| Retraining as a pipeline step | `CREATE TABLE models AS SELECT duckboost_train(...)` in the same scheduled SQL that builds features. |
+| One model per group | `GROUP BY` trains a separate model per store, region, or segment (example below). |
 | Hyperparameter search in SQL | Cross join a grid of settings and `GROUP BY` it; see the [example datasets](vignettes/datasets.qmd) vignette. |
-| Models as data | Models are JSON strings in ordinary tables, so they can be versioned, diffed, joined to metadata, and audited with SQL. |
-| Quick baselines during exploration | A few lines of SQL give a boosted-tree baseline and holdout metrics while you are still exploring the data. |
-| Teaching and reproducible examples | The built-in trainer is deterministic and has no dependencies, so an example gives the same model every run on every machine. |
+| Models as data | Models are JSON strings in ordinary tables — versioned, diffed, joined, audited with SQL. |
+| Quick baselines during exploration | A few lines of SQL give a boosted-tree baseline and holdout metrics. |
+| Teaching and reproducible examples | The native trainer is deterministic and dependency-free. |
 
 ### Example: one model per group
-
-Every `GROUP BY` group gets its own model. Here each penguin species gets its own body-mass regression, and each model is scored on its own species.
 
 ```{python}
 #| echo: false
@@ -48,7 +46,11 @@ CREATE TABLE models AS
 SELECT
   species,
   count(*) AS n_rows,
-  duckboost_train(body_mass_g, features, MAP {'n_estimators': '50', 'max_depth': '2'}) AS model
+  duckboost_train(body_mass_g, features, MAP {
+    'backend': 'native',
+    'n_estimators': '50',
+    'max_depth': '2'
+  }) AS model
 FROM penguins
 GROUP BY species;
 
@@ -64,50 +66,51 @@ ORDER BY species;
 
 ## When duckboost is not the right tool
 
-- **Data larger than memory.** `duckboost_train` collects every training row in memory before it fits, whichever trainer you use. DuckDB can scan much more than that, but the training step cannot stream.
-- **Advanced training features.** Early stopping, sample weights, monotonic constraints, custom losses, and GPU training are not available through `duckboost_train`. Train with the vendor library directly and import the result.
-- **Missing values in features.** `NULL` feature values are rejected. Impute them or drop those rows in SQL first. Categorical columns must be encoded as numbers; `duckboost_dummy` and `duckboost_integer` help (see [Splitting data and preprocessing](vignettes/split-and-preprocess.qmd)).
-- **Model explanation tooling.** There is no SHAP or feature-importance output. Use the vendor library's tools if you need them.
-- **Production-grade accuracy with the built-in trainer.** See below: for important models, use XGBoost or LightGBM (inside or outside DuckDB).
+- **Data larger than memory.** `duckboost_train` materializes every training row (and bin ids) before it fits. DuckDB can scan more than that; the training step cannot stream.
+- **Vendor-only features.** Monotonic constraints, interaction constraints, GPU training, GOSS/EFB, and CatBoost ordered CTRs are not exposed through `duckboost_train`. Train with the vendor library and import the result.
+- **Huge production ensembles.** The native trainer is single-threaded and aimed at SQL pipelines and moderate sizes. For tens of millions of rows or latency-critical HPO, prefer LightGBM/XGBoost outside DuckDB (or a vendor-linked build) and import.
+- **Deep explanation tooling.** `duckboost_importance` covers gain / cover / frequency. There is no SHAP API; use the vendor library if you need it.
 
 ## Choosing a trainer
 
-There are three ways to get a model into duckboost. They all produce the same model JSON, so `duckboost_predict`, `duckboost_predict_proba`, `duckboost_evaluate_agg`, and `duckboost_to_sql` behave the same whichever you use. Scoring speed and the exported SQL depend only on the trees, not on how they were trained.
+All three paths produce the same model JSON, so scoring and SQL export behave the same whichever you use.
 
-1. **Built-in trainer** (`backend = 'reference'`). A small gradient booster written as part of duckboost. It is always available.
-2. **XGBoost or LightGBM inside DuckDB** (`backend = 'xgboost'` or `'lightgbm'`). `duckboost_train` hands the rows to the vendor library in the same process, then converts its trees. This needs a build with `DUCKBOOST_WITH_XGBOOST` or `DUCKBOOST_WITH_LIGHTGBM` and the vendor libraries installed. A default `make` does not include them, and `duckboost_backends()` shows what your binary can train.
-3. **Train outside DuckDB, then import.** Train in Python, R, or a CLI with the full vendor API, save the model, and load it with `duckboost_import('xgboost' | 'lightgbm' | 'catboost', dump)`. See [Import model dumps](vignettes/import-dumps.qmd).
+1. **Native histogram trainer** (`backend = 'native'`, alias `'reference'`). Built into every duckboost build. Default.
+2. **XGBoost or LightGBM inside DuckDB** (`backend = 'xgboost'` or `'lightgbm'`). Needs a build with `DUCKBOOST_WITH_XGBOOST` / `DUCKBOOST_WITH_LIGHTGBM`. Check `duckboost_backends()`.
+3. **Train outside DuckDB, then import.** Full vendor API; load with `duckboost_import`. See [Import model dumps](vignettes/import-dumps.qmd).
 
-| | Built-in | XGBoost / LightGBM inside DuckDB | Train outside, then import |
+| | Native (`native` / `reference`) | XGBoost / LightGBM inside DuckDB | Train outside, then import |
 | --- | --- | --- | --- |
 | Extra dependencies | None | Vendor shared libraries at build and run time | Python or R with the vendor package |
-| Where the data goes | Stays in the DuckDB process | Stays in the DuckDB process (copied once more into the vendor's matrix) | Exported out of DuckDB and back |
+| Where the data goes | Stays in the DuckDB process | Stays in-process (copied into the vendor matrix) | Exported out of DuckDB and back |
 | Tasks | Regression, binary, multiclass | Regression, binary, multiclass | Anything the vendor supports that duckboost can import |
-| Hyperparameters | `n_estimators`, `max_depth`, `learning_rate`, `min_samples_leaf`, `max_bins` | The same small set, mapped to vendor parameters | The full vendor API |
-| Regularization and sampling | None (no L1/L2 penalty, no row or column subsampling) | Vendor defaults only; not configurable through duckboost | Fully configurable |
-| Early stopping, cross-validation | No early stopping. Cross-validation in SQL with `duckboost_vfold` | No early stopping. Cross-validation in SQL with `duckboost_vfold` | Yes |
-| Speed | Single-threaded sort-and-sweep split search. With 4 features, 50 rounds, and depth 3, regression takes about 4 s for 100,000 rows and 15 s for 300,000 on a 4-core VM; a 3-class model builds three trees per round and takes about 13 s for 100,000 rows | Fast, multithreaded histogram algorithms | Fast |
-| Determinism | Always deterministic: the same rows give the same model, whatever order they arrive in and however many threads run | Repeatable in practice: duckboost passes no subsampling settings | Depends on your seeds and settings |
-| Numeric precision | Trains and exports in `DOUBLE` | XGBoost trains in 32-bit floats | Vendor-dependent |
-| CatBoost | No | No (CatBoost has no public training C API) | Yes, including categorical features |
+| Growth policies | Depth-wise, loss-guided, oblivious / symmetric | LightGBM: depth-wise or loss-guided; XGBoost: depth-wise | Full vendor API |
+| Categoricals | Ordered target-statistic `EQUAL` / `IN` partitions | LightGBM Dataset categoricals; XGBoost via import | Yes (including CatBoost CTR on import) |
+| Regularization & sampling | L1 / L2 / `gamma`, row & column subsample, `class_weight` | Mapped subset of vendor knobs | Fully configurable |
+| Early stopping | `early_stopping_rounds` + `validation_fraction` | Same options (mapped to vendor APIs) | Yes |
+| Missing values | Per-split `default_left` (NaN) | Vendor semantics on import / native train | Vendor semantics |
+| Speed | Single-threaded histogram trainer | Multithreaded vendor histograms | Fast |
+| Determinism | Deterministic for a fixed seed and option map | Repeatable in practice with the seeds duckboost passes | Depends on your seeds |
+| CatBoost train | No | No public C API | Yes via import |
 
-### Use the built-in trainer when
+### Use the native trainer when
 
-- You want zero setup: any duckboost build, any machine, no libraries to install or version-match.
-- You are learning, teaching, prototyping, or writing tests and docs, where an identical model on every run matters more than the last bit of accuracy.
-- The data is small to moderate (up to a few hundred thousand rows) and a reasonable baseline is enough, for example a quick holdout check while exploring features.
-- A system must train with only DuckDB available, such as a scheduled SQL job, an embedded app, or a CI pipeline.
+- You want zero setup: any duckboost build, no libraries to install or version-match.
+- Training must stay inside SQL (scheduled jobs, embedded apps, CI, dbt).
+- The data is small to moderate and a strong SQL-native baseline is enough.
+- You want categoricals, early stopping, regularization, or oblivious trees without leaving DuckDB.
 
 ### Use XGBoost or LightGBM inside DuckDB when
 
-- You want a proven training algorithm and more speed, but still want training to be one SQL statement over data that stays in DuckDB.
+- You want a proven vendor algorithm and more speed, but still one SQL statement over in-process data.
 - You control the build and can ship the vendor libraries with it.
-- The small set of hyperparameters duckboost passes is enough, and you are happy to tune them with a SQL grid search.
 
 ### Train outside DuckDB and import when
 
-- The model matters enough to need the vendor's full toolbox: regularization, subsampling, early stopping, cross-validation, sample weights, or constraints.
-- You want CatBoost, or a model your team already trains and validates in Python or R.
-- You only need DuckDB for scoring. Import once, then use `duckboost_predict` or ship the SQL from `duckboost_to_sql`.
+- The model needs the vendor's full toolbox (constraints, GPU, CatBoost CTRs, large-scale HPO).
+- Your team already trains and validates in Python or R.
+- You only need DuckDB for scoring.
 
-A common pattern is to start with the built-in trainer to check that the features and SQL pipeline work, then switch the backend or import a vendor-trained model once the model needs to be production quality. Because the model format and scoring functions are the same, the scoring side of the pipeline does not change.
+A common pattern: start with `backend = 'native'` to prove the features and SQL pipeline, then switch the backend or import a vendor model once the model must be production-critical. Scoring and `duckboost_to_sql` stay the same.
+
+For a full walkthrough of the native path (categoricals, early stopping, importance, SQL export) and small published benchmarks, see the [Native trainer](vignettes/native-trainer.qmd) vignette.
