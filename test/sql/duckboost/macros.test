@@ -54,3 +54,75 @@ SELECT count(*) = 40 AND bool_and(abs(s.prediction - duckboost_predict(m.model, 
 FROM scored s, models m;
 ----
 true
+
+# duckboost_fit with weight + is_validation (external early stopping)
+statement ok
+CREATE TABLE penguins AS
+FROM read_csv('data/penguins.csv', nullstr = 'NA')
+WHERE bill_length_mm IS NOT NULL AND sex IS NOT NULL;
+
+statement ok
+CREATE TABLE penguins_tvt AS
+FROM duckboost_initial_validation_split('penguins', prop := [0.6, 0.2], strata := species, seed := 42);
+
+statement ok
+CREATE VIEW penguins_fit_rows AS
+SELECT *
+FROM penguins_tvt
+WHERE split IN ('train', 'validation');
+
+statement ok
+CREATE TABLE penguins_fit_models AS
+FROM duckboost_fit(
+	'penguins_fit_rows',
+	(sex = 'male')::DOUBLE,
+	[bill_length_mm, bill_depth_mm, flipper_length_mm, body_mass_g],
+	is_validation := (split = 'validation'),
+	options := MAP {
+		'task': 'binary',
+		'n_estimators': '40',
+		'max_depth': '3',
+		'learning_rate': '0.2',
+		'early_stopping_rounds': '5',
+		'seed': '11',
+		'feature_names': 'bill_length_mm,bill_depth_mm,flipper_length_mm,body_mass_g'
+	}
+);
+
+query I
+SELECT
+	duckboost_evaluate_agg(
+		m.model,
+		(s.sex = 'male')::DOUBLE,
+		[s.bill_length_mm, s.bill_depth_mm, s.flipper_length_mm, s.body_mass_g],
+		MAP {'metric': 'accuracy'}
+	) > 0.7
+FROM penguins_fit_models m, penguins_tvt s
+WHERE s.split = 'test';
+----
+true
+
+# Omitting is_validation still allows validation_fraction early stopping
+statement ok
+FROM duckboost_fit(
+	'train',
+	y,
+	[x1, x2],
+	options := MAP {
+		'n_estimators': '30',
+		'max_depth': '2',
+		'early_stopping_rounds': '3',
+		'validation_fraction': '0.25',
+		'seed': '2'
+	}
+);
+
+# Weight-only named argument
+statement ok
+FROM duckboost_fit(
+	'train',
+	y,
+	[x1, x2],
+	weight := 1.0,
+	options := MAP {'n_estimators': '5', 'max_depth': '2', 'feature_names': 'x1,x2'}
+);

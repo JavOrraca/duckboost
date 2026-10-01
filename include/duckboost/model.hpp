@@ -233,8 +233,9 @@ bool BackendTrainingSupported(BoostBackend backend);
 string BackendCapabilityNote(BoostBackend backend);
 
 //! Partition rows into train / validation for early stopping.
-//! When is_validation is non-empty it must match n_rows; true rows are validation and cannot be
-//! combined with validation_fraction. Otherwise a random hold-out uses validation_fraction
+//! When is_validation is non-empty it must match n_rows. Any true row marks an external validation
+//! set (cannot combine with validation_fraction). An all-false mask is ignored so callers such as
+//! duckboost_fit can default the argument. Otherwise a random hold-out uses validation_fraction
 //! (defaulting to 0.2 when early_stopping_rounds > 0 and the fraction was unset).
 void ResolveTrainValidRows(idx_t n_rows, const TrainOptions &options, const vector<bool> &is_validation,
                            vector<idx_t> &train_rows, vector<idx_t> &valid_rows);

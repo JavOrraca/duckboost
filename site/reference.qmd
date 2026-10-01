@@ -50,7 +50,7 @@ duckboost_train(y DOUBLE, features DOUBLE[], weight DOUBLE, is_validation BOOLEA
 
 Unknown keys raise `duckboost: unknown train option`. Values are strings inside the MAP.
 
-Optional `is_validation` marks rows for an external validation set (for example `split = 'validation'` from `duckboost_initial_validation_split`). Those rows are held out of fitting and, when `early_stopping_rounds > 0`, drive early stopping. Do not also set `validation_fraction`. `is_validation` cannot be NULL; with early stopping at least one row must be true and at least one false.
+Optional `is_validation` marks rows for an external validation set (for example `split = 'validation'` from `duckboost_initial_validation_split`). Those rows are held out of fitting and, when `early_stopping_rounds > 0`, drive early stopping. Do not also set `validation_fraction` when any row is true. `NULL` is treated as false; an all-false mask is ignored so `validation_fraction` still works (including via `duckboost_fit` defaults).
 
 Feature `NULL`s become NaN and the native trainer learns a per-split `default_left` missing direction (same idea as XGBoost). Sample `weight` must be non-NULL and `>= 0`.
 
@@ -385,17 +385,17 @@ SELECT name, enabled FROM duckboost_build_info() ORDER BY name;
 Table macro.
 
 ```text
-duckboost_fit(source, y, features, options)
+duckboost_fit(source, y, features, weight := NULL, is_validation := NULL, options := MAP {})
 ```
 
-`options` defaults to `MAP {}`. The body is:
+The body is:
 
 ```sql
-SELECT duckboost_train(y, features, options) AS model
+SELECT duckboost_train(y, features, coalesce(weight, 1.0), coalesce(is_validation, false), options) AS model
 FROM query_table(source::VARCHAR)
 ```
 
-Pass the table name as a VARCHAR literal. `y` and `features` are expressions in that table, same as `duckboost_train`. The macro's parameter types are NULL in `duckdb_functions()`.
+Pass the table name as a VARCHAR literal. `y`, `features`, `weight`, and `is_validation` are expressions in that table. Omitting `is_validation` (all false) leaves random `validation_fraction` early stopping available; pass `is_validation := (split = 'validation')` with rows from `duckboost_initial_validation_split` for an external hold-out. The macro's parameter types are NULL in `duckdb_functions()`.
 
 ```{python}
 #| echo: false
