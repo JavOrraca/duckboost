@@ -101,31 +101,9 @@ struct RowSplit {
 	vector<idx_t> valid_rows;
 };
 
-//! Match the reference trainer: hold out validation_fraction when early_stopping_rounds > 0.
-RowSplit SplitTrainValidRows(idx_t n_rows, const TrainOptions &options) {
+RowSplit SplitTrainValidRows(idx_t n_rows, const TrainOptions &options, const vector<bool> &is_validation) {
 	RowSplit split;
-	split.train_rows.resize(n_rows);
-	std::iota(split.train_rows.begin(), split.train_rows.end(), 0);
-	if (options.early_stopping_rounds == 0 || n_rows < 4 || options.validation_fraction <= 0) {
-		return split;
-	}
-	vector<idx_t> shuffled = split.train_rows;
-	uint64_t state = options.seed ? options.seed : 1;
-	auto next = [&]() {
-		state = state * 6364136223846793005ULL + 1;
-		return state;
-	};
-	for (idx_t i = 0; i < shuffled.size(); i++) {
-		idx_t j = i + static_cast<idx_t>(next() % (shuffled.size() - i));
-		std::swap(shuffled[i], shuffled[j]);
-	}
-	idx_t valid_n =
-	    MaxValue<idx_t>(1, static_cast<idx_t>(std::floor(options.validation_fraction * static_cast<double>(n_rows))));
-	valid_n = MinValue<idx_t>(valid_n, n_rows - 1);
-	split.valid_rows.assign(shuffled.begin(), shuffled.begin() + valid_n);
-	split.train_rows.assign(shuffled.begin() + valid_n, shuffled.end());
-	std::sort(split.train_rows.begin(), split.train_rows.end());
-	std::sort(split.valid_rows.begin(), split.valid_rows.end());
+	ResolveTrainValidRows(n_rows, options, is_validation, split.train_rows, split.valid_rows);
 	return split;
 }
 
@@ -235,7 +213,7 @@ DMatrixHandle MakeXGBoostDMatrix(const vector<float> &flat, const vector<float> 
 }
 
 BoostModel TrainWithXGBoost(const vector<double> &y, const vector<vector<double>> &x, const TrainOptions &options,
-                            const vector<double> &weights) {
+                            const vector<double> &weights, const vector<bool> &is_validation) {
 	EnsureRectangular(y, x);
 	const idx_t nrow = y.size();
 	const idx_t ncol = x[0].size();
@@ -244,7 +222,7 @@ BoostModel TrainWithXGBoost(const vector<double> &y, const vector<vector<double>
 		throw InvalidInputException("duckboost: sample weight count must match row count for xgboost train");
 	}
 
-	const auto split = SplitTrainValidRows(nrow, options);
+	const auto split = SplitTrainValidRows(nrow, options, is_validation);
 	vector<float> train_flat, train_labels, train_weights;
 	PackXGBoostRows(y, x, weights, split.train_rows, train_flat, train_labels, train_weights);
 	DMatrixHandle dtrain = MakeXGBoostDMatrix(train_flat, train_labels, train_weights, ncol);
@@ -312,7 +290,7 @@ BoostModel TrainWithXGBoost(const vector<double> &y, const vector<vector<double>
 			ThrowXGBoostError("XGBoosterUpdateOneIter");
 		}
 		trained_rounds = iter + 1;
-		if (!dvalid) {
+		if (!dvalid || options.early_stopping_rounds == 0) {
 			continue;
 		}
 		const DMatrixHandle eval_mats[] = {dvalid};
@@ -345,7 +323,7 @@ BoostModel TrainWithXGBoost(const vector<double> &y, const vector<vector<double>
 
 	const idx_t trees_per_round = options.task == BoostTask::MULTICLASS ? n_classes : 1;
 	idx_t keep = out_len;
-	if (dvalid && best_rounds > 0) {
+	if (dvalid && options.early_stopping_rounds > 0 && best_rounds > 0) {
 		keep = MinValue<idx_t>(out_len, best_rounds * trees_per_round);
 	}
 
@@ -478,7 +456,7 @@ DatasetHandle MakeLightGBMDataset(const vector<double> &flat, const vector<float
 }
 
 BoostModel TrainWithLightGBM(const vector<double> &y, const vector<vector<double>> &x, const TrainOptions &options,
-                             const vector<double> &weights) {
+                             const vector<double> &weights, const vector<bool> &is_validation) {
 	EnsureRectangular(y, x);
 	const auto ncol = NumericCast<int32_t>(x[0].size());
 	const idx_t n_classes = InferClassCount(y, options);
@@ -486,7 +464,7 @@ BoostModel TrainWithLightGBM(const vector<double> &y, const vector<vector<double
 		throw InvalidInputException("duckboost: sample weight count must match row count for lightgbm train");
 	}
 
-	const auto split = SplitTrainValidRows(y.size(), options);
+	const auto split = SplitTrainValidRows(y.size(), options, is_validation);
 	const string dataset_params = LightGBMDatasetParams(options, ncol);
 	vector<double> train_flat;
 	vector<float> train_labels, train_weights;
@@ -668,7 +646,7 @@ bool NativeTrainerLinked(BoostBackend backend) {
 }
 
 BoostModel TrainNative(const vector<double> &y, const vector<vector<double>> &x, const TrainOptions &options,
-                       const vector<double> &weights) {
+                       const vector<double> &weights, const vector<bool> &is_validation) {
 	if (!options.categorical_features.empty() && options.backend != BoostBackend::LIGHTGBM) {
 		throw NotImplementedException("duckboost: categorical_features requires backend='lightgbm' or 'reference'");
 	}
@@ -690,13 +668,13 @@ BoostModel TrainNative(const vector<double> &y, const vector<vector<double>> &x,
 	switch (options.backend) {
 	case BoostBackend::XGBOOST:
 #if defined(DUCKBOOST_WITH_XGBOOST) && !defined(DUCKBOOST_NATIVE_STUB)
-		return TrainWithXGBoost(y, x, options, weights);
+		return TrainWithXGBoost(y, x, options, weights, is_validation);
 #else
 		break;
 #endif
 	case BoostBackend::LIGHTGBM:
 #if defined(DUCKBOOST_WITH_LIGHTGBM) && !defined(DUCKBOOST_NATIVE_STUB)
-		return TrainWithLightGBM(y, x, options, weights);
+		return TrainWithLightGBM(y, x, options, weights, is_validation);
 #else
 		break;
 #endif

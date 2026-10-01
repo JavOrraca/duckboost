@@ -16,7 +16,7 @@ This page walks through a realistic SQL path — categoricals, early stopping, f
 | Losses | squared / absolute / quantile / expectile; binary logistic; multiclass softmax |
 | Regularization | `reg_lambda`, `reg_alpha`, `min_split_gain` (`gamma`) |
 | Sampling | `subsample`, `colsample_bytree`, `class_weight`, `seed` |
-| Early stopping | `early_stopping_rounds` + `validation_fraction` |
+| Early stopping | `early_stopping_rounds` + `validation_fraction`, or a BOOLEAN `is_validation` column |
 | Missing values | Feature `NULL` → NaN; per-split `default_left` |
 
 Limits to keep in mind: single-threaded, materializes all training rows, no monotonic constraints or CatBoost CTRs. See [Use cases](../use-cases.qmd).

@@ -87,7 +87,7 @@ All three paths produce the same model JSON, so scoring and SQL export behave th
 | Growth policies | Depth-wise, loss-guided, oblivious / symmetric | LightGBM: depth-wise or loss-guided; XGBoost: depth-wise | Full vendor API |
 | Categoricals | Ordered target-statistic `EQUAL` / `IN` partitions | LightGBM Dataset categoricals; XGBoost via import | Yes (including CatBoost CTR on import) |
 | Regularization & sampling | L1 / L2 / `gamma`, row & column subsample, `class_weight` | Mapped subset of vendor knobs | Fully configurable |
-| Early stopping | `early_stopping_rounds` + `validation_fraction` | Same options (mapped to vendor APIs) | Yes |
+| Early stopping | `early_stopping_rounds` + `validation_fraction` or `is_validation` | Same options / mask (mapped to vendor APIs) | Yes |
 | Missing values | Per-split `default_left` (NaN) | Vendor semantics on import / native train | Vendor semantics |
 | Speed | Single-threaded histogram trainer | Multithreaded vendor histograms | Fast |
 | Determinism | Deterministic for a fixed seed and option map | Repeatable in practice with the seeds duckboost passes | Depends on your seeds |

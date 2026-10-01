@@ -160,6 +160,14 @@ SELECT duckboost_train(y, features, weight, MAP {
 	'seed': '42'
 }) AS model FROM train;
 
+-- Or pass an external validation mask (e.g. from duckboost_initial_validation_split)
+SELECT duckboost_train(
+	y, features, split = 'validation',
+	MAP {'early_stopping_rounds': '5', 'n_estimators': '50', 'seed': '42'}
+) AS model
+FROM data
+WHERE split IN ('train', 'validation');
+
 SELECT * FROM duckboost_importance(model);  -- variable, gain, cover, frequency, importance
 ```
 
@@ -261,7 +269,7 @@ Split nodes may use `"compare":"equal"` with `threshold`, or `"compare":"in"` wi
 - **Layout**: standalone community extension ([extension-template](https://github.com/duckdb/extension-template)) so optional vendor ML libraries stay out of core DuckDB builds. The `duckdb` submodule tracks DuckDB 2.0 (`v2.0-cyanoptera`).
 - **SQL export** mirrors orbital's `separate_trees` idea so DuckDB can evaluate ensemble members as independent columns.
 - **Native histogram trainer** (`backend='native'`, alias `'reference'`) is a dependency-free GBDT: global quantile pre-binning, ordered target-statistic categorical partitions (`EQUAL`/`IN`), and depth-wise, loss-guided, or oblivious/symmetric growth. It supports squared-error, absolute-error, quantile, expectile, logistic, and softmax losses plus missing-value defaults, L1/L2/`gamma`, sample weights, and early stopping. Set `categorical_features` to comma-separated feature names or zero-based indices. It buffers rows and bin ids in memory, trains single-threaded, and is aimed at SQL-native workflows rather than replacing production XGBoost/LightGBM/CatBoost at every scale. Model JSON still serializes `"backend":"reference"` for compatibility. For large scoring jobs prefer `duckboost_to_sql` over per-row `duckboost_predict`.
-- **Native LightGBM** maps absolute_error / quantile / lossguide / `categorical_features` / `subsample` (`bagging_freq=1`) / seed. Native XGBoost focuses on L2 depth-wise trees (plus seed / `max_bin` / sample weights / `SaveJsonConfig` intercept). Both native backends honor `early_stopping_rounds` + `validation_fraction` (hold out a validation slice; LightGBM uses `early_stopping_round`, XGBoost evaluates each iter and truncates the dump). `class_weight` is folded into sample weights.
+- **Native LightGBM** maps absolute_error / quantile / lossguide / `categorical_features` / `subsample` (`bagging_freq=1`) / seed. Native XGBoost focuses on L2 depth-wise trees (plus seed / `max_bin` / sample weights / `SaveJsonConfig` intercept). Both native backends honor `early_stopping_rounds` with either `validation_fraction` (random hold-out) or a BOOLEAN `is_validation` column (LightGBM uses `early_stopping_round`, XGBoost evaluates each iter and truncates the dump). `class_weight` is folded into sample weights.
 - **Table macros** `duckboost_fit` / `duckboost_score` wrap `duckboost_train` / `duckboost_predict` with `query_table` for a compact SQL workflow.
 - **Split and preprocessing macros** are plain SQL macros registered by the extension. Splits rank rows by a hash of the row's values mixed with `seed`, so they are reproducible and independent of physical row order.
 

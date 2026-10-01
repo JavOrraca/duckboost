@@ -127,7 +127,8 @@ bool TotalLess(double a, double b) {
 // Parallel aggregation hands rows to an aggregate in thread-dependent order, and both the trainer (tie-breaking,
 // floating-point sums) and the metrics depend on row order. Sorting first makes the result depend only on which
 // rows went in.
-void SortRowsCanonically(vector<double> &y, vector<vector<double>> &x, vector<double> *weights) {
+void SortRowsCanonically(vector<double> &y, vector<vector<double>> &x, vector<double> *weights,
+                         vector<bool> *is_validation) {
 	vector<idx_t> order(y.size());
 	std::iota(order.begin(), order.end(), idx_t(0));
 	std::sort(order.begin(), order.end(), [&](idx_t a, idx_t b) {
@@ -137,15 +138,22 @@ void SortRowsCanonically(vector<double> &y, vector<vector<double>> &x, vector<do
 		if (weights && (TotalLess((*weights)[a], (*weights)[b]) || TotalLess((*weights)[b], (*weights)[a]))) {
 			return TotalLess((*weights)[a], (*weights)[b]);
 		}
+		if (is_validation && (*is_validation)[a] != (*is_validation)[b]) {
+			return !(*is_validation)[a] && (*is_validation)[b];
+		}
 		return std::lexicographical_compare(x[a].begin(), x[a].end(), x[b].begin(), x[b].end(), TotalLess);
 	});
 	vector<double> sorted_y;
 	vector<vector<double>> sorted_x;
 	vector<double> sorted_w;
+	vector<bool> sorted_v;
 	sorted_y.reserve(y.size());
 	sorted_x.reserve(x.size());
 	if (weights) {
 		sorted_w.reserve(weights->size());
+	}
+	if (is_validation) {
+		sorted_v.reserve(is_validation->size());
 	}
 	for (auto index : order) {
 		sorted_y.push_back(y[index]);
@@ -153,11 +161,17 @@ void SortRowsCanonically(vector<double> &y, vector<vector<double>> &x, vector<do
 		if (weights) {
 			sorted_w.push_back((*weights)[index]);
 		}
+		if (is_validation) {
+			sorted_v.push_back((*is_validation)[index]);
+		}
 	}
 	y = std::move(sorted_y);
 	x = std::move(sorted_x);
 	if (weights) {
 		*weights = std::move(sorted_w);
+	}
+	if (is_validation) {
+		*is_validation = std::move(sorted_v);
 	}
 }
 
@@ -166,6 +180,8 @@ struct TrainDataset {
 	vector<vector<double>> x;
 	vector<double> weights;
 	bool has_weights = false;
+	vector<bool> is_validation;
+	bool has_is_validation = false;
 	TrainOptions options;
 	bool options_set = false;
 };
@@ -207,28 +223,33 @@ void TrainUpdate(Vector inputs[], AggregateInputData &, idx_t input_count, Vecto
 	y_vector.ToUnifiedFormat(y_format);
 	auto y_data = UnifiedVectorFormat::GetData<double>(y_format);
 
-	// Signatures:
+	// Signatures (optional args after features, in order weight / is_validation / options):
 	// (y, features)
 	// (y, features, options MAP)
 	// (y, features, weight DOUBLE)
 	// (y, features, weight DOUBLE, options MAP)
+	// (y, features, is_validation BOOLEAN)
+	// (y, features, is_validation BOOLEAN, options MAP)
+	// (y, features, weight DOUBLE, is_validation BOOLEAN)
+	// (y, features, weight DOUBLE, is_validation BOOLEAN, options MAP)
 	bool has_weight = false;
+	bool has_is_validation = false;
 	bool has_options = false;
 	idx_t weight_arg = 0;
+	idx_t is_validation_arg = 0;
 	idx_t options_arg = 0;
-	if (input_count == 3) {
-		if (inputs[2].GetType().id() == LogicalTypeId::MAP) {
+	for (idx_t arg = 2; arg < input_count; arg++) {
+		const auto type_id = inputs[arg].GetType().id();
+		if (type_id == LogicalTypeId::MAP) {
 			has_options = true;
-			options_arg = 2;
+			options_arg = arg;
+		} else if (type_id == LogicalTypeId::BOOLEAN) {
+			has_is_validation = true;
+			is_validation_arg = arg;
 		} else {
 			has_weight = true;
-			weight_arg = 2;
+			weight_arg = arg;
 		}
-	} else if (input_count >= 4) {
-		has_weight = true;
-		weight_arg = 2;
-		has_options = true;
-		options_arg = 3;
 	}
 
 	UnifiedVectorFormat weight_format;
@@ -236,6 +257,12 @@ void TrainUpdate(Vector inputs[], AggregateInputData &, idx_t input_count, Vecto
 	if (has_weight) {
 		inputs[weight_arg].ToUnifiedFormat(weight_format);
 		weight_data = UnifiedVectorFormat::GetData<double>(weight_format);
+	}
+	UnifiedVectorFormat is_validation_format;
+	const bool *is_validation_data = nullptr;
+	if (has_is_validation) {
+		inputs[is_validation_arg].ToUnifiedFormat(is_validation_format);
+		is_validation_data = UnifiedVectorFormat::GetData<bool>(is_validation_format);
 	}
 
 	UnifiedVectorFormat state_format;
@@ -264,6 +291,14 @@ void TrainUpdate(Vector inputs[], AggregateInputData &, idx_t input_count, Vecto
 			state.data->weights.push_back(weight_data[w_idx]);
 			state.data->has_weights = true;
 		}
+		if (has_is_validation) {
+			auto v_idx = is_validation_format.sel->get_index(i);
+			if (!is_validation_format.validity.RowIsValid(v_idx)) {
+				throw InvalidInputException("duckboost: is_validation cannot be NULL");
+			}
+			state.data->is_validation.push_back(is_validation_data[v_idx]);
+			state.data->has_is_validation = true;
+		}
 	}
 }
 
@@ -291,6 +326,11 @@ void TrainCombine(Vector &source, Vector &target, AggregateInputData &, idx_t co
 			dst.data->weights.insert(dst.data->weights.end(), src.data->weights.begin(), src.data->weights.end());
 			dst.data->has_weights = true;
 		}
+		if (src.data->has_is_validation) {
+			dst.data->is_validation.insert(dst.data->is_validation.end(), src.data->is_validation.begin(),
+			                               src.data->is_validation.end());
+			dst.data->has_is_validation = true;
+		}
 	}
 }
 
@@ -307,20 +347,26 @@ void TrainFinalize(Vector &state_vector, AggregateFinalizeInputData &, Vector &r
 			continue;
 		}
 		auto options = state.data->options_set ? state.data->options : TrainOptions();
-		SortRowsCanonically(state.data->y, state.data->x, state.data->has_weights ? &state.data->weights : nullptr);
+		SortRowsCanonically(state.data->y, state.data->x, state.data->has_weights ? &state.data->weights : nullptr,
+		                    state.data->has_is_validation ? &state.data->is_validation : nullptr);
 		const vector<double> empty_weights;
+		const vector<bool> empty_is_validation;
 		auto model = TrainModel(state.data->y, state.data->x, options,
-		                        state.data->has_weights ? state.data->weights : empty_weights);
+		                        state.data->has_weights ? state.data->weights : empty_weights,
+		                        state.data->has_is_validation ? state.data->is_validation : empty_is_validation);
 		writer.WriteValue(StringVector::AddString(result, model.ToJSON()));
 	}
 }
 
-AggregateFunction GetTrainFunction(bool with_weight, bool with_options) {
+AggregateFunction GetTrainFunction(bool with_weight, bool with_is_validation, bool with_options) {
 	auto feature_type = LogicalType::LIST(LogicalType::DOUBLE);
 	auto options_type = LogicalType::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR);
 	vector<LogicalType> args = {LogicalType::DOUBLE, feature_type};
 	if (with_weight) {
 		args.push_back(LogicalType::DOUBLE);
+	}
+	if (with_is_validation) {
+		args.push_back(LogicalType::BOOLEAN);
 	}
 	if (with_options) {
 		args.push_back(options_type);
@@ -336,6 +382,9 @@ AggregateFunction GetTrainFunction(bool with_weight, bool with_options) {
 	idx_t next = 2;
 	if (with_weight) {
 		fun.GetSignature().GetParameter(next++).SetName("weight");
+	}
+	if (with_is_validation) {
+		fun.GetSignature().GetParameter(next++).SetName("is_validation");
 	}
 	if (with_options) {
 		fun.GetSignature().GetParameter(next).SetName("options");
@@ -574,7 +623,7 @@ void EvaluateAggFinalize(Vector &state_vector, AggregateFinalizeInputData &, Vec
 		if (options.metric.empty()) {
 			options.metric = "auto";
 		}
-		SortRowsCanonically(state.data->y, state.data->x, nullptr);
+		SortRowsCanonically(state.data->y, state.data->x, nullptr, nullptr);
 		writer.WriteValue(EvaluateModel(model, state.data->y, state.data->x, options));
 	}
 }
@@ -975,10 +1024,14 @@ void ImportanceFunction(ClientContext &, TableFunctionInput &data, DataChunk &ou
 
 void RegisterDuckBoostFunctions(ExtensionLoader &loader) {
 	AggregateFunctionSet train_set("duckboost_train");
-	train_set.AddFunction(GetTrainFunction(false, false));
-	train_set.AddFunction(GetTrainFunction(false, true));
-	train_set.AddFunction(GetTrainFunction(true, false));
-	train_set.AddFunction(GetTrainFunction(true, true));
+	train_set.AddFunction(GetTrainFunction(false, false, false));
+	train_set.AddFunction(GetTrainFunction(false, false, true));
+	train_set.AddFunction(GetTrainFunction(false, true, false));
+	train_set.AddFunction(GetTrainFunction(false, true, true));
+	train_set.AddFunction(GetTrainFunction(true, false, false));
+	train_set.AddFunction(GetTrainFunction(true, false, true));
+	train_set.AddFunction(GetTrainFunction(true, true, false));
+	train_set.AddFunction(GetTrainFunction(true, true, true));
 	loader.RegisterFunction(train_set);
 
 	ScalarFunctionSet predict_set("duckboost_predict");

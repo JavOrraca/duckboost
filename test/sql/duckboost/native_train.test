@@ -211,6 +211,29 @@ FROM (
 ----
 true
 
+# External is_validation mask for vendor early stopping
+query I
+SELECT length(regexp_extract_all(model, '"split_condition"')) < 50
+FROM (
+	SELECT duckboost_train(y, [x1], (x1::BIGINT % 5 = 0), MAP {
+		'backend': 'xgboost', 'n_estimators': '50', 'max_depth': '2', 'learning_rate': '0.3',
+		'early_stopping_rounds': '3', 'seed': '7'
+	}) AS model FROM early_xgb
+);
+----
+true
+
+query I
+SELECT length(regexp_extract_all(model, 'Tree=')) < 50
+FROM (
+	SELECT duckboost_train(y, [x1], (x1::BIGINT % 5 = 0), MAP {
+		'backend': 'lightgbm', 'n_estimators': '50', 'max_depth': '2', 'learning_rate': '0.3',
+		'min_samples_leaf': '1', 'early_stopping_rounds': '3', 'seed': '7'
+	}) AS model FROM early_xgb
+);
+----
+true
+
 # CatBoost has no public train C API (or is not compiled in)
 statement error
 SELECT duckboost_train(y, [x1, x2], MAP {'backend': 'catboost', 'n_estimators': '2'})

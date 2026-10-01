@@ -15,6 +15,10 @@ duckboost_train(y DOUBLE, features DOUBLE[]) -> VARCHAR
 duckboost_train(y DOUBLE, features DOUBLE[], options MAP(VARCHAR, VARCHAR)) -> VARCHAR
 duckboost_train(y DOUBLE, features DOUBLE[], weight DOUBLE) -> VARCHAR
 duckboost_train(y DOUBLE, features DOUBLE[], weight DOUBLE, options MAP(VARCHAR, VARCHAR)) -> VARCHAR
+duckboost_train(y DOUBLE, features DOUBLE[], is_validation BOOLEAN) -> VARCHAR
+duckboost_train(y DOUBLE, features DOUBLE[], is_validation BOOLEAN, options MAP(VARCHAR, VARCHAR)) -> VARCHAR
+duckboost_train(y DOUBLE, features DOUBLE[], weight DOUBLE, is_validation BOOLEAN) -> VARCHAR
+duckboost_train(y DOUBLE, features DOUBLE[], weight DOUBLE, is_validation BOOLEAN, options MAP(VARCHAR, VARCHAR)) -> VARCHAR
 ```
 
 | Option | Aliases | Default | Meaning |
@@ -36,15 +40,17 @@ duckboost_train(y DOUBLE, features DOUBLE[], weight DOUBLE, options MAP(VARCHAR,
 | `min_split_gain` | `gamma` | `0` | Minimum loss reduction required to make a split. |
 | `subsample` | `bagging_fraction` | `1` | Row subsample ratio per tree in `(0, 1]`. |
 | `colsample_bytree` | `colsample`, `feature_fraction` | `1` | Column subsample ratio per tree in `(0, 1]`. |
-| `validation_fraction` | `valid_fraction` | `0` | Hold-out fraction for early stopping. Defaults to `0.2` when `early_stopping_rounds > 0` and this is unset. |
+| `validation_fraction` | `valid_fraction` | `0` | Random hold-out fraction for early stopping. Defaults to `0.2` when `early_stopping_rounds > 0` and this is unset. Cannot be combined with the `is_validation` argument. |
 | `early_stopping_rounds` | `early_stopping` | `0` | Stop if the hold-out metric does not improve for this many rounds; keep the best iteration. |
-| `seed` | `random_seed` | `0` | RNG seed for subsampling and the validation hold-out. |
+| `seed` | `random_seed` | `0` | RNG seed for subsampling and the random validation hold-out. |
 | `class_weight` | `class_weights` | | `balanced` or comma-separated per-class multipliers (binary / multiclass). |
 | `n_classes` | `num_class`, `num_classes` | max label + 1 | Multiclass only; ignored for other tasks. Must be >= 2 and greater than every label. Set it when a class is absent from the training rows. |
 | `feature_names` | | `f0,f1,...` | Comma-separated names. The count must match the feature width. |
 | `categorical_features` | `cat_features`, `categorical_feature` | | Comma-separated feature names or zero-based indices. The native trainer orders categories by local target statistic (`g/h`) and emits `EQUAL` or multi-category `IN` splits. Linked LightGBM maps this to Dataset categoricals; XGBoost / CatBoost train reject it (use import). |
 
 Unknown keys raise `duckboost: unknown train option`. Values are strings inside the MAP.
+
+Optional `is_validation` marks rows for an external validation set (for example `split = 'validation'` from `duckboost_initial_validation_split`). Those rows are held out of fitting and, when `early_stopping_rounds > 0`, drive early stopping. Do not also set `validation_fraction`. `is_validation` cannot be NULL; with early stopping at least one row must be true and at least one false.
 
 Feature `NULL`s become NaN and the native trainer learns a per-split `default_left` missing direction (same idea as XGBoost). Sample `weight` must be non-NULL and `>= 0`.
 

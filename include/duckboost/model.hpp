@@ -163,6 +163,8 @@ struct TrainOptions {
 	double colsample_bytree = 1.0;
 	//! Hold out this fraction of rows for early stopping (0 = disabled).
 	double validation_fraction = 0.0;
+	//! True when the caller set validation_fraction / valid_fraction in the options MAP.
+	bool validation_fraction_set = false;
 	//! Stop if validation metric does not improve for this many rounds (0 = disabled).
 	idx_t early_stopping_rounds = 0;
 	uint64_t seed = 0;
@@ -230,9 +232,16 @@ RegressionLoss RegressionLossFromString(const string &name);
 bool BackendTrainingSupported(BoostBackend backend);
 string BackendCapabilityNote(BoostBackend backend);
 
-//! weights empty ⇒ unit weights.
+//! Partition rows into train / validation for early stopping.
+//! When is_validation is non-empty it must match n_rows; true rows are validation and cannot be
+//! combined with validation_fraction. Otherwise a random hold-out uses validation_fraction
+//! (defaulting to 0.2 when early_stopping_rounds > 0 and the fraction was unset).
+void ResolveTrainValidRows(idx_t n_rows, const TrainOptions &options, const vector<bool> &is_validation,
+                           vector<idx_t> &train_rows, vector<idx_t> &valid_rows);
+
+//! weights empty ⇒ unit weights. is_validation empty ⇒ optional random hold-out via options.
 BoostModel TrainModel(const vector<double> &y, const vector<vector<double>> &x, const TrainOptions &options,
-                      const vector<double> &weights = {});
+                      const vector<double> &weights = {}, const vector<bool> &is_validation = {});
 double EvaluateModel(const BoostModel &model, const vector<double> &y, const vector<vector<double>> &x,
                      const EvalOptions &options);
 string ExportModelSQL(const BoostModel &model, const string &table_name, const vector<string> &feature_columns,

@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <numeric>
 #include <sstream>
 #include <unordered_map>
 
@@ -510,6 +511,7 @@ TrainOptions TrainOptions::FromMap(const unordered_map<string, string> &options)
 			result.colsample_bytree = std::stod(value);
 		} else if (key == "validation_fraction" || key == "valid_fraction") {
 			result.validation_fraction = std::stod(value);
+			result.validation_fraction_set = true;
 		} else if (key == "early_stopping_rounds" || key == "early_stopping") {
 			result.early_stopping_rounds = static_cast<idx_t>(std::stoull(value));
 		} else if (key == "seed" || key == "random_seed") {
@@ -589,9 +591,6 @@ TrainOptions TrainOptions::FromMap(const unordered_map<string, string> &options)
 	if (result.max_bins == 0) {
 		throw InvalidInputException("duckboost: max_bins must be > 0");
 	}
-	if (result.early_stopping_rounds > 0 && result.validation_fraction == 0) {
-		result.validation_fraction = 0.2;
-	}
 	if (result.loss != RegressionLoss::SQUARED_ERROR && result.task != BoostTask::REGRESSION) {
 		throw InvalidInputException("duckboost: objective '%s' requires task=regression",
 		                            RegressionLossToString(result.loss));
@@ -606,6 +605,68 @@ TrainOptions TrainOptions::FromMap(const unordered_map<string, string> &options)
 		throw InvalidInputException("duckboost: objective alpha must be in (0, 1)");
 	}
 	return result;
+}
+
+void ResolveTrainValidRows(idx_t n_rows, const TrainOptions &options, const vector<bool> &is_validation,
+                           vector<idx_t> &train_rows, vector<idx_t> &valid_rows) {
+	train_rows.clear();
+	valid_rows.clear();
+	if (!is_validation.empty()) {
+		if (is_validation.size() != n_rows) {
+			throw InvalidInputException("duckboost: is_validation count (%llu) must match row count (%llu)",
+			                            (unsigned long long)is_validation.size(), (unsigned long long)n_rows);
+		}
+		if (options.validation_fraction_set) {
+			throw InvalidInputException(
+			    "duckboost: cannot combine is_validation with validation_fraction (omit validation_fraction when "
+			    "passing an external validation mask)");
+		}
+		train_rows.reserve(n_rows);
+		valid_rows.reserve(n_rows);
+		for (idx_t i = 0; i < n_rows; i++) {
+			if (is_validation[i]) {
+				valid_rows.push_back(i);
+			} else {
+				train_rows.push_back(i);
+			}
+		}
+		if (train_rows.empty()) {
+			throw InvalidInputException("duckboost: is_validation marked every row as validation; need at least one "
+			                            "training row");
+		}
+		if (options.early_stopping_rounds > 0 && valid_rows.empty()) {
+			throw InvalidInputException(
+			    "duckboost: early_stopping_rounds > 0 requires at least one is_validation=true row "
+			    "(or omit is_validation and use validation_fraction)");
+		}
+		return;
+	}
+
+	train_rows.resize(n_rows);
+	std::iota(train_rows.begin(), train_rows.end(), 0);
+	double fraction = options.validation_fraction;
+	if (options.early_stopping_rounds > 0 && !options.validation_fraction_set && fraction == 0) {
+		fraction = 0.2;
+	}
+	if (options.early_stopping_rounds == 0 || n_rows < 4 || fraction <= 0) {
+		return;
+	}
+	vector<idx_t> shuffled = train_rows;
+	uint64_t state = options.seed ? options.seed : 1;
+	auto next = [&]() {
+		state = state * 6364136223846793005ULL + 1;
+		return state;
+	};
+	for (idx_t i = 0; i < shuffled.size(); i++) {
+		idx_t j = i + static_cast<idx_t>(next() % (shuffled.size() - i));
+		std::swap(shuffled[i], shuffled[j]);
+	}
+	idx_t valid_n = MaxValue<idx_t>(1, static_cast<idx_t>(std::floor(fraction * static_cast<double>(n_rows))));
+	valid_n = MinValue<idx_t>(valid_n, n_rows - 1);
+	valid_rows.assign(shuffled.begin(), shuffled.begin() + valid_n);
+	train_rows.assign(shuffled.begin() + valid_n, shuffled.end());
+	std::sort(train_rows.begin(), train_rows.end());
+	std::sort(valid_rows.begin(), valid_rows.end());
 }
 
 EvalOptions EvalOptions::FromMap(const unordered_map<string, string> &options) {
