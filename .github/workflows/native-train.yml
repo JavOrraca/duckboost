@@ -74,6 +74,13 @@ jobs:
           EXT_FLAGS: '-DDUCKBOOST_WITH_XGBOOST=ON -DDUCKBOOST_WITH_LIGHTGBM=ON'
           CMAKE_BUILD_PARALLEL_LEVEL: '4'
         run: |
+          # setup-python installs wheels under hostedtoolcache, not ~/.local — point
+          # CMake at those package roots (CMakeLists also probes `python3` as fallback).
+          export XGBOOST_ROOT="$(python -c 'import pathlib,xgboost; print(pathlib.Path(xgboost.__file__).parent)')"
+          export LIGHTGBM_ROOT="$(python -c 'import pathlib,lightgbm; print(pathlib.Path(lightgbm.__file__).parent)')"
+          echo "XGBOOST_ROOT=${XGBOOST_ROOT}"
+          echo "LIGHTGBM_ROOT=${LIGHTGBM_ROOT}"
+          ls "${XGBOOST_ROOT}/lib" "${LIGHTGBM_ROOT}/lib"
           # Drop a stale cache so CMAKE options from EXT_FLAGS are not ignored.
           rm -rf build/release
           make release
