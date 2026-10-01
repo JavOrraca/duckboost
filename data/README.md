@@ -1,6 +1,6 @@
-# Example datasets
+# Example datasets (offline tests)
 
-Small datasets for trying duckboost. See the [example datasets vignette](https://javorraca.github.io/duckboost/vignettes/datasets.html) for walkthroughs.
+Thin CSV copies for **offline SQL tests** under `test/sql/duckboost/`. Getting Started and the website vignettes load the same data from public HTTPS URLs instead — see the [example datasets vignette](https://javorraca.github.io/duckboost/vignettes/datasets.html).
 
 | File | Rows | Source | License |
 | --- | --- | --- | --- |
@@ -9,7 +9,7 @@ Small datasets for trying duckboost. See the [example datasets vignette](https:/
 
 `iris.csv` renames R's columns to snake_case (`Sepal.Length` becomes `sepal_length`) and drops the row-name column. Values are R's, which differ from the UCI Machine Learning Repository copy in rows 35 and 38.
 
-`penguins.csv` is unchanged from the package and writes missing values as `NA`. Read it with `read_csv('data/penguins.csv', nullstr = 'NA')`.
+`penguins.csv` is unchanged from the package and writes missing values as `NA`. Tests read it with `read_csv('data/penguins.csv', nullstr = 'NA')`.
 
 Please cite the palmerpenguins package and the original study when you use the penguins data:
 

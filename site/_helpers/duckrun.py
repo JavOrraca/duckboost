@@ -31,7 +31,12 @@ def _require_binary() -> None:
 
 def run_sql(sql: str, *, json_output: bool = False) -> str:
     """Execute SQL in a fresh in-memory database. Raises on a non-zero exit."""
+    from _helpers.example_data import rewrite_https_csv_for_exec
+
     _require_binary()
+    # Printed vignette SQL uses HTTPS CSVs; rewrite to a local cache for exec
+    # when httpfs is unavailable on this DuckDB pin.
+    sql = rewrite_https_csv_for_exec(sql)
     cmd = [
         str(DUCKDB),
         "-unsigned",

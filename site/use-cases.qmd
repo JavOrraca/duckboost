@@ -40,7 +40,7 @@ SELECT
   species,
   body_mass_g::DOUBLE AS body_mass_g,
   [bill_length_mm, bill_depth_mm, flipper_length_mm, (sex = 'male')::DOUBLE] AS features
-FROM read_csv('data/penguins.csv', nullstr = 'NA')
+FROM read_csv('https://raw.githubusercontent.com/allisonhorst/palmerpenguins/master/inst/extdata/penguins.csv', nullstr = 'NA')
 WHERE sex IS NOT NULL AND bill_length_mm IS NOT NULL;
 
 CREATE TABLE models AS
