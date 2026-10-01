@@ -1,0 +1,333 @@
+---
+title: "Local ticket NLP with quackformers + duckboost"
+---
+
+Support tickets usually mix **free-form text** with a few structured columns. This vignette is an example of pairing **duckboost** with other DuckDB extensions to do that kind of NLP work **entirely inside DuckDB** — local embeddings, SQL labeling, and GBDT training/scoring — **without a separate Python/ML runtime or hosted model API**.
+
+| Step | Extension | Role |
+| --- | --- | --- |
+| Embed subject + body | Community [`quackformers`](https://duckdb.org/community_extensions/extensions/quackformers.html) | `embed()` ≈ [`all-MiniLM-L6-v2`](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2) (384-d) |
+| Optional ANN index | Core [`vss`](https://duckdb.org/docs/stable/core_extensions/vss.html) | HNSW over `FLOAT[384]` when the corpus is large |
+| Train / score | **duckboost** | Binary or multiclass GBDT on numeric features from those embeddings (+ any other columns) |
+
+duckboost only accepts `DOUBLE[]` features. Text enters the model **through embeddings** (and optional lexical extras), not as raw `VARCHAR`.
+
+The worked example routes tickets between two clearly different queues — **Technical Support** vs **Billing and Payments** — using a public support-ticket corpus. The same pattern extends to more labels once your taxonomy and prototypes are solid.
+
+::: {.callout-note}
+## Dataset
+
+Examples use a balanced English sample (400 tickets per queue) from Tobias Bueck's [Customer Support Tickets](https://huggingface.co/datasets/Tobi-Bueck/customer-support-tickets) corpus (also on [Kaggle](https://www.kaggle.com/datasets/tobiasbueck/email-ticket-text-german-classification)). The Hugging Face mirror is licensed **CC BY-NC 4.0** — non-commercial use with attribution. See [Credits](#credits).
+:::
+
+::: {.callout-warning}
+## Docs execution on DuckDB 2.0 alpha
+
+This repository builds against DuckDB 2.0 alpha (`v2.0-cyanoptera`). Community `quackformers` is not published for that pin on the community CDN yet, so the **numbers on this page** use the **same MiniLM-L6-v2 model** offline via a cached Parquet sample. The SQL in the fences is the recipe for a DuckDB build where `INSTALL quackformers FROM community` works (current 1.x community builds). Replace the precomputed `emb` column with `embed(text)::FLOAT[384]` when you run it yourself.
+:::
+
+## 1. Load tickets from a public URL
+
+On a released DuckDB with `httpfs` / community autoload:
+
+```sql
+INSTALL httpfs; LOAD httpfs;
+INSTALL quackformers FROM community; LOAD quackformers;
+
+CREATE TABLE tickets AS
+SELECT
+  row_number() OVER () AS ticket_id,
+  subject,
+  body,
+  queue,
+  priority,
+  language,
+  type,
+  concat_ws(E'\n', subject, body) AS text
+FROM read_csv(
+  'https://huggingface.co/datasets/Tobi-Bueck/customer-support-tickets/resolve/main/aa_dataset-tickets-multi-lang-5-2-50-version.csv'
+)
+WHERE lower(language) = 'en'
+  AND queue IN ('Technical Support', 'Billing and Payments')
+  AND subject IS NOT NULL
+  AND body IS NOT NULL;
+```
+
+```{python}
+#| echo: false
+#| output: asis
+from _helpers.ticket_nlp import show
+
+show("""
+SELECT
+  queue,
+  count(*) AS n,
+  round(avg(len(text)), 0) AS avg_chars
+FROM tickets_emb
+GROUP BY 1
+ORDER BY 1;
+""")
+```
+
+## 2. Local embeddings with quackformers
+
+```sql
+CREATE TABLE tickets_emb AS
+SELECT
+  ticket_id, subject, body, queue, priority, language, type, text,
+  embed(text)::FLOAT[384] AS emb
+FROM tickets;
+```
+
+`embed()` returns a 384-d float vector (MiniLM). For a larger in-extension model, quackformers also exposes `embed_jina()` (768-d). Pair with core `vss` if you want an HNSW index over `emb` for nearest-ticket search at larger scale; this page uses direct cosine similarity.
+
+## 3. Deterministic labels from a fixed label set
+
+Keep a small catalog of labels you control. Embed each prototype once with the same model, then assign every ticket the prototype with the highest cosine similarity. Same prototypes + same embedder ⇒ same labels.
+
+```{python}
+#| echo: false
+#| output: asis
+from _helpers.ticket_nlp import show
+
+show("""
+SELECT queue, prototype
+FROM label_prototypes
+ORDER BY queue;
+""")
+```
+
+```{python}
+#| echo: false
+#| output: asis
+from _helpers.ticket_nlp import show
+
+show(
+"""
+CREATE OR REPLACE TABLE ticket_labels AS
+SELECT
+  t.ticket_id,
+  t.queue AS gold_queue,
+  t.priority,
+  arg_max(p.queue, array_cosine_similarity(t.emb, p.emb)) AS assigned_queue,
+  max(array_cosine_similarity(t.emb, p.emb)) AS best_sim,
+  [
+    max(array_cosine_similarity(t.emb, p.emb)) FILTER (WHERE p.queue = 'Billing and Payments'),
+    max(array_cosine_similarity(t.emb, p.emb)) FILTER (WHERE p.queue = 'Technical Support'),
+    len(t.text)::DOUBLE,
+    (lower(t.priority) = 'high')::DOUBLE,
+    (lower(t.priority) = 'medium')::DOUBLE
+  ]::DOUBLE[] AS sim_features,
+  (list_transform(t.emb, lambda x: x::DOUBLE))::DOUBLE[] AS emb_features
+FROM tickets_emb t
+CROSS JOIN label_prototypes p
+GROUP BY t.ticket_id, t.queue, t.priority, t.text, t.emb;
+
+SELECT
+  round(avg((assigned_queue = gold_queue)::INT), 3) AS prototype_match_rate,
+  round(avg(best_sim), 3) AS mean_best_cosine
+FROM ticket_labels;
+""",
+"""
+CREATE OR REPLACE TABLE ticket_labels AS
+SELECT
+  t.ticket_id,
+  t.queue AS gold_queue,
+  t.priority,
+  arg_max(p.queue, array_cosine_similarity(t.emb, p.emb)) AS assigned_queue,
+  max(array_cosine_similarity(t.emb, p.emb)) AS best_sim,
+  [
+    max(array_cosine_similarity(t.emb, p.emb)) FILTER (WHERE p.queue = 'Billing and Payments'),
+    max(array_cosine_similarity(t.emb, p.emb)) FILTER (WHERE p.queue = 'Technical Support'),
+    len(t.text)::DOUBLE,
+    (lower(t.priority) = 'high')::DOUBLE,
+    (lower(t.priority) = 'medium')::DOUBLE
+  ]::DOUBLE[] AS sim_features,
+  (list_transform(t.emb, lambda x: x::DOUBLE))::DOUBLE[] AS emb_features
+FROM tickets_emb t
+CROSS JOIN label_prototypes p
+GROUP BY t.ticket_id, t.queue, t.priority, t.text, t.emb;
+
+SELECT
+  round(avg((assigned_queue = gold_queue)::INT), 3) AS prototype_match_rate,
+  round(avg(best_sim), 3) AS mean_best_cosine
+FROM ticket_labels;
+""",
+)
+```
+
+Prototype matching is a **deterministic baseline / weak labeler**. When agents already set `queue` (as in this corpus), use gold labels for supervised training and keep Stage 3 for unlabeled tickets or low-confidence review (for example a small margin between the top two cosine scores).
+
+## 4. Train duckboost on embedding features
+
+Map the two queues to `{0, 1}`, hold out a stratified test split, and fit a binary native model on the **full 384-d embedding** (plus you can concatenate structured columns). Compact alternative: train only on the prototype cosine scores in `sim_features`.
+
+```{python}
+#| echo: false
+#| output: asis
+from _helpers.ticket_nlp import show
+
+show(
+"""
+CREATE OR REPLACE TABLE ticket_labels AS
+SELECT
+  t.ticket_id,
+  t.queue AS gold_queue,
+  (t.queue = 'Technical Support')::DOUBLE AS y,
+  (list_transform(t.emb, lambda x: x::DOUBLE))::DOUBLE[] AS features
+FROM tickets_emb t;
+
+CREATE OR REPLACE TABLE ticket_model_rows AS
+SELECT l.*, s.split
+FROM ticket_labels l
+JOIN (
+  SELECT ticket_id, split
+  FROM duckboost_initial_split('ticket_labels', prop := 0.75, strata := gold_queue, seed := 7)
+) s USING (ticket_id);
+
+CREATE TABLE models AS
+SELECT duckboost_train(
+  y, features,
+  MAP {
+    'backend': 'native',
+    'task': 'binary',
+    'n_estimators': '80',
+    'max_depth': '4',
+    'learning_rate': '0.1',
+    'colsample_bytree': '0.5',
+    'seed': '7'
+  }
+) AS model
+FROM ticket_model_rows
+WHERE split = 'train';
+
+SELECT
+  round(duckboost_evaluate_agg(model, y, features, MAP {'metric': 'accuracy'}), 3) AS test_accuracy,
+  round(duckboost_evaluate_agg(model, y, features, MAP {'metric': 'logloss'}), 3) AS test_logloss
+FROM models, ticket_model_rows
+WHERE split = 'test';
+""",
+"""
+CREATE OR REPLACE TABLE ticket_labels AS
+SELECT
+  t.ticket_id,
+  t.queue AS gold_queue,
+  (t.queue = 'Technical Support')::DOUBLE AS y,
+  (list_transform(t.emb, lambda x: x::DOUBLE))::DOUBLE[] AS features
+FROM tickets_emb t;
+
+CREATE OR REPLACE TABLE ticket_model_rows AS
+SELECT l.*, s.split
+FROM ticket_labels l
+JOIN (
+  SELECT ticket_id, split
+  FROM duckboost_initial_split('ticket_labels', prop := 0.75, strata := gold_queue, seed := 7)
+) s USING (ticket_id);
+
+CREATE TABLE models AS
+SELECT duckboost_train(
+  y, features,
+  MAP {
+    'backend': 'native',
+    'task': 'binary',
+    'n_estimators': '80',
+    'max_depth': '4',
+    'learning_rate': '0.1',
+    'colsample_bytree': '0.5',
+    'seed': '7'
+  }
+) AS model
+FROM ticket_model_rows
+WHERE split = 'train';
+
+SELECT
+  round(duckboost_evaluate_agg(model, y, features, MAP {'metric': 'accuracy'}), 3) AS test_accuracy,
+  round(duckboost_evaluate_agg(model, y, features, MAP {'metric': 'logloss'}), 3) AS test_logloss
+FROM models, ticket_model_rows
+WHERE split = 'test';
+""",
+)
+```
+
+A few scored rows with class probabilities:
+
+```{python}
+#| echo: false
+#| output: asis
+from _helpers.ticket_nlp import show
+
+show(
+"""
+SELECT
+  gold_queue,
+  round(duckboost_predict(model, features), 0) AS pred_tech,
+  round(duckboost_predict_proba(model, features)[2], 3) AS p_technical
+FROM models, ticket_model_rows
+WHERE split = 'test'
+ORDER BY ticket_id
+LIMIT 8;
+""",
+"""
+CREATE OR REPLACE TABLE ticket_labels AS
+SELECT
+  t.ticket_id,
+  t.queue AS gold_queue,
+  (t.queue = 'Technical Support')::DOUBLE AS y,
+  (list_transform(t.emb, lambda x: x::DOUBLE))::DOUBLE[] AS features
+FROM tickets_emb t;
+
+CREATE OR REPLACE TABLE ticket_model_rows AS
+SELECT l.*, s.split
+FROM ticket_labels l
+JOIN (
+  SELECT ticket_id, split
+  FROM duckboost_initial_split('ticket_labels', prop := 0.75, strata := gold_queue, seed := 7)
+) s USING (ticket_id);
+
+CREATE TABLE models AS
+SELECT duckboost_train(
+  y, features,
+  MAP {
+    'backend': 'native',
+    'task': 'binary',
+    'n_estimators': '80',
+    'max_depth': '4',
+    'learning_rate': '0.1',
+    'colsample_bytree': '0.5',
+    'seed': '7'
+  }
+) AS model
+FROM ticket_model_rows
+WHERE split = 'train';
+
+SELECT
+  gold_queue,
+  round(duckboost_predict(model, features), 0) AS pred_tech,
+  round(duckboost_predict_proba(model, features)[2], 3) AS p_technical
+FROM models, ticket_model_rows
+WHERE split = 'test'
+ORDER BY ticket_id
+LIMIT 8;
+""",
+)
+```
+
+## 5. Scoring and export
+
+Predict with `duckboost_predict` / `duckboost_predict_proba`, or emit plain SQL with `duckboost_to_sql` for inference sessions that do not load duckboost. Rebuilding features still needs `quackformers` (or a stored `emb` column) wherever you score new tickets.
+
+## Adapting this to your tickets
+
+1. Keep a small `label_prototypes` table for your taxonomy (queues, priority bands, issue types, …).
+2. Embed ticket text with [`quackformers`](https://duckdb.org/community_extensions/extensions/quackformers.html) (`embed` or `embed_jina`).
+3. Assign weak labels from prototype cosine when gold labels are missing; prefer gold labels when agents already set them.
+4. Feed `emb::DOUBLE[]` and any structured columns into `duckboost_train`.
+5. Optionally index embeddings with core `vss` for nearest-neighbor triage at larger scale.
+6. For many overlapping queues, start with a coarse split (as here) or hierarchical routing before a flat multiclass over dozens of labels.
+
+## Credits
+
+- **Ticket corpus:** Tobias Bueck / Softoft — [Customer Support Tickets on Hugging Face](https://huggingface.co/datasets/Tobi-Bueck/customer-support-tickets), also published on [Kaggle](https://www.kaggle.com/datasets/tobiasbueck/email-ticket-text-german-classification). Related project: [Open Ticket AI](https://openticketai.com/). License on the Hugging Face mirror used here: [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/).
+- **Embeddings extension:** [quackformers](https://duckdb.org/community_extensions/extensions/quackformers.html) (maintainer [martin-conur](https://github.com/martin-conur/quackformers)), wrapping [`sentence-transformers/all-MiniLM-L6-v2`](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2).
+- **Vector search (optional):** DuckDB core [`vss`](https://duckdb.org/docs/stable/core_extensions/vss.html).
+- **Gradient boosting:** duckboost native histogram trainer.

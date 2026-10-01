@@ -24,6 +24,7 @@ duckboost puts gradient-boosted trees inside DuckDB. A model is trained with a S
 | Models as data | Models are JSON strings in ordinary tables — versioned, diffed, joined, audited with SQL. |
 | Quick baselines during exploration | A few lines of SQL give a boosted-tree baseline and holdout metrics. |
 | Teaching and reproducible examples | The native trainer is deterministic and dependency-free. |
+| Local ticket / text NLP with other extensions | Pair community [`quackformers`](https://duckdb.org/community_extensions/extensions/quackformers.html) embeddings with duckboost multiclass — see [Local ticket NLP](vignettes/support-tickets-text.qmd). |
 
 ### Example: one model per group
 

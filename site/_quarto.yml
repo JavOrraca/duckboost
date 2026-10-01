@@ -44,6 +44,8 @@ website:
             href: vignettes/split-and-preprocess.qmd
           - text: "Example datasets: iris and penguins"
             href: vignettes/datasets.qmd
+          - text: Local ticket NLP (quackformers)
+            href: vignettes/support-tickets-text.qmd
           - text: Import model dumps
             href: vignettes/import-dumps.qmd
           - text: Prediction intervals
