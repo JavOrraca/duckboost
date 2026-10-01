@@ -6,7 +6,7 @@ This page covers the two steps that come before training: splitting the rows int
 
 duckboost does not try to recreate those packages. It adds a few small SQL macros for the parts that are awkward to write by hand, and everything else stays ordinary SQL.
 
-The examples use the Palmer penguins file in `data/`. Run them from the repository root with `./build/release/duckdb -unsigned`. Each block on this page starts a new in-memory database. Blocks that continue an earlier step silently recreate the tables that step made.
+The examples load the Palmer penguins CSV from its public raw URL. Released DuckDB autoloads `httpfs` for HTTPS `read_csv`. Each block on this page starts a new in-memory database. Blocks that continue an earlier step silently recreate the tables that step made.
 
 ## Why split at all
 
@@ -68,7 +68,7 @@ from _helpers.duckrun import show
 
 show("""
 LOAD duckboost;
-CREATE TABLE penguins AS FROM read_csv('data/penguins.csv', nullstr = 'NA');
+CREATE TABLE penguins AS FROM read_csv('https://raw.githubusercontent.com/allisonhorst/palmerpenguins/master/inst/extdata/penguins.csv', nullstr = 'NA');
 CREATE TABLE penguins_split AS
 FROM duckboost_initial_split('penguins', prop := 0.75, strata := species);
 
@@ -88,7 +88,7 @@ Each species keeps 75% of its rows for training. Downstream queries filter on th
 #| output: asis
 show("""
 LOAD duckboost;
-CREATE TABLE penguins AS FROM read_csv('data/penguins.csv', nullstr = 'NA');
+CREATE TABLE penguins AS FROM read_csv('https://raw.githubusercontent.com/allisonhorst/palmerpenguins/master/inst/extdata/penguins.csv', nullstr = 'NA');
 CREATE TABLE penguins_split AS
 FROM duckboost_initial_validation_split('penguins', prop := [0.6, 0.2], strata := species);
 
@@ -109,7 +109,7 @@ Or pass train and validation rows together and let early stopping use the extern
 show("""
 LOAD duckboost;
 CREATE TABLE penguins AS
-FROM read_csv('data/penguins.csv', nullstr = 'NA')
+FROM read_csv('https://raw.githubusercontent.com/allisonhorst/palmerpenguins/master/inst/extdata/penguins.csv', nullstr = 'NA')
 WHERE bill_length_mm IS NOT NULL AND sex IS NOT NULL;
 CREATE TABLE penguins_tvt AS
 FROM duckboost_initial_validation_split('penguins', prop := [0.6, 0.2], strata := species, seed := 42);
@@ -154,7 +154,7 @@ Folds are cut from the *training* rows only, so split first, then pass a view of
 #| output: asis
 show("""
 LOAD duckboost;
-CREATE TABLE penguins AS FROM read_csv('data/penguins.csv', nullstr = 'NA');
+CREATE TABLE penguins AS FROM read_csv('https://raw.githubusercontent.com/allisonhorst/palmerpenguins/master/inst/extdata/penguins.csv', nullstr = 'NA');
 CREATE TABLE penguins_split AS
 FROM duckboost_initial_split('penguins', strata := species);
 CREATE VIEW penguins_train AS
@@ -183,7 +183,7 @@ To cross-validate, fit one model per fold on the other folds, then score each mo
 #| output: asis
 PENGUINS_FOLDS = """
 LOAD duckboost;
-CREATE TABLE penguins AS FROM read_csv('data/penguins.csv', nullstr = 'NA');
+CREATE TABLE penguins AS FROM read_csv('https://raw.githubusercontent.com/allisonhorst/palmerpenguins/master/inst/extdata/penguins.csv', nullstr = 'NA');
 CREATE TABLE penguins_split AS
 FROM duckboost_initial_split('penguins', strata := species);
 CREATE VIEW penguins_train AS
@@ -315,7 +315,7 @@ First the split and the prep table, which is everything learned from training:
 #| output: asis
 PENGUINS_PREP = """
 LOAD duckboost;
-CREATE TABLE penguins AS FROM read_csv('data/penguins.csv', nullstr = 'NA');
+CREATE TABLE penguins AS FROM read_csv('https://raw.githubusercontent.com/allisonhorst/palmerpenguins/master/inst/extdata/penguins.csv', nullstr = 'NA');
 CREATE TABLE penguins_split AS
 FROM duckboost_initial_split('penguins', prop := 0.75, strata := species);
 

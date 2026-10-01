@@ -47,7 +47,7 @@ ORDER BY backend;
 
 ## First model
 
-Train a small body-mass regression on the bundled [Palmer penguins](https://allisonhorst.github.io/palmerpenguins/) CSV. Named features, an explicit target, and a holdout-style training RMSE show the usual tabular loop: table → feature list → `duckboost_train` → metric. Each block on this site starts a new in-memory database; run examples from the repository root so `data/penguins.csv` resolves.
+Train a small body-mass regression on the [Palmer penguins](https://allisonhorst.github.io/palmerpenguins/) CSV loaded from its public raw URL. Named features, an explicit target, and a holdout-style training RMSE show the usual tabular loop: table → feature list → `duckboost_train` → metric. Each block on this site starts a new in-memory database; released DuckDB autoloads `httpfs` for HTTPS `read_csv`.
 
 ```{python}
 #| echo: false
@@ -61,7 +61,7 @@ CREATE TABLE penguins AS
 SELECT
   body_mass_g::DOUBLE AS body_mass_g,
   [bill_length_mm, bill_depth_mm, flipper_length_mm, (sex = 'male')::DOUBLE] AS features
-FROM read_csv('data/penguins.csv', nullstr = 'NA')
+FROM read_csv('https://raw.githubusercontent.com/allisonhorst/palmerpenguins/master/inst/extdata/penguins.csv', nullstr = 'NA')
 WHERE body_mass_g IS NOT NULL
   AND bill_length_mm IS NOT NULL
   AND sex IS NOT NULL;
@@ -100,7 +100,7 @@ CREATE TABLE penguins AS
 SELECT
   body_mass_g::DOUBLE AS body_mass_g,
   [bill_length_mm, bill_depth_mm, flipper_length_mm, (sex = 'male')::DOUBLE] AS features
-FROM read_csv('data/penguins.csv', nullstr = 'NA')
+FROM read_csv('https://raw.githubusercontent.com/allisonhorst/palmerpenguins/master/inst/extdata/penguins.csv', nullstr = 'NA')
 WHERE body_mass_g IS NOT NULL
   AND bill_length_mm IS NOT NULL
   AND sex IS NOT NULL;
@@ -131,5 +131,5 @@ LIMIT 5;
 
 - [Native trainer](vignettes/native-trainer.qmd) — categoricals, early stopping, importance, SQL export, and small benchmarks.
 - [Splitting data and preprocessing](vignettes/split-and-preprocess.qmd) — train/test splits and encoding helpers.
-- [Example datasets: iris and penguins](vignettes/datasets.qmd) — multiclass, binary, and regression on the bundled CSVs.
+- [Example datasets: iris and penguins](vignettes/datasets.qmd) — multiclass, binary, and regression on URL-loaded CSVs.
 - [Train, predict, export](vignettes/train-predict-export.qmd) — export a model to plain SQL and score without calling the extension.

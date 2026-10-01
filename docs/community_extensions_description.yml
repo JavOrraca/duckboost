@@ -29,7 +29,7 @@ docs:
       body_mass_g::DOUBLE AS body_mass_g,
       [bill_length_mm, bill_depth_mm, flipper_length_mm, (sex = 'male')::DOUBLE] AS features
     FROM read_csv(
-      'https://raw.githubusercontent.com/JavOrraca/duckboost/main/data/penguins.csv',
+      'https://raw.githubusercontent.com/allisonhorst/palmerpenguins/master/inst/extdata/penguins.csv',
       nullstr = 'NA'
     )
     WHERE body_mass_g IS NOT NULL
@@ -60,7 +60,7 @@ docs:
     (`duckboost_to_sql`) for inference without the extension.
 
     The [Getting Started](https://javorraca.github.io/duckboost/getting-started.html) page
-    walks through the same Palmer penguins first model using the CSV bundled in the repo.
+    walks through the same Palmer penguins first model using the package CSV over HTTPS.
 
     Default community binaries ship the native trainer plus dump import.
     Optional in-process XGBoost / LightGBM training requires rebuilding with

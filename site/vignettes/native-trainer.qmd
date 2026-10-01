@@ -43,7 +43,7 @@ SELECT
     WHEN 'Dream' THEN 1.0
     WHEN 'Torgersen' THEN 2.0
   END AS island_id
-FROM read_csv('data/penguins.csv', nullstr = 'NA')
+FROM read_csv('https://raw.githubusercontent.com/allisonhorst/palmerpenguins/master/inst/extdata/penguins.csv', nullstr = 'NA')
 WHERE body_mass_g IS NOT NULL
   AND bill_length_mm IS NOT NULL
   AND bill_depth_mm IS NOT NULL
@@ -108,7 +108,7 @@ SELECT
     WHEN 'Dream' THEN 1.0
     WHEN 'Torgersen' THEN 2.0
   END AS island_id
-FROM read_csv('data/penguins.csv', nullstr = 'NA')
+FROM read_csv('https://raw.githubusercontent.com/allisonhorst/palmerpenguins/master/inst/extdata/penguins.csv', nullstr = 'NA')
 WHERE body_mass_g IS NOT NULL
   AND bill_length_mm IS NOT NULL
   AND bill_depth_mm IS NOT NULL
@@ -201,7 +201,15 @@ SELECT
   (species = 'setosa')::DOUBLE AS y,
   [sepal_length, sepal_width, petal_length, petal_width] AS features,
   hash(sepal_length, sepal_width, petal_length, petal_width, 7) AS h
-FROM read_csv('data/iris.csv');
+FROM (
+SELECT
+  "Sepal.Length" AS sepal_length,
+  "Sepal.Width" AS sepal_width,
+  "Petal.Length" AS petal_length,
+  "Petal.Width" AS petal_width,
+  Species AS species
+FROM read_csv('https://raw.githubusercontent.com/vincentarelbundock/Rdatasets/master/csv/datasets/iris.csv')
+);
 
 CREATE TABLE iris_split AS
 SELECT *, CASE WHEN h % 5 = 0 THEN 'test' ELSE 'train' END AS split
@@ -245,7 +253,7 @@ SELECT
   body_mass_g::DOUBLE AS y,
   [bill_length_mm, bill_depth_mm, flipper_length_mm, (sex = 'male')::DOUBLE] AS features,
   hash(bill_length_mm, bill_depth_mm, flipper_length_mm, sex, 11) AS h
-FROM read_csv('data/penguins.csv', nullstr = 'NA')
+FROM read_csv('https://raw.githubusercontent.com/allisonhorst/palmerpenguins/master/inst/extdata/penguins.csv', nullstr = 'NA')
 WHERE body_mass_g IS NOT NULL
   AND bill_length_mm IS NOT NULL
   AND sex IS NOT NULL;
@@ -316,7 +324,7 @@ SELECT
   body_mass_g::DOUBLE AS y,
   [bill_length_mm, bill_depth_mm, flipper_length_mm, (sex = 'male')::DOUBLE] AS features,
   hash(bill_length_mm, bill_depth_mm, flipper_length_mm, sex, 11) AS h
-FROM read_csv('data/penguins.csv', nullstr = 'NA')
+FROM read_csv('https://raw.githubusercontent.com/allisonhorst/palmerpenguins/master/inst/extdata/penguins.csv', nullstr = 'NA')
 WHERE body_mass_g IS NOT NULL
   AND bill_length_mm IS NOT NULL
   AND sex IS NOT NULL;

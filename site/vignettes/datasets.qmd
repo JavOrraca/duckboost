@@ -2,16 +2,16 @@
 title: "Example datasets: iris and penguins"
 ---
 
-The repository ships two small, well-known datasets under [`data/`](https://github.com/JavOrraca/duckboost/tree/main/data) so you can try duckboost on real measurements instead of synthetic lines. For a URL-loaded support-ticket NLP example that pairs duckboost with community [`quackformers`](https://duckdb.org/community_extensions/extensions/quackformers.html), see [Local ticket NLP](support-tickets-text.qmd).
+These examples load two small, well-known datasets over HTTPS so you do not need a duckboost checkout. For a support-ticket NLP example that pairs duckboost with community [`quackformers`](https://duckdb.org/community_extensions/extensions/quackformers.html), see [Local ticket NLP](support-tickets-text.qmd).
 
-| File | Rows | Columns | Source |
+| Dataset | Rows | Columns | Source |
 | --- | --- | --- | --- |
-| [`data/iris.csv`](https://github.com/JavOrraca/duckboost/blob/main/data/iris.csv) | 150 | 4 measurements (cm) and `species` | R's `datasets::iris` (Fisher, 1936; Anderson, 1935) |
-| [`data/penguins.csv`](https://github.com/JavOrraca/duckboost/blob/main/data/penguins.csv) | 344 | species, island, 4 measurements, sex, year | [palmerpenguins](https://allisonhorst.github.io/palmerpenguins/) (Horst, Hill, and Gorman, 2020), CC0 |
+| Iris | 150 | 4 measurements (cm) and `species` | R's `datasets::iris` via [Rdatasets](https://vincentarelbundock.github.io/Rdatasets/) (Fisher, 1936; Anderson, 1935) |
+| Palmer penguins | 344 | species, island, 4 measurements, sex, year | [palmerpenguins](https://allisonhorst.github.io/palmerpenguins/) (Horst, Hill, and Gorman, 2020), CC0 |
 
-The iris column names are snake_case (`sepal_length` rather than R's `Sepal.Length`) to match the penguins file. The values are R's, which differ from the UCI copy in rows 35 and 38. The penguins file is the package's `penguins` table, with missing values written as `NA`.
+Iris is read from Rdatasets and renamed to snake_case (`sepal_length` rather than R's `Sepal.Length`) to match the penguins style. The values are R's, which differ from the UCI copy in rows 35 and 38. Penguins comes from the package CSV, with missing values written as `NA` (`nullstr = 'NA'`).
 
-The examples read the files with relative paths, so run them from the repository root with `./build/release/duckdb -unsigned`. Each block on this page starts a new in-memory database. Blocks that continue an earlier step silently recreate the tables that step made.
+Released DuckDB autoloads `httpfs` for HTTPS `read_csv`. Each block on this page starts a new in-memory database. Blocks that continue an earlier step silently recreate the tables that step made.
 
 Each dataset gets a multiclass species model, a binary model, and a regression model.
 
@@ -26,7 +26,14 @@ from _helpers.duckrun import show
 
 show("""
 LOAD duckboost;
-CREATE TABLE iris AS FROM read_csv('data/iris.csv');
+CREATE TABLE iris AS
+SELECT
+  "Sepal.Length" AS sepal_length,
+  "Sepal.Width" AS sepal_width,
+  "Petal.Length" AS petal_length,
+  "Petal.Width" AS petal_width,
+  Species AS species
+FROM read_csv('https://raw.githubusercontent.com/vincentarelbundock/Rdatasets/master/csv/datasets/iris.csv');
 SELECT
   species,
   count(*) AS n,
@@ -49,7 +56,14 @@ This page splits by hand, so you can see exactly what happens. `duckboost_initia
 #| output: asis
 IRIS_SPLIT = """
 LOAD duckboost;
-CREATE TABLE iris AS FROM read_csv('data/iris.csv');
+CREATE TABLE iris AS
+SELECT
+  "Sepal.Length" AS sepal_length,
+  "Sepal.Width" AS sepal_width,
+  "Petal.Length" AS petal_length,
+  "Petal.Width" AS petal_width,
+  Species AS species
+FROM read_csv('https://raw.githubusercontent.com/vincentarelbundock/Rdatasets/master/csv/datasets/iris.csv');
 CREATE TABLE iris_split AS
 SELECT
   *,
@@ -269,7 +283,7 @@ The file writes missing values as `NA`, so pass `nullstr = 'NA'`. Two penguins h
 #| output: asis
 show("""
 LOAD duckboost;
-CREATE TABLE penguins AS FROM read_csv('data/penguins.csv', nullstr = 'NA');
+CREATE TABLE penguins AS FROM read_csv('https://raw.githubusercontent.com/allisonhorst/palmerpenguins/master/inst/extdata/penguins.csv', nullstr = 'NA');
 SELECT
   count(*) AS n,
   count(*) - count(bill_length_mm) AS missing_measurements,
@@ -284,7 +298,7 @@ FROM penguins;
 #| output: asis
 show("""
 LOAD duckboost;
-CREATE TABLE penguins AS FROM read_csv('data/penguins.csv', nullstr = 'NA');
+CREATE TABLE penguins AS FROM read_csv('https://raw.githubusercontent.com/allisonhorst/palmerpenguins/master/inst/extdata/penguins.csv', nullstr = 'NA');
 SELECT species, island, count(*) AS n, round(avg(body_mass_g)) AS avg_body_mass_g
 FROM penguins
 GROUP BY ALL
@@ -301,7 +315,7 @@ This step keeps the 333 complete rows, one-hot encodes `species`, `island`, and 
 #| output: asis
 PENGUINS_PREP = """
 LOAD duckboost;
-CREATE TABLE penguins AS FROM read_csv('data/penguins.csv', nullstr = 'NA');
+CREATE TABLE penguins AS FROM read_csv('https://raw.githubusercontent.com/allisonhorst/palmerpenguins/master/inst/extdata/penguins.csv', nullstr = 'NA');
 CREATE TABLE penguins_prep AS
 SELECT
   species,
