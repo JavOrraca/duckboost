@@ -289,8 +289,8 @@ XGBNode ParseXGBNode(JsonParser &p) {
 	return node;
 }
 
-idx_t ConvertXGBNode(const XGBNode &node, BoostTree &tree, unordered_map<string, idx_t> &name_to_idx,
-                     idx_t &n_features, const vector<string> *allowed_names) {
+idx_t ConvertXGBNode(const XGBNode &node, BoostTree &tree, unordered_map<string, idx_t> &name_to_idx, idx_t &n_features,
+                     const vector<string> *allowed_names) {
 	const bool has_split_fields = node.has_split || node.has_split_condition || node.has_yes || node.has_no ||
 	                              node.has_missing || node.has_children;
 	if (node.has_leaf) {
@@ -304,8 +304,7 @@ idx_t ConvertXGBNode(const XGBNode &node, BoostTree &tree, unordered_map<string,
 		tree.nodes.push_back(leaf);
 		return tree.nodes.size() - 1;
 	}
-	if (!node.has_split || !node.has_split_condition || !node.has_yes || !node.has_no ||
-	    node.children.size() != 2) {
+	if (!node.has_split || !node.has_split_condition || !node.has_yes || !node.has_no || node.children.size() != 2) {
 		throw InvalidInputException(
 		    "duckboost: xgboost node %llu needs split, split_condition, yes, no, and two children (or a leaf)",
 		    (unsigned long long)node.nodeid);
@@ -684,7 +683,8 @@ static void ApplyXGBoostConfig(BoostModel &model, const ImportOptions &options) 
 	    (!one_drop.empty() && ParseFiniteNumber(one_drop, "xgboost one_drop") != 0)) {
 		throw InvalidInputException("duckboost: xgboost models trained with dropout (DART) are not supported");
 	}
-	auto multi_strategy = StringUtil::Lower(FindConfigValue(config, {"learner", "learner_train_param", "multi_strategy"}));
+	auto multi_strategy =
+	    StringUtil::Lower(FindConfigValue(config, {"learner", "learner_train_param", "multi_strategy"}));
 	auto num_target_raw = FindConfigValue(config, {"learner", "learner_model_param", "num_target"});
 	if (multi_strategy == "multi_output_tree" ||
 	    (!num_target_raw.empty() && ParseCount(num_target_raw, "xgboost num_target") > 1)) {
@@ -722,8 +722,8 @@ static void ApplyXGBoostConfig(BoostModel &model, const ImportOptions &options) 
 	} else if (objective == "multi:softprob" || objective == "multi:softmax") {
 		config_task = BoostTask::MULTICLASS;
 	} else if (objective == "binary:logitraw") {
-		throw InvalidInputException(
-		    "duckboost: xgboost objective 'binary:logitraw' is not supported (duckboost binary models apply a sigmoid)");
+		throw InvalidInputException("duckboost: xgboost objective 'binary:logitraw' is not supported (duckboost binary "
+		                            "models apply a sigmoid)");
 	} else {
 		throw InvalidInputException(
 		    "duckboost: xgboost objective '%s' is not supported (supported: reg:squarederror, reg:pseudohubererror, "
@@ -751,8 +751,8 @@ static void ApplyXGBoostConfig(BoostModel &model, const ImportOptions &options) 
 		                            TaskToString(options.task), objective);
 	}
 	if (options.n_classes_set) {
-		const bool consistent = config_task == BoostTask::MULTICLASS ? options.n_classes == config_classes
-		                                                              : options.n_classes <= 1;
+		const bool consistent =
+		    config_task == BoostTask::MULTICLASS ? options.n_classes == config_classes : options.n_classes <= 1;
 		if (!consistent) {
 			throw InvalidInputException("duckboost: import n_classes=%llu contradicts xgboost config num_class=%llu",
 			                            (unsigned long long)options.n_classes, (unsigned long long)config_classes);
@@ -863,11 +863,11 @@ BoostModel ImportLightGBMText(const string &dump, const ImportOptions &options) 
 	std::map<string, string> tree_fields;
 	bool in_tree = false;
 	const auto allowed_tree_keys = unordered_map<string, bool> {
-	    {"num_leaves", true},      {"num_cat", true},         {"split_feature", true}, {"split_gain", true},
-	    {"threshold", true},       {"decision_type", true},   {"left_child", true},    {"right_child", true},
-	    {"leaf_value", true},      {"leaf_weight", true},     {"leaf_count", true},    {"internal_value", true},
-	    {"internal_weight", true}, {"internal_count", true},  {"cat_boundaries", true},
-	    {"cat_threshold", true},   {"is_linear", true},       {"shrinkage", true}};
+	    {"num_leaves", true},      {"num_cat", true},        {"split_feature", true},  {"split_gain", true},
+	    {"threshold", true},       {"decision_type", true},  {"left_child", true},     {"right_child", true},
+	    {"leaf_value", true},      {"leaf_weight", true},    {"leaf_count", true},     {"internal_value", true},
+	    {"internal_weight", true}, {"internal_count", true}, {"cat_boundaries", true}, {"cat_threshold", true},
+	    {"is_linear", true},       {"shrinkage", true}};
 	auto flush_tree = [&]() {
 		if (!in_tree) {
 			return;
@@ -1124,8 +1124,8 @@ BoostModel ImportLightGBMText(const string &dump, const ImportOptions &options) 
 		}
 	}
 	if (options.n_classes_set && (task_from_header || dump_classes > 0)) {
-		const bool consistent = model.task == BoostTask::MULTICLASS ? options.n_classes == dump_classes
-		                                                             : options.n_classes <= 1;
+		const bool consistent =
+		    model.task == BoostTask::MULTICLASS ? options.n_classes == dump_classes : options.n_classes <= 1;
 		if (!consistent) {
 			throw InvalidInputException("duckboost: import n_classes=%llu contradicts lightgbm header num_class=%llu",
 			                            (unsigned long long)options.n_classes,
