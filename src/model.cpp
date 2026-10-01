@@ -1335,6 +1335,17 @@ vector<double> BoostModel::MaterializeFeatures(const vector<double> &features) c
 		}
 		materialized[ctr.feature_index] = EvaluateCtrValue(ctr, features);
 	}
+	// LightGBM zeroes |x| <= 1e-35f before traversal (kZeroThreshold). Compare in
+	// double against the float32 literal promoted to double — casting the feature
+	// to float32 first collapses distinct doubles around ±1e-35 onto the same bin.
+	if (backend == BoostBackend::LIGHTGBM) {
+		static constexpr double k_lgb_zero_threshold = static_cast<double>(1e-35f);
+		for (auto &value : materialized) {
+			if (!std::isnan(value) && std::fabs(value) <= k_lgb_zero_threshold) {
+				value = 0.0;
+			}
+		}
+	}
 	return materialized;
 }
 
