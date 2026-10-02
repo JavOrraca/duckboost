@@ -25,6 +25,11 @@ website:
     title: false
     style: docked
     search: true
+    tools:
+      - icon: github
+        href: https://github.com/JavOrraca/duckboost/tree/main
+        text: GitHub
+        aria-label: GitHub repository (main)
     contents:
       - text: Overview
         href: index.qmd
