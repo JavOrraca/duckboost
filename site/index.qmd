@@ -7,7 +7,7 @@ image-alt: "duckboost: gradient-boosted trees, trained and scored in DuckDB SQL"
 
 <img src="images/duckboost-hex.svg" class="home-hex" alt="duckboost hex logo">
 
-`duckboost` is an experimental [DuckDB](https://duckdb.org/) extension for **SQL-native gradient boosting**. Train a histogram GBDT inside DuckDB with zero vendor libraries, score with SQL functions, export trees as ordinary SQL, and optionally import XGBoost / LightGBM / CatBoost dumps when you need their full toolbox.
+`duckboost` is an experimental [DuckDB](https://duckdb.org/) extension for **SQL-native gradient boosting**. Train a histogram gradient-boosted decision trees (“GBDT”) inside DuckDB with zero vendor libraries, score with SQL functions, export trees as ordinary SQL, and optionally import XGBoost / LightGBM / CatBoost dumps when you need their full toolbox.
 
 ::: {.callout-note}
 ## Status

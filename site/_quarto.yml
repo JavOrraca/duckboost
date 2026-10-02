@@ -8,7 +8,7 @@ project:
 
 website:
   title: "duckboost"
-  description: "SQL-native histogram GBDT in DuckDB — train, score, import vendor dumps, export plain SQL."
+  description: "SQL-native histogram gradient-boosted decision trees (“GBDT”) in DuckDB — train, score, import vendor dumps, export plain SQL."
   # no trailing slash: Quarto joins it with the leading "/" of project-relative image paths
   site-url: https://javorraca.github.io/duckboost
   repo-url: https://github.com/JavOrraca/duckboost
