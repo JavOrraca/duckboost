@@ -2,23 +2,77 @@
 title: "Getting started"
 ---
 
-Build the release shell from a checkout of this repository. The `duckdb` submodule must be the pinned 2.0 alpha. Do not point these examples at a PyPI or CRAN DuckDB: those clients are 1.x and cannot load `duckboost`.
+A short path from zero to a first model. You do **not** need PyPI/CRAN DuckDB for this, and duckboost is **not** on the community extension store yet — that submission waits until DuckDB 2.0 is released. Until then, the supported way to try duckboost is to **clone this repository and build the bundled DuckDB 2.0 alpha shell**.
 
-## Build
+::: {.callout-note}
+## Why clone?
+
+`pip install duckdb` / CRAN DuckDB are still **1.x** and cannot load this extension. Community `INSTALL duckboost FROM community` is planned **after** DuckDB 2.0 ships. Cloning gives you a matching 2.0 alpha CLI with duckboost already linked.
+:::
+
+## 1. Prerequisites
+
+You need a normal C++ build environment:
+
+- `git`
+- A C++17 compiler (`clang` or `gcc`)
+- `cmake` and `make` (optional: `ninja`)
+
+On macOS, Xcode Command Line Tools plus Homebrew `cmake` is enough. On Ubuntu/Debian, `build-essential` and `cmake` cover it.
+
+## 2. Clone and build
+
+```bash
+git clone --recurse-submodules https://github.com/JavOrraca/duckboost.git
+cd duckboost
+make
+```
+
+If you already cloned without submodules:
 
 ```bash
 git submodule update --init --recursive
 make
-make test
 ```
 
-`make` writes `./build/release/duckdb` (the CLI, with duckboost statically linked) and `./build/release/extension/duckboost/duckboost.duckdb_extension` (the loadable extension). `make test` runs the SQL tests under `test/sql/`.
+`make` produces:
 
-`GEN=ninja make` uses Ninja when it is installed. The default target is the release build.
+- `./build/release/duckdb` — CLI with duckboost **statically linked**
+- `./build/release/extension/duckboost/duckboost.duckdb_extension` — loadable extension file
 
-## Load an unsigned local build
+Optional: `GEN=ninja make` if Ninja is installed. `make test` runs the SQL tests under `test/sql/` (not required just to try the examples).
 
-Open the shell with `-unsigned` so DuckDB accepts an extension that was not signed for a release:
+## 3. Open the shell
+
+```bash
+./build/release/duckdb -unsigned
+```
+
+In that shell, duckboost is already registered, so this works:
+
+```sql
+LOAD duckboost;
+SELECT backend, training_supported, notes
+FROM duckboost_backends()
+ORDER BY backend;
+```
+
+```{python}
+#| echo: false
+#| output: asis
+from _helpers.duckrun import show
+
+show("""
+LOAD duckboost;
+SELECT backend, training_supported, notes
+FROM duckboost_backends()
+ORDER BY backend;
+""")
+```
+
+`training_supported` is true only for backends this binary can train in-process. A default `make` enables the native histogram trainer (pass `backend = 'native'` in train options; model JSON may still say `"reference"`). XGBoost, LightGBM, and CatBoost stay import-only unless you linked the vendor libraries — see the README build notes.
+
+To load the `.duckdb_extension` into a **different** DuckDB 2.0 shell (not this repo’s binary):
 
 ```bash
 ./build/release/duckdb -unsigned
@@ -28,26 +82,13 @@ Open the shell with `-unsigned` so DuckDB accepts an extension that was not sign
 LOAD 'build/release/extension/duckboost/duckboost.duckdb_extension';
 ```
 
-The `make` shell also registers duckboost statically, so `LOAD duckboost;` works in that binary without the path. The path form is what you use when you load the `.duckdb_extension` file into a DuckDB 2.0 shell that was not built with this repository's `Makefile`.
+## 4. First model
 
-```{python}
-#| echo: false
-#| output: asis
-from _helpers.duckrun import show
+Train a small body-mass regression on the [Palmer penguins](https://allisonhorst.github.io/palmerpenguins/) data. Named features, an explicit target, and training RMSE show the usual loop: table → feature list → `duckboost_train` → metric.
 
-show("""
-LOAD 'build/release/extension/duckboost/duckboost.duckdb_extension';
-SELECT backend, training_supported, notes
-FROM duckboost_backends()
-ORDER BY backend;
-""")
-```
+From a checkout, the most reliable load is the thin CSV under `data/` (no network). On released DuckDB with `httpfs`, the same file is also on GitHub raw HTTPS — the SQL below uses that public URL so you can copy it into any networked session. Swap in `read_csv('data/penguins.csv', nullstr = 'NA')` if you are offline in this repo’s shell.
 
-`training_supported` is true only for backends this binary can train in-process. A default `make` enables the native histogram trainer (`backend` column still reads `reference` in `duckboost_backends()` / model JSON; pass `backend = 'native'` in train options). XGBoost, LightGBM, and CatBoost stay import-only unless you linked the vendor libraries.
-
-## First model
-
-Train a small body-mass regression on the [Palmer penguins](https://allisonhorst.github.io/palmerpenguins/) CSV loaded from its public raw URL. Named features, an explicit target, and a holdout-style training RMSE show the usual tabular loop: table → feature list → `duckboost_train` → metric. Each block on this site starts a new in-memory database; released DuckDB autoloads `httpfs` for HTTPS `read_csv`.
+Each block on this site starts a new in-memory database.
 
 ```{python}
 #| echo: false
@@ -126,6 +167,17 @@ ORDER BY body_mass_g
 LIMIT 5;
 """)
 ```
+
+## After DuckDB 2.0
+
+Once DuckDB 2.0 is released and duckboost is published to the community repository, analysts will be able to skip the clone/build steps:
+
+```sql
+INSTALL duckboost FROM community;
+LOAD duckboost;
+```
+
+Until then, stay on the clone path above. The descriptor is already prepared in [`docs/community_extensions_description.yml`](https://github.com/JavOrraca/duckboost/blob/main/docs/community_extensions_description.yml); submission is intentionally held.
 
 ## Next steps
 
