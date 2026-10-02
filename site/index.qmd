@@ -70,11 +70,6 @@ Optional in-process XGBoost and LightGBM training is a compile-time flag (`DUCKB
 
 ## DuckDB 2.0
 
-This repository tracks the DuckDB 2.0 alpha. Build the shell in this repo and run examples with `build/release/duckdb`. Until community install is available:
+This repository tracks the DuckDB 2.0 alpha. duckboost is **not** on the community extension store yet (submission waits for the official 2.0 release). Until then, try it by cloning this repo and building the bundled shell — PyPI / CRAN DuckDB 1.x cannot load the extension.
 
-```sql
--- see Getting started for the unsigned local load path
-LOAD duckboost;
-```
-
-[Getting started](getting-started.qmd) walks through the build and a first penguins regression.
+[Getting started](getting-started.qmd) is the step-by-step path: clone → `make` → first penguins model.

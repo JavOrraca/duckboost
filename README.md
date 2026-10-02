@@ -1,10 +1,12 @@
 # duckboost <img src="site/images/duckboost-hex.png" align="right" height="138" alt="duckboost hex logo" />
 
-Experimental DuckDB extension for **SQL-native gradient boosting**: train a dependency-free histogram gradient-boosted decision trees (“GBDT”) inside DuckDB (`backend = 'native'`), evaluate and inspect in SQL, export pure SQL for orbital-style inference, and optionally import XGBoost / LightGBM / CatBoost dumps when you need their full toolbox.
+Experimental DuckDB extension for **SQL-native gradient boosting**: train dependency-free histogram gradient-boosted decision trees (“GBDT”) inside DuckDB (`backend = 'native'`), evaluate and inspect in SQL, export pure SQL for orbital-style inference, and optionally import XGBoost / LightGBM / CatBoost dumps when you need their full toolbox.
 
-**Documentation:** <https://javorraca.github.io/duckboost/> · [Native trainer vignette](https://javorraca.github.io/duckboost/vignettes/native-trainer.html)
+**Documentation:** <https://javorraca.github.io/duckboost/> · [Getting started](https://javorraca.github.io/duckboost/getting-started.html) · [Native trainer vignette](https://javorraca.github.io/duckboost/vignettes/native-trainer.html)
 
 Standalone [extension-template](https://github.com/duckdb/extension-template) repository targeting DuckDB 2.0. The `duckdb` submodule is pinned to `v2.0-cyanoptera`.
+
+> **Not on the community store yet.** duckboost will be submitted to [`duckdb/community-extensions`](https://github.com/duckdb/community-extensions) **after DuckDB 2.0 is released**. Until then, try it by cloning and building this repo (PyPI / CRAN DuckDB 1.x cannot load it).
 
 ## Motivation
 
@@ -15,62 +17,80 @@ Standalone [extension-template](https://github.com/duckdb/extension-template) re
 3. **Export** model trees to DuckDB SQL (`CASE WHEN` ensembles, optional `separate_trees`)
 4. **Score** with either `duckboost_predict` or the exported SQL (no extension required at inference time)
 
-## Build
+## Try it
 
-Initialize the submodules, then build the release shell and loadable extension:
+Four steps for analysts and data scientists. You need `git`, a C++17 compiler, `cmake`, and `make` (optional: `ninja`).
+
+### 1. Clone
 
 ```bash
-git submodule update --init --recursive
+git clone --recurse-submodules https://github.com/JavOrraca/duckboost.git
+cd duckboost
+```
+
+### 2. Build
+
+```bash
 make
-# or
-GEN=ninja make
+# or: GEN=ninja make
 ```
 
-The shell is `./build/release/duckdb`. Tests:
+This builds `./build/release/duckdb` (CLI with duckboost linked in) and the loadable `.duckdb_extension` under `build/release/extension/duckboost/`.
 
-```bash
-make test
-```
-
-Load a local unsigned build:
+### 3. Open the shell
 
 ```bash
 ./build/release/duckdb -unsigned
 ```
 
 ```sql
-LOAD '<path>/build/release/extension/duckboost/duckboost.duckdb_extension';
-```
-
-Optional native trainer flags (XGBoost / LightGBM train via vendor C API → dump → import):
-
-```bash
-# Link real libraries (pip wheels work; set ROOT or rely on auto-detect under ~/.local)
-EXT_FLAGS='-DDUCKBOOST_WITH_XGBOOST=ON -DDUCKBOOST_WITH_LIGHTGBM=ON' make release
-
-# Compile #ifdef paths without linking vendor libraries
-EXT_FLAGS='-DDUCKBOOST_WITH_XGBOOST=ON -DDUCKBOOST_NATIVE_STUB_ONLY=ON' make release
-```
-
-CatBoost has no public in-process training C API — use `duckboost_import('catboost', ...)`.
-
-Inspect the active build:
-
-```sql
-SELECT * FROM duckboost_build_info();
+LOAD duckboost;
 SELECT * FROM duckboost_backends();
 ```
 
-Native train tests (linked builds only). GitHub Actions workflow **Native trainers** builds with the pinned pip wheels and runs the same test:
+### 4. Train a first model
 
-```bash
-export LD_LIBRARY_PATH="$HOME/.local/lib/python3.12/site-packages/xgboost/lib:$HOME/.local/lib/python3.12/site-packages/lightgbm/lib:${LD_LIBRARY_PATH}"
-DUCKBOOST_NATIVE_TRAIN_TEST=1 make test T=test/sql/duckboost/native_train.test
+From the checkout (offline-friendly):
+
+```sql
+CREATE TABLE penguins AS
+SELECT
+	body_mass_g::DOUBLE AS body_mass_g,
+	[bill_length_mm, bill_depth_mm, flipper_length_mm, (sex = 'male')::DOUBLE] AS features
+FROM read_csv('data/penguins.csv', nullstr = 'NA')
+WHERE body_mass_g IS NOT NULL
+	AND bill_length_mm IS NOT NULL
+	AND sex IS NOT NULL;
+
+CREATE TABLE models AS
+SELECT duckboost_train(
+	body_mass_g, features,
+	MAP {
+		'backend': 'native',
+		'n_estimators': '40',
+		'max_depth': '3',
+		'learning_rate': '0.15',
+		'feature_names': 'bill_length_mm,bill_depth_mm,flipper_length_mm,male'
+	}
+) AS model
+FROM penguins;
+
+SELECT round(duckboost_evaluate_agg(
+	model, body_mass_g, features, MAP {'metric': 'rmse'}
+), 1) AS rmse_g
+FROM models, penguins;
 ```
 
-Before opening a PR that touches C++ sources, run `make format-check` (or `make format-fix`) so CI Format Check stays green.
+(Same CSV over HTTPS on the docs site when you have `httpfs`.) More detail: [Getting started](https://javorraca.github.io/duckboost/getting-started.html).
 
-See [`PACKAGING.md`](PACKAGING.md) for the community-extension descriptor and native-trainer flags.
+### After DuckDB 2.0
+
+```sql
+INSTALL duckboost FROM community;
+LOAD duckboost;
+```
+
+That path is intentional held until 2.0 + community publication. See [`docs/COMMUNITY_PUBLISH.md`](docs/COMMUNITY_PUBLISH.md).
 
 ## SQL API
 
@@ -175,7 +195,7 @@ Feature `NULL`s are treated as missing (NaN): the reference trainer learns an XG
 
 ### Example datasets
 
-[`data/`](data/) ships two small datasets to learn with. Run from the repository root:
+Site examples prefer public HTTPS CSVs. For offline SQL from a checkout, [`data/`](data/) still has thin copies:
 
 ```sql
 LOAD duckboost;
@@ -272,6 +292,50 @@ Split nodes may use `"compare":"equal"` with `threshold`, or `"compare":"in"` wi
 - **Native LightGBM** maps absolute_error / quantile / lossguide / `categorical_features` / `subsample` (`bagging_freq=1`) / seed. Native XGBoost focuses on L2 depth-wise trees (plus seed / `max_bin` / sample weights / `SaveJsonConfig` intercept). Both native backends honor `early_stopping_rounds` with either `validation_fraction` (random hold-out) or a BOOLEAN `is_validation` column (LightGBM uses `early_stopping_round`, XGBoost evaluates each iter and truncates the dump). `class_weight` is folded into sample weights.
 - **Table macros** `duckboost_fit` / `duckboost_score` wrap `duckboost_train` / `duckboost_predict` with `query_table` for a compact SQL workflow. `duckboost_fit` accepts optional `weight` and `is_validation` (for example `is_validation := (split = 'validation')` after `duckboost_initial_validation_split`).
 - **Split and preprocessing macros** are plain SQL macros registered by the extension. Splits rank rows by a hash of the row's values mixed with `seed`, so they are reproducible and independent of physical row order.
+
+## Build from source (developers)
+
+The [Try it](#try-it) steps above are enough to experiment. Extra knobs for contributors:
+
+```bash
+make test
+# optional faster builds
+GEN=ninja make
+
+# Link real XGBoost / LightGBM (pip wheels work; set ROOT or rely on ~/.local)
+EXT_FLAGS='-DDUCKBOOST_WITH_XGBOOST=ON -DDUCKBOOST_WITH_LIGHTGBM=ON' make release
+
+# Compile #ifdef paths without linking vendor libraries
+EXT_FLAGS='-DDUCKBOOST_WITH_XGBOOST=ON -DDUCKBOOST_NATIVE_STUB_ONLY=ON' make release
+```
+
+CatBoost has no public in-process training C API — use `duckboost_import('catboost', ...)`.
+
+```sql
+SELECT * FROM duckboost_build_info();
+SELECT * FROM duckboost_backends();
+```
+
+Load the `.duckdb_extension` into another DuckDB 2.0 shell:
+
+```bash
+./build/release/duckdb -unsigned
+```
+
+```sql
+LOAD 'build/release/extension/duckboost/duckboost.duckdb_extension';
+```
+
+Native train tests (linked builds only). GitHub Actions workflow **Native trainers** builds with the pinned pip wheels and runs the same test:
+
+```bash
+export LD_LIBRARY_PATH="$HOME/.local/lib/python3.12/site-packages/xgboost/lib:$HOME/.local/lib/python3.12/site-packages/lightgbm/lib:${LD_LIBRARY_PATH}"
+DUCKBOOST_NATIVE_TRAIN_TEST=1 make test T=test/sql/duckboost/native_train.test
+```
+
+Before opening a PR that touches C++ sources, run `make format-check` (or `make format-fix`) so CI Format Check stays green.
+
+See [`PACKAGING.md`](PACKAGING.md) for the community-extension descriptor and native-trainer flags.
 
 ## Roadmap
 
