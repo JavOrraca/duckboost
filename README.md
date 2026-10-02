@@ -1,6 +1,6 @@
 # duckboost <img src="site/images/duckboost-hex.png" align="right" height="138" alt="duckboost hex logo" />
 
-Experimental DuckDB extension for **SQL-native gradient boosting**: train a dependency-free histogram GBDT inside DuckDB (`backend = 'native'`), evaluate and inspect in SQL, export pure SQL for orbital-style inference, and optionally import XGBoost / LightGBM / CatBoost dumps when you need their full toolbox.
+Experimental DuckDB extension for **SQL-native gradient boosting**: train a dependency-free histogram gradient-boosted decision trees (“GBDT”) inside DuckDB (`backend = 'native'`), evaluate and inspect in SQL, export pure SQL for orbital-style inference, and optionally import XGBoost / LightGBM / CatBoost dumps when you need their full toolbox.
 
 **Documentation:** <https://javorraca.github.io/duckboost/> · [Native trainer vignette](https://javorraca.github.io/duckboost/vignettes/native-trainer.html)
 
