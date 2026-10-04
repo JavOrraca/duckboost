@@ -1,11 +1,10 @@
 # Publish the Quarto site in site/ with GitHub's Pages deployment.
 # Pages is configured to build and deploy from GitHub Actions (not a gh-pages branch).
 #
-# Executable examples are stored in site/_freeze. With execute.freeze: auto, any edit to a
-# page that contains ```{python} cells invalidates that page's freeze and Quarto will try
-# to re-run the cells. Pages that call site/_helpers/duckrun.py need the release DuckDB
-# binary, which this workflow does not build. After changing those pages, refresh freeze
-# locally and commit site/_freeze/** before merging to main (see PACKAGING.md).
+# The site is rendered from scratch every time (no freeze). Pages run their SQL through
+# ./build/release/duckdb, so this workflow builds DuckDB with duckboost first; ccache keeps
+# rebuilds short. Pull requests render the site to check every example still runs, and only
+# pushes to main deploy.
 name: Publish docs
 on:
   push:
@@ -13,12 +12,30 @@ on:
       - main
     paths:
       - 'site/**'
-      - 'scripts/check_site_freeze.py'
+      - 'CHANGELOG.md'
+      - 'src/**'
+      - 'include/**'
+      - 'duckboost_extension.cpp'
+      - 'CMakeLists.txt'
+      - 'extension_config.cmake'
+      - 'duckdb'
+      - 'extension-ci-tools'
+      - 'data/**'
+      - 'test/sql/duckboost/data/**'
       - '.github/workflows/publish-docs.yml'
   pull_request:
     paths:
       - 'site/**'
-      - 'scripts/check_site_freeze.py'
+      - 'CHANGELOG.md'
+      - 'src/**'
+      - 'include/**'
+      - 'duckboost_extension.cpp'
+      - 'CMakeLists.txt'
+      - 'extension_config.cmake'
+      - 'duckdb'
+      - 'extension-ci-tools'
+      - 'data/**'
+      - 'test/sql/duckboost/data/**'
       - '.github/workflows/publish-docs.yml'
   workflow_dispatch:
 
@@ -32,34 +49,58 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  freeze-check:
-    name: Check site freeze
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Check committed freeze for executable pages
-        run: python3 scripts/check_site_freeze.py
-
   build:
     name: Render site
-    needs: freeze-check
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ninja-build
+
+      # DuckDB's CMake picks up ccache on its own once it is on PATH.
+      - name: Set up ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: publish-docs-${{ runner.os }}
+          max-size: 2G
+
+      - name: Build DuckDB with duckboost
+        env:
+          GEN: ninja
+          CMAKE_BUILD_PARALLEL_LEVEL: '4'
+        run: make release
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+          cache: pip
+          cache-dependency-path: site/requirements*.txt
 
-      # Quarto's jupyter engine imports nbformat even when freeze hits some pages; pure-Python
-      # pages (e.g. benchmarks.qmd) may also re-execute without DuckDB.
       - name: Install Jupyter for Quarto
-        run: python3 -m pip install --upgrade pip jupyter nbformat nbclient ipykernel
+        run: python -m pip install -r site/requirements.txt
+
+      # The ticket NLP vignette embeds a ticket sample with MiniLM and caches the Parquet
+      # in .cache/tickets. The cache key follows the helper, so torch is only installed
+      # when the sample or model changes.
+      - name: Restore ticket embeddings
+        id: tickets
+        uses: actions/cache@v4
+        with:
+          path: .cache/tickets
+          key: ticket-embeddings-${{ hashFiles('site/_helpers/ticket_nlp.py') }}
+
+      - name: Install embedding dependencies
+        if: steps.tickets.outputs.cache-hit != 'true'
+        run: |
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -r site/requirements-embeddings.txt
 
       - name: Set up Quarto
         uses: quarto-dev/quarto-actions/setup@v2
@@ -67,11 +108,10 @@ jobs:
           version: "1.10.18"
 
       - name: Render Quarto project
-        uses: quarto-dev/quarto-actions/render@v2
-        with:
-          path: site
+        run: quarto render site
 
       - name: Upload Pages artifact
+        if: github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@v3
         with:
           path: site/_site

@@ -11,3 +11,4 @@ site/_site/
 site/.quarto/
 .posit/assistant/
 .worktrees/
+site/_freeze/
