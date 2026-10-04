@@ -5,7 +5,7 @@
 extension:
   name: duckboost
   description: SQL-native histogram GBDT in DuckDB with vendor dump import and plain-SQL export
-  version: 0.0.1
+  version: 0.0.2
   language: C++
   build: cmake
   license: MIT
