@@ -9,6 +9,8 @@ duckdb_extension_load(duckboost
     LOAD_TESTS
 )
 
-# In DuckDB 2.0, duckdb_extension_load only builds the extension. This also links it into the
-# bundled CLI, so `LOAD duckboost` works in ./build/release/duckdb without an INSTALL step.
-duckdb_extension_statically_link(duckboost)
+# duckdb_extension_load only builds the extension; this links it into the DuckDB shell,
+# library and tests. Older DuckDB versions link by default and lack this command.
+if(COMMAND duckdb_extension_statically_link)
+    duckdb_extension_statically_link(duckboost)
+endif()
