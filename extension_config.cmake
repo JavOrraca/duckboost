@@ -8,3 +8,7 @@ duckdb_extension_load(duckboost
     SOURCE_DIR ${CMAKE_CURRENT_LIST_DIR}
     LOAD_TESTS
 )
+
+# In DuckDB 2.0, duckdb_extension_load only builds the extension. This also links it into the
+# bundled CLI, so `LOAD duckboost` works in ./build/release/duckdb without an INSTALL step.
+duckdb_extension_statically_link(duckboost)
