@@ -17,10 +17,10 @@ Artifacts:
 - Tests: `make test`
 - Loadable extension: `build/release/extension/duckboost/duckboost.duckdb_extension`
 
-Load a local unsigned build:
+The shell, `libduckdb` and `make test` have duckboost statically linked (`duckdb_extension_statically_link` in `extension_config.cmake`), so `LOAD duckboost;` works there, and a path `LOAD` there uses the built-in copy rather than the file. To check the loadable file itself, load it from an unsigned DuckDB 2.0 shell built from the same `duckdb` submodule commit without duckboost linked:
 
 ```bash
-./build/release/duckdb -unsigned
+/path/to/other/duckdb -unsigned
 ```
 
 ```sql
