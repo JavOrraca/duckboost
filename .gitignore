@@ -9,4 +9,5 @@ vcpkg_installed/
 .venv-quarto/
 site/_site/
 site/.quarto/
-.posit/assistant/.worktrees/
+.posit/assistant/
+.worktrees/
