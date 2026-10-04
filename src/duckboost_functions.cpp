@@ -950,13 +950,12 @@ static const DefaultMacro duckboost_scalar_macros[] = {
 // clang-format on
 
 void RegisterDuckBoostMacros(ExtensionLoader &loader) {
-	ParserOptions parser_options;
 	for (idx_t index = 0; duckboost_table_macros[index].name != nullptr; index++) {
-		auto info = DefaultTableFunctionGenerator::CreateTableMacroInfo(duckboost_table_macros[index], parser_options);
+		auto info = DefaultTableFunctionGenerator::CreateTableMacroInfo(duckboost_table_macros[index]);
 		loader.RegisterFunction(*info);
 	}
 	for (idx_t index = 0; duckboost_scalar_macros[index].name != nullptr; index++) {
-		auto info = DefaultFunctionGenerator::CreateInternalMacroInfo(duckboost_scalar_macros[index], parser_options);
+		auto info = DefaultFunctionGenerator::CreateInternalMacroInfo(duckboost_scalar_macros[index]);
 		loader.RegisterFunction(*info);
 	}
 }
