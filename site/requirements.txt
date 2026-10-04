@@ -1,0 +1,5 @@
+# Python packages Quarto needs to run the site's {python} cells.
+jupyter
+nbformat
+nbclient
+ipykernel

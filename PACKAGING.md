@@ -17,10 +17,10 @@ Artifacts:
 - Tests: `make test`
 - Loadable extension: `build/release/extension/duckboost/duckboost.duckdb_extension`
 
-Load a local unsigned build:
+The shell, `libduckdb` and `make test` have duckboost statically linked (`duckdb_extension_statically_link` in `extension_config.cmake`), so `LOAD duckboost;` works there, and a path `LOAD` there uses the built-in copy rather than the file. To check the loadable file itself, load it from an unsigned DuckDB 2.0 shell built from the same `duckdb` submodule commit without duckboost linked:
 
 ```bash
-./build/release/duckdb -unsigned
+/path/to/other/duckdb -unsigned
 ```
 
 ```sql
@@ -49,7 +49,7 @@ Docs: https://duckdb.org/community_extensions/documentation.html
 | Field | duckboost value |
 | --- | --- |
 | `extension.name` | `duckboost` |
-| `extension.version` | `0.1.0` (bump on release) |
+| `extension.version` | latest release in [`CHANGELOG.md`](CHANGELOG.md) (set when cutting a release) |
 | `extension.license` | `MIT` |
 | `extension.maintainers` | `JavOrraca` |
 | `extension.requires_toolchains` | *(omit)* — default build is dependency-free CMake |
@@ -107,15 +107,39 @@ Vendor parity fixture regeneration also runs on PRs that touch `src/import.cpp` 
 
 ## GitHub Pages (`site/`)
 
-`.github/workflows/publish-docs.yml` renders `site/` with Quarto and deploys to Pages. It installs Jupyter but does **not** build DuckDB. Executable examples are stored in `site/_freeze` (`execute.freeze: auto`). Editing any `.qmd` that contains `{python}` cells changes that page's freeze hash and forces re-execution in CI — pages that call `site/_helpers/duckrun.py` then fail unless freeze is refreshed.
+`.github/workflows/publish-docs.yml` builds DuckDB with duckboost (ccache keeps rebuilds short), renders `site/` from scratch with Quarto, and deploys to Pages on pushes to `main`. Pull requests that touch the site, `CHANGELOG.md` or the extension sources render the site too, which checks that every example still runs, but they don't deploy. Nothing is frozen: the pages run their SQL through `./build/release/duckdb` on every render, so there is no `site/_freeze` to refresh.
 
-After changing those pages:
+Preview locally:
 
 ```bash
 make
 python3 -m venv .venv-quarto
-.venv-quarto/bin/pip install jupyter nbformat nbclient ipykernel
-QUARTO_PYTHON=$PWD/.venv-quarto/bin/python quarto render site
-python3 scripts/check_site_freeze.py   # also runs in Publish docs CI
-git add site/_freeze && git commit
+.venv-quarto/bin/pip install -r site/requirements.txt
+# Only the ticket NLP vignette needs these, and only to rebuild .cache/tickets:
+.venv-quarto/bin/pip install -r site/requirements-embeddings.txt
+QUARTO_PYTHON=$PWD/.venv-quarto/bin/python quarto render site   # or: quarto preview site
 ```
+
+## Releases
+
+Versions follow [semantic versioning](https://semver.org/), and git tags `vX.Y.Z` are the source of truth. DuckDB's build reports `vX.Y.Z` as `extension_version` for a build of the tagged commit and the short commit hash otherwise. Until DuckDB 2.0 ships, releases are GitHub pre-releases.
+
+Unreleased changes go under `## X.Y.Z (unreleased)` at the top of [`CHANGELOG.md`](CHANGELOG.md), in the same PR as the change. To cut a release:
+
+1. In a PR, replace `(unreleased)` with the date, `## 0.0.2 (YYYY-MM-DD)`, set `extension.version` in `docs/community_extensions_description.yml`, and merge.
+2. Tag the merge commit and publish the release:
+
+   ```bash
+   git switch main && git pull
+   git tag -a v0.0.2 -m "duckboost 0.0.2"
+   git push origin v0.0.2
+   gh release create v0.0.2 --prerelease --title "duckboost 0.0.2" --notes "See CHANGELOG.md"
+   ```
+
+3. Check that a build of the tag reports the version:
+
+   ```sql
+   SELECT extension_version FROM duckdb_extensions() WHERE extension_name = 'duckboost';
+   ```
+
+4. Start the next `## X.Y.Z (unreleased)` section when the next change lands.

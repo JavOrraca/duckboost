@@ -2,7 +2,7 @@
 
 Experimental DuckDB extension for **SQL-native gradient boosting**: train dependency-free histogram gradient-boosted decision trees (“GBDT”) inside DuckDB (`backend = 'native'`), evaluate and inspect in SQL, export pure SQL for orbital-style inference, and optionally import XGBoost / LightGBM / CatBoost dumps when you need their full toolbox.
 
-**Documentation:** <https://javorraca.github.io/duckboost/> · [Getting started](https://javorraca.github.io/duckboost/getting-started.html) · [Native trainer vignette](https://javorraca.github.io/duckboost/vignettes/native-trainer.html)
+**Documentation:** <https://javorraca.github.io/duckboost/> · [Getting started](https://javorraca.github.io/duckboost/getting-started.html) · [Native trainer vignette](https://javorraca.github.io/duckboost/vignettes/native-trainer.html) · [Changelog](CHANGELOG.md)
 
 Standalone [extension-template](https://github.com/duckdb/extension-template) repository targeting DuckDB 2.0. The `duckdb` submodule is pinned to `v2.0-cyanoptera`.
 
@@ -316,14 +316,14 @@ SELECT * FROM duckboost_build_info();
 SELECT * FROM duckboost_backends();
 ```
 
-Load the `.duckdb_extension` into another DuckDB 2.0 shell:
+`./build/release/duckdb` and `make test` have duckboost statically linked, so `LOAD duckboost;` is all they need, and a path `LOAD` there uses the built-in copy. The `.duckdb_extension` file is for a separate DuckDB 2.0 shell built from the same `duckdb` submodule commit:
 
 ```bash
-./build/release/duckdb -unsigned
+/path/to/other/duckdb -unsigned
 ```
 
 ```sql
-LOAD 'build/release/extension/duckboost/duckboost.duckdb_extension';
+LOAD '/path/to/duckboost/build/release/extension/duckboost/duckboost.duckdb_extension';
 ```
 
 Native train tests (linked builds only). GitHub Actions workflow **Native trainers** builds with the pinned pip wheels and runs the same test:

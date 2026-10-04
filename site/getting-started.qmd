@@ -72,14 +72,14 @@ ORDER BY backend;
 
 `training_supported` is true only for backends this binary can train in-process. A default `make` enables the native histogram trainer (pass `backend = 'native'` in train options; model JSON may still say `"reference"`). XGBoost, LightGBM, and CatBoost stay import-only unless you linked the vendor libraries — see the README build notes.
 
-To load the `.duckdb_extension` into a **different** DuckDB 2.0 shell (not this repo’s binary):
+To load the `.duckdb_extension` into a **different** DuckDB 2.0 shell (not this repo’s binary), build that shell from the same `duckdb` submodule commit:
 
 ```bash
-./build/release/duckdb -unsigned
+/path/to/other/duckdb -unsigned
 ```
 
 ```sql
-LOAD 'build/release/extension/duckboost/duckboost.duckdb_extension';
+LOAD '/path/to/duckboost/build/release/extension/duckboost/duckboost.duckdb_extension';
 ```
 
 ## 4. First model

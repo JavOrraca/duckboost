@@ -57,6 +57,8 @@ website:
             href: vignettes/prediction-intervals.qmd
       - text: SQL reference
         href: reference.qmd
+      - text: Changelog
+        href: changelog.qmd
 
 format:
   html:
@@ -69,5 +71,7 @@ format:
     toc: true
     code-copy: true
 
+# Pages run their SQL through ../build/release/duckdb on every render (no freeze),
+# so the published output always matches the code on main.
 execute:
-  freeze: auto
+  freeze: false

@@ -1,0 +1,4 @@
+# Only needed to rebuild the ticket NLP vignette's embeddings (.cache/tickets).
+# In CI, torch is installed first from the CPU-only index.
+sentence-transformers
+pyarrow
