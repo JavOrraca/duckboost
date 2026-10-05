@@ -562,8 +562,8 @@ void EvaluateFunction(DataChunk &args, ExpressionState &, Vector &result) {
 				writer.WriteValue(loss);
 			}
 		} else if (metric == "roc_auc_ovr" || metric == "roc_auc_ovo") {
-			throw InvalidInputException(
-			    "duckboost: metric '%s' is dataset-level only; use duckboost_evaluate_agg", metric);
+			throw InvalidInputException("duckboost: metric '%s' is dataset-level only; use duckboost_evaluate_agg",
+			                            metric);
 		} else {
 			throw InvalidInputException("duckboost: unknown metric '%s'", options.metric);
 		}
