@@ -481,6 +481,13 @@ void EvaluateFunction(DataChunk &args, ExpressionState &, Vector &result) {
 		auto pred = model.Predict(features);
 		auto y = y_data[y_idx];
 		auto metric = options.metric;
+		if (metric == "brier") {
+			metric = "brier_score";
+		} else if (metric == "auc_ovr") {
+			metric = "roc_auc_ovr";
+		} else if (metric == "auc_ovo") {
+			metric = "roc_auc_ovo";
+		}
 		if (metric.empty() || metric == "auto") {
 			if (model.task == BoostTask::BINARY || model.task == BoostTask::MULTICLASS) {
 				metric = "accuracy";
@@ -526,6 +533,37 @@ void EvaluateFunction(DataChunk &args, ExpressionState &, Vector &result) {
 			// Squared error contribution; take the square root after averaging rows.
 			auto err = pred - y;
 			writer.WriteValue(err * err);
+		} else if (metric == "brier_score") {
+			if (model.task != BoostTask::BINARY && model.task != BoostTask::MULTICLASS) {
+				throw InvalidInputException("duckboost: metric 'brier_score' requires a binary or multiclass model");
+			}
+			auto proba = model.PredictProba(features);
+			if (model.task == BoostTask::BINARY) {
+				if (!std::isfinite(y) || y < 0 || y != std::floor(y) || y > 1) {
+					throw InvalidInputException("duckboost: binary brier_score expects labels 0 or 1");
+				}
+				auto p = proba.size() >= 2 ? proba[1] : pred;
+				auto err = y - p;
+				writer.WriteValue(err * err);
+			} else {
+				if (!std::isfinite(y) || y < 0 || y != std::floor(y)) {
+					throw InvalidInputException("duckboost: brier_score expects non-negative integer class labels");
+				}
+				auto label = static_cast<idx_t>(y);
+				if (label >= proba.size()) {
+					throw InvalidInputException("duckboost: multiclass label out of range during brier_score");
+				}
+				double loss = 0;
+				for (idx_t c = 0; c < proba.size(); c++) {
+					auto target = c == label ? 1.0 : 0.0;
+					auto err = target - proba[c];
+					loss += err * err;
+				}
+				writer.WriteValue(loss);
+			}
+		} else if (metric == "roc_auc_ovr" || metric == "roc_auc_ovo") {
+			throw InvalidInputException(
+			    "duckboost: metric '%s' is dataset-level only; use duckboost_evaluate_agg", metric);
 		} else {
 			throw InvalidInputException("duckboost: unknown metric '%s'", options.metric);
 		}

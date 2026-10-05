@@ -8,6 +8,12 @@ A build from a release tag reports that version, and any other commit reports it
 SELECT extension_version FROM duckdb_extensions() WHERE extension_name = 'duckboost';
 ```
 
+## 0.0.3 (2026-10-05)
+
+### Added
+
+- Classification evaluate metrics `brier_score` (alias `brier`), `roc_auc_ovr` (alias `auc_ovr`), and `roc_auc_ovo` (alias `auc_ovo`) on `duckboost_evaluate_agg`. Binary and multiclass are both supported. Scalar `duckboost_evaluate` returns the per-row Brier contribution; ROC AUC is aggregate-only.
+
 ## 0.0.2 (2026-10-04)
 
 ### Fixed

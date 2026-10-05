@@ -1372,6 +1372,223 @@ BoostModel TrainModel(const vector<double> &y, const vector<vector<double>> &x, 
 	    BackendToString(options.backend));
 }
 
+namespace {
+
+//! Mann–Whitney / Wilcoxon rank AUC with average ranks for tied scores (sklearn-compatible).
+double BinaryRocAuc(const vector<uint8_t> &positive, const vector<double> &scores) {
+	D_ASSERT(positive.size() == scores.size());
+	idx_t n_pos = 0;
+	idx_t n_neg = 0;
+	for (auto is_pos : positive) {
+		if (is_pos) {
+			n_pos++;
+		} else {
+			n_neg++;
+		}
+	}
+	if (n_pos == 0 || n_neg == 0) {
+		throw InvalidInputException(
+		    "duckboost: roc_auc requires both positive and negative labels in the evaluation set");
+	}
+	vector<idx_t> order(scores.size());
+	std::iota(order.begin(), order.end(), 0);
+	std::sort(order.begin(), order.end(), [&](idx_t a, idx_t b) {
+		if (scores[a] != scores[b]) {
+			return scores[a] < scores[b];
+		}
+		return a < b;
+	});
+	double rank_sum_pos = 0;
+	idx_t i = 0;
+	const idx_t n = order.size();
+	while (i < n) {
+		idx_t j = i;
+		while (j + 1 < n && scores[order[j + 1]] == scores[order[i]]) {
+			j++;
+		}
+		// 1-based ranks i+1 .. j+1; ties share the average rank.
+		const double avg_rank = static_cast<double>(i + j + 2) / 2.0;
+		for (idx_t k = i; k <= j; k++) {
+			if (positive[order[k]]) {
+				rank_sum_pos += avg_rank;
+			}
+		}
+		i = j + 1;
+	}
+	return (rank_sum_pos - static_cast<double>(n_pos) * static_cast<double>(n_pos + 1) / 2.0) /
+	       (static_cast<double>(n_pos) * static_cast<double>(n_neg));
+}
+
+void RequireClassification(const BoostModel &model, const string &metric) {
+	if (model.task != BoostTask::BINARY && model.task != BoostTask::MULTICLASS) {
+		throw InvalidInputException("duckboost: metric '%s' requires a binary or multiclass model", metric);
+	}
+}
+
+idx_t ClassificationLabel(const BoostModel &model, double y, idx_t n_classes, const string &metric) {
+	if (!std::isfinite(y) || y < 0 || y != std::floor(y)) {
+		throw InvalidInputException("duckboost: %s expects non-negative integer class labels", metric);
+	}
+	auto label = static_cast<idx_t>(y);
+	if (model.task == BoostTask::BINARY) {
+		if (label > 1) {
+			throw InvalidInputException("duckboost: binary %s expects labels 0 or 1", metric);
+		}
+		return label;
+	}
+	if (label >= n_classes) {
+		throw InvalidInputException("duckboost: multiclass label out of range during %s", metric);
+	}
+	return label;
+}
+
+double RowBrierScore(const BoostModel &model, double y, const vector<double> &features) {
+	RequireClassification(model, "brier_score");
+	auto proba = model.PredictProba(features);
+	if (model.task == BoostTask::BINARY) {
+		auto label = ClassificationLabel(model, y, 2, "brier_score");
+		auto p = proba.size() >= 2 ? proba[1] : model.Predict(features);
+		auto err = static_cast<double>(label) - p;
+		return err * err;
+	}
+	auto label = ClassificationLabel(model, y, proba.size(), "brier_score");
+	double loss = 0;
+	for (idx_t c = 0; c < proba.size(); c++) {
+		auto target = c == label ? 1.0 : 0.0;
+		auto err = target - proba[c];
+		loss += err * err;
+	}
+	return loss;
+}
+
+double EvaluateBrierScore(const BoostModel &model, const vector<double> &y, const vector<vector<double>> &x) {
+	RequireClassification(model, "brier_score");
+	double loss = 0;
+	for (idx_t i = 0; i < y.size(); i++) {
+		loss += RowBrierScore(model, y[i], x[i]);
+	}
+	return loss / static_cast<double>(y.size());
+}
+
+double EvaluateRocAucOvr(const BoostModel &model, const vector<double> &y, const vector<vector<double>> &x) {
+	RequireClassification(model, "roc_auc_ovr");
+	const idx_t n = y.size();
+	vector<vector<double>> proba(n);
+	idx_t n_classes = 0;
+	for (idx_t i = 0; i < n; i++) {
+		proba[i] = model.PredictProba(x[i]);
+		n_classes = MaxValue<idx_t>(n_classes, proba[i].size());
+	}
+	if (model.task == BoostTask::BINARY) {
+		n_classes = 2;
+	} else if (model.n_classes > 0) {
+		n_classes = MaxValue<idx_t>(n_classes, model.n_classes);
+	}
+	if (n_classes < 2) {
+		throw InvalidInputException("duckboost: roc_auc_ovr requires at least 2 classes");
+	}
+	vector<idx_t> labels(n);
+	for (idx_t i = 0; i < n; i++) {
+		labels[i] = ClassificationLabel(model, y[i], n_classes, "roc_auc_ovr");
+		if (proba[i].size() < n_classes) {
+			proba[i].resize(n_classes, 0);
+		}
+	}
+	if (model.task == BoostTask::BINARY) {
+		vector<uint8_t> positive(n);
+		vector<double> scores(n);
+		for (idx_t i = 0; i < n; i++) {
+			positive[i] = labels[i] == 1 ? 1 : 0;
+			scores[i] = proba[i].size() >= 2 ? proba[i][1] : model.Predict(x[i]);
+		}
+		return BinaryRocAuc(positive, scores);
+	}
+	double sum_auc = 0;
+	for (idx_t c = 0; c < n_classes; c++) {
+		vector<uint8_t> positive(n);
+		vector<double> scores(n);
+		for (idx_t i = 0; i < n; i++) {
+			positive[i] = labels[i] == c ? 1 : 0;
+			scores[i] = proba[i][c];
+		}
+		sum_auc += BinaryRocAuc(positive, scores);
+	}
+	return sum_auc / static_cast<double>(n_classes);
+}
+
+double EvaluateRocAucOvo(const BoostModel &model, const vector<double> &y, const vector<vector<double>> &x) {
+	RequireClassification(model, "roc_auc_ovo");
+	const idx_t n = y.size();
+	vector<vector<double>> proba(n);
+	idx_t n_classes = 0;
+	for (idx_t i = 0; i < n; i++) {
+		proba[i] = model.PredictProba(x[i]);
+		n_classes = MaxValue<idx_t>(n_classes, proba[i].size());
+	}
+	if (model.task == BoostTask::BINARY) {
+		n_classes = 2;
+	} else if (model.n_classes > 0) {
+		n_classes = MaxValue<idx_t>(n_classes, model.n_classes);
+	}
+	if (n_classes < 2) {
+		throw InvalidInputException("duckboost: roc_auc_ovo requires at least 2 classes");
+	}
+	vector<idx_t> labels(n);
+	for (idx_t i = 0; i < n; i++) {
+		labels[i] = ClassificationLabel(model, y[i], n_classes, "roc_auc_ovo");
+		if (proba[i].size() < n_classes) {
+			proba[i].resize(n_classes, 0);
+		}
+	}
+	if (n_classes == 2) {
+		vector<uint8_t> positive(n);
+		vector<double> scores(n);
+		for (idx_t i = 0; i < n; i++) {
+			positive[i] = labels[i] == 1 ? 1 : 0;
+			scores[i] = proba[i].size() >= 2 ? proba[i][1] : model.Predict(x[i]);
+		}
+		return BinaryRocAuc(positive, scores);
+	}
+	double sum_auc = 0;
+	idx_t n_pairs = 0;
+	for (idx_t a = 0; a < n_classes; a++) {
+		for (idx_t b = a + 1; b < n_classes; b++) {
+			vector<uint8_t> positive;
+			vector<double> scores;
+			positive.reserve(n);
+			scores.reserve(n);
+			for (idx_t i = 0; i < n; i++) {
+				if (labels[i] != a && labels[i] != b) {
+					continue;
+				}
+				positive.push_back(labels[i] == a ? 1 : 0);
+				auto pa = proba[i][a];
+				auto pb = proba[i][b];
+				auto denom = pa + pb;
+				scores.push_back(denom > 0 ? pa / denom : 0.5);
+			}
+			sum_auc += BinaryRocAuc(positive, scores);
+			n_pairs++;
+		}
+	}
+	return sum_auc / static_cast<double>(n_pairs);
+}
+
+string NormalizeEvalMetric(const string &metric) {
+	if (metric == "brier") {
+		return "brier_score";
+	}
+	if (metric == "auc_ovr") {
+		return "roc_auc_ovr";
+	}
+	if (metric == "auc_ovo") {
+		return "roc_auc_ovo";
+	}
+	return metric;
+}
+
+} // namespace
+
 double EvaluateModel(const BoostModel &model, const vector<double> &y, const vector<vector<double>> &x,
                      const EvalOptions &options) {
 	if (y.size() != x.size()) {
@@ -1380,7 +1597,7 @@ double EvaluateModel(const BoostModel &model, const vector<double> &y, const vec
 	if (y.empty()) {
 		throw InvalidInputException("duckboost: cannot evaluate on empty dataset");
 	}
-	auto metric = options.metric;
+	auto metric = NormalizeEvalMetric(options.metric);
 	if (metric.empty() || metric == "auto") {
 		if (model.task == BoostTask::BINARY || model.task == BoostTask::MULTICLASS) {
 			metric = "accuracy";
@@ -1468,8 +1685,18 @@ double EvaluateModel(const BoostModel &model, const vector<double> &y, const vec
 		}
 		return loss / static_cast<double>(y.size());
 	}
+	if (metric == "brier_score") {
+		return EvaluateBrierScore(model, y, x);
+	}
+	if (metric == "roc_auc_ovr") {
+		return EvaluateRocAucOvr(model, y, x);
+	}
+	if (metric == "roc_auc_ovo") {
+		return EvaluateRocAucOvo(model, y, x);
+	}
 	throw InvalidInputException(
-	    "duckboost: unknown metric '%s' (expected auto, rmse, mae, pinball, quantile, expectile, accuracy, logloss)",
+	    "duckboost: unknown metric '%s' (expected auto, rmse, mae, pinball, quantile, expectile, accuracy, logloss, "
+	    "brier_score, roc_auc_ovr, roc_auc_ovo)",
 	    options.metric);
 }
 

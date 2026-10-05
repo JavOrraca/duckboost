@@ -169,7 +169,7 @@ duckboost_evaluate(model VARCHAR, y DOUBLE, features DOUBLE[]) -> DOUBLE
 duckboost_evaluate(model VARCHAR, y DOUBLE, features DOUBLE[], options MAP(VARCHAR, VARCHAR)) -> DOUBLE
 ```
 
-The only option is `metric` (`auto`, `rmse`, `mae`, `pinball` / `quantile`, `expectile`, `accuracy`, `logloss`). Unknown keys raise `duckboost: unknown evaluate option`.
+The only option is `metric` (`auto`, `rmse`, `mae`, `pinball` / `quantile`, `expectile`, `accuracy`, `logloss`, `brier_score` / `brier`, `roc_auc_ovr` / `auc_ovr`, `roc_auc_ovo` / `auc_ovo`). Unknown keys raise `duckboost: unknown evaluate option`.
 
 What the scalar function returns for each metric:
 
@@ -180,7 +180,9 @@ What the scalar function returns for each metric:
 | `expectile` | Asymmetric squared loss at the model's objective alpha. |
 | `accuracy` | `1` if the classification is correct, else `0`. Binary treats probability `>= 0.5` as class 1. Multiclass compares the argmax index. |
 | `logloss` | Row log loss. Multiclass uses the probability of the integer label. |
+| `brier_score`, `brier` | Row Brier contribution. Binary: `(y - p)²`. Multiclass: `Σ_c (I(y=c) - p_c)²`. |
 | `rmse` | Squared-error contribution; take the square root after averaging rows. |
+| `roc_auc_ovr`, `auc_ovr`, `roc_auc_ovo`, `auc_ovo` | Not available on the scalar function (dataset-level only). Use `duckboost_evaluate_agg`. |
 
 `auto` selects accuracy for classification and the matching regression loss for regression models.
 
@@ -215,7 +217,17 @@ duckboost_evaluate_agg(model VARCHAR, y DOUBLE, features DOUBLE[]) -> DOUBLE
 duckboost_evaluate_agg(model VARCHAR, y DOUBLE, features DOUBLE[], options MAP(VARCHAR, VARCHAR)) -> DOUBLE
 ```
 
-`metric` defaults to `auto`: the model's training loss for regression, and accuracy for binary and multiclass. `rmse`, `mae`, `pinball` / `quantile`, `expectile`, and `logloss` are dataset means (RMSE is the square root of the mean squared error). `accuracy` is the fraction of correct rows. Pinball and expectile use the alpha stored in the model. `model` and `y` cannot be NULL.
+`metric` defaults to `auto`: the model's training loss for regression, and accuracy for binary and multiclass. `rmse`, `mae`, `pinball` / `quantile`, `expectile`, `logloss`, and `brier_score` are dataset means (RMSE is the square root of the mean squared error). `accuracy` is the fraction of correct rows. Pinball and expectile use the alpha stored in the model.
+
+Classification probability metrics:
+
+| `metric` | Meaning |
+| --- | --- |
+| `brier_score`, `brier` | Mean Brier score. Binary uses the common `[0, 1]` form `mean((y - p)²)`. Multiclass uses the original sum-over-classes form on `[0, 2]`. |
+| `roc_auc_ovr`, `auc_ovr` | Macro-averaged one-vs-rest ROC AUC. Binary is ordinary ROC AUC on the positive-class probability. |
+| `roc_auc_ovo`, `auc_ovo` | Macro-averaged one-vs-one ROC AUC (pairwise probabilities `p_a / (p_a + p_b)`). On binary models this matches `roc_auc_ovr`. |
+
+ROC AUC needs both classes present in each binary reduction; otherwise evaluate raises. `model` and `y` cannot be NULL.
 
 ```{python}
 #| echo: false
