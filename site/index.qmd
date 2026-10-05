@@ -63,7 +63,7 @@ Read penguins with `nullstr = 'NA'`. [Getting started](getting-started.qmd) fits
 | Native GBDT | `duckboost_train` with `backend = 'native'` (default) for regression, binary, and multiclass |
 | Dump import | `duckboost_import` for XGBoost `dump_model` JSON, LightGBM `save_model` text, and CatBoost `save_model` JSON |
 | In-process score | `duckboost_predict` and `duckboost_predict_proba` |
-| Metrics & importance | `duckboost_evaluate` / `duckboost_evaluate_agg`, `duckboost_importance` |
+| Metrics & importance | `duckboost_evaluate` / `duckboost_evaluate_agg` (incl. `brier_score`, `roc_auc_ovr`, `roc_auc_ovo`), `duckboost_importance` |
 | SQL export | `duckboost_to_sql` writes a query that reproduces those predictions |
 
 Optional in-process XGBoost and LightGBM training is a compile-time flag (`DUCKBOOST_WITH_XGBOOST`, `DUCKBOOST_WITH_LIGHTGBM`). CatBoost has no public training C API, so it is import-only. A default `make` build ships the native trainer and dump import, not the vendor libraries.

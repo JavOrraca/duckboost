@@ -1109,12 +1109,14 @@ void RegisterDuckBoostFunctions(ExtensionLoader &loader) {
 
 	ScalarFunctionSet evaluate_set("duckboost_evaluate");
 	ScalarFunction evaluate_fun({}, LogicalType::DOUBLE, EvaluateFunction);
+	evaluate_fun.SetFallible();
 	evaluate_fun.GetSignature()
 	    .AddParameter("model", LogicalType::VARCHAR)
 	    .AddParameter("y", LogicalType::DOUBLE)
 	    .AddParameter("features", LogicalType::LIST(LogicalType::DOUBLE));
 	evaluate_set.AddFunction(evaluate_fun);
 	ScalarFunction evaluate_opts({}, LogicalType::DOUBLE, EvaluateFunction);
+	evaluate_opts.SetFallible();
 	evaluate_opts.GetSignature()
 	    .AddParameter("model", LogicalType::VARCHAR)
 	    .AddParameter("y", LogicalType::DOUBLE)

@@ -86,12 +86,12 @@ FROM constant_binary m, binary_rows r;
 ----
 true
 
-# Multiclass Brier with constant softmax([log 0.5, log 0.3, log 0.2]) and label 0 ⇒ 0.38.
+# Multiclass Brier with constant softmax → [0.5, 0.3, 0.2] and label 0 ⇒ 0.38.
 statement ok
 CREATE TABLE mc_brier_models AS
 SELECT duckboost_import(
 	'reference',
-	'{"duckboost_version":1,"backend":"reference","task":"multiclass","base_score":0,"learning_rate":1,"n_features":1,"n_classes":3,"feature_names":["x"],"trees":[{"nodes":[{"is_leaf":true,"feature":0,"threshold":0,"left":0,"right":0,"value":-0.6931471805599453}]},{"nodes":[{"is_leaf":true,"feature":0,"threshold":0,"left":0,"right":0,"value":-1.2049726742868376}]},{"nodes":[{"is_leaf":true,"feature":0,"threshold":0,"left":0,"right":0,"value":-1.6094379124341003}]}]}'
+	'{"duckboost_version":1,"backend":"reference","task":"multiclass","base_score":0,"learning_rate":1,"n_features":1,"n_classes":3,"feature_names":["x"],"trees":[{"nodes":[{"is_leaf":true,"feature":0,"threshold":0,"left":0,"right":0,"value":0}]},{"nodes":[{"is_leaf":true,"feature":0,"threshold":0,"left":0,"right":0,"value":-0.5108256237659907}]},{"nodes":[{"is_leaf":true,"feature":0,"threshold":0,"left":0,"right":0,"value":-0.916290731874155}]}]}'
 ) AS model;
 
 query I
@@ -99,6 +99,34 @@ SELECT abs(duckboost_evaluate_agg(m.model, r.y, [r.x], MAP {'metric': 'brier_sco
 FROM mc_brier_models m, (SELECT 0.0 AS x, 0.0 AS y) r;
 ----
 true
+
+# Exact multiclass OvR / OvO / Brier on a handcrafted probability grid (macro AUC = 1, Brier = 0.1).
+statement ok
+CREATE TABLE mc_auc_models AS
+SELECT duckboost_import(
+	'reference',
+	(SELECT content FROM read_text('test/sql/duckboost/data/mc_eval_metrics.json'))
+) AS model;
+
+statement ok
+CREATE TABLE mc_auc_rows AS
+SELECT * FROM (VALUES
+	(0.0, 0.0),
+	(1.0, 0.0),
+	(2.0, 1.0),
+	(3.0, 1.0),
+	(4.0, 2.0),
+	(5.0, 2.0)
+) t(x, y);
+
+query III
+SELECT
+	abs(duckboost_evaluate_agg(m.model, r.y, [r.x], MAP {'metric': 'roc_auc_ovr'}) - 1.0) < 1e-12,
+	abs(duckboost_evaluate_agg(m.model, r.y, [r.x], MAP {'metric': 'roc_auc_ovo'}) - 1.0) < 1e-12,
+	abs(duckboost_evaluate_agg(m.model, r.y, [r.x], MAP {'metric': 'brier_score'}) - 0.1) < 1e-12
+FROM mc_auc_models m, mc_auc_rows r;
+----
+true	true	true
 
 # Separable multiclass on penguins species: both AUC reductions should be strong.
 statement ok

@@ -1,0 +1,290 @@
+{
+  "duckboost_version": 1,
+  "backend": "reference",
+  "task": "multiclass",
+  "base_score": 0,
+  "learning_rate": 1,
+  "n_features": 1,
+  "n_classes": 3,
+  "feature_names": [
+    "x"
+  ],
+  "trees": [
+    {
+      "nodes": [
+        {
+          "is_leaf": false,
+          "feature": 0,
+          "threshold": 0.5,
+          "left": 5,
+          "right": 1,
+          "value": 0
+        },
+        {
+          "is_leaf": false,
+          "feature": 0,
+          "threshold": 1.5,
+          "left": 6,
+          "right": 2,
+          "value": 0
+        },
+        {
+          "is_leaf": false,
+          "feature": 0,
+          "threshold": 2.5,
+          "left": 7,
+          "right": 3,
+          "value": 0
+        },
+        {
+          "is_leaf": false,
+          "feature": 0,
+          "threshold": 3.5,
+          "left": 8,
+          "right": 4,
+          "value": 0
+        },
+        {
+          "is_leaf": false,
+          "feature": 0,
+          "threshold": 4.5,
+          "left": 9,
+          "right": 10,
+          "value": 0
+        },
+        {
+          "is_leaf": true,
+          "feature": 0,
+          "threshold": 0,
+          "left": 0,
+          "right": 0,
+          "value": -0.2231435513142097
+        },
+        {
+          "is_leaf": true,
+          "feature": 0,
+          "threshold": 0,
+          "left": 0,
+          "right": 0,
+          "value": -0.35667494393873245
+        },
+        {
+          "is_leaf": true,
+          "feature": 0,
+          "threshold": 0,
+          "left": 0,
+          "right": 0,
+          "value": -2.3025850929940455
+        },
+        {
+          "is_leaf": true,
+          "feature": 0,
+          "threshold": 0,
+          "left": 0,
+          "right": 0,
+          "value": -1.6094379124341003
+        },
+        {
+          "is_leaf": true,
+          "feature": 0,
+          "threshold": 0,
+          "left": 0,
+          "right": 0,
+          "value": -2.3025850929940455
+        },
+        {
+          "is_leaf": true,
+          "feature": 0,
+          "threshold": 0,
+          "left": 0,
+          "right": 0,
+          "value": -2.3025850929940455
+        }
+      ]
+    },
+    {
+      "nodes": [
+        {
+          "is_leaf": false,
+          "feature": 0,
+          "threshold": 0.5,
+          "left": 5,
+          "right": 1,
+          "value": 0
+        },
+        {
+          "is_leaf": false,
+          "feature": 0,
+          "threshold": 1.5,
+          "left": 6,
+          "right": 2,
+          "value": 0
+        },
+        {
+          "is_leaf": false,
+          "feature": 0,
+          "threshold": 2.5,
+          "left": 7,
+          "right": 3,
+          "value": 0
+        },
+        {
+          "is_leaf": false,
+          "feature": 0,
+          "threshold": 3.5,
+          "left": 8,
+          "right": 4,
+          "value": 0
+        },
+        {
+          "is_leaf": false,
+          "feature": 0,
+          "threshold": 4.5,
+          "left": 9,
+          "right": 10,
+          "value": 0
+        },
+        {
+          "is_leaf": true,
+          "feature": 0,
+          "threshold": 0,
+          "left": 0,
+          "right": 0,
+          "value": -2.3025850929940455
+        },
+        {
+          "is_leaf": true,
+          "feature": 0,
+          "threshold": 0,
+          "left": 0,
+          "right": 0,
+          "value": -1.6094379124341003
+        },
+        {
+          "is_leaf": true,
+          "feature": 0,
+          "threshold": 0,
+          "left": 0,
+          "right": 0,
+          "value": -0.2231435513142097
+        },
+        {
+          "is_leaf": true,
+          "feature": 0,
+          "threshold": 0,
+          "left": 0,
+          "right": 0,
+          "value": -0.35667494393873245
+        },
+        {
+          "is_leaf": true,
+          "feature": 0,
+          "threshold": 0,
+          "left": 0,
+          "right": 0,
+          "value": -2.3025850929940455
+        },
+        {
+          "is_leaf": true,
+          "feature": 0,
+          "threshold": 0,
+          "left": 0,
+          "right": 0,
+          "value": -1.6094379124341003
+        }
+      ]
+    },
+    {
+      "nodes": [
+        {
+          "is_leaf": false,
+          "feature": 0,
+          "threshold": 0.5,
+          "left": 5,
+          "right": 1,
+          "value": 0
+        },
+        {
+          "is_leaf": false,
+          "feature": 0,
+          "threshold": 1.5,
+          "left": 6,
+          "right": 2,
+          "value": 0
+        },
+        {
+          "is_leaf": false,
+          "feature": 0,
+          "threshold": 2.5,
+          "left": 7,
+          "right": 3,
+          "value": 0
+        },
+        {
+          "is_leaf": false,
+          "feature": 0,
+          "threshold": 3.5,
+          "left": 8,
+          "right": 4,
+          "value": 0
+        },
+        {
+          "is_leaf": false,
+          "feature": 0,
+          "threshold": 4.5,
+          "left": 9,
+          "right": 10,
+          "value": 0
+        },
+        {
+          "is_leaf": true,
+          "feature": 0,
+          "threshold": 0,
+          "left": 0,
+          "right": 0,
+          "value": -2.3025850929940455
+        },
+        {
+          "is_leaf": true,
+          "feature": 0,
+          "threshold": 0,
+          "left": 0,
+          "right": 0,
+          "value": -2.3025850929940455
+        },
+        {
+          "is_leaf": true,
+          "feature": 0,
+          "threshold": 0,
+          "left": 0,
+          "right": 0,
+          "value": -2.3025850929940455
+        },
+        {
+          "is_leaf": true,
+          "feature": 0,
+          "threshold": 0,
+          "left": 0,
+          "right": 0,
+          "value": -2.3025850929940455
+        },
+        {
+          "is_leaf": true,
+          "feature": 0,
+          "threshold": 0,
+          "left": 0,
+          "right": 0,
+          "value": -0.2231435513142097
+        },
+        {
+          "is_leaf": true,
+          "feature": 0,
+          "threshold": 0,
+          "left": 0,
+          "right": 0,
+          "value": -0.35667494393873245
+        }
+      ]
+    }
+  ]
+}
