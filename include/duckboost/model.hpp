@@ -183,7 +183,9 @@ struct TrainOptions {
 idx_t ResolveClassCount(const vector<double> &y, const TrainOptions &options);
 
 struct EvalOptions {
-	string metric = "auto"; // auto | rmse | mae | pinball | expectile | accuracy | logloss
+	//! auto | rmse | mae | pinball | expectile | accuracy | logloss | brier_score |
+	//! roc_auc_ovr | roc_auc_ovo
+	string metric = "auto";
 	static EvalOptions FromMap(const unordered_map<string, string> &options);
 };
 

@@ -1,0 +1,207 @@
+# name: test/sql/duckboost/eval_metrics.test
+# description: brier_score, roc_auc_ovr, and roc_auc_ovo evaluate metrics
+# group: [duckboost]
+
+require duckboost
+
+# Handcrafted binary stump: x in {0,1,2,3} → probs {0.1, 0.4, 0.35, 0.8}.
+# Labels [0,0,1,1] ⇒ AUC 0.75, Brier 0.158125.
+statement ok
+CREATE TABLE binary_models AS
+SELECT duckboost_import(
+	'reference',
+	'{"duckboost_version":1,"backend":"reference","task":"binary","base_score":0,"learning_rate":1,"n_features":1,"n_classes":1,"feature_names":["x"],"trees":[{"nodes":[{"is_leaf":false,"feature":0,"threshold":1.5,"left":1,"right":2,"value":0},{"is_leaf":false,"feature":0,"threshold":0.5,"left":3,"right":4,"value":0},{"is_leaf":false,"feature":0,"threshold":2.5,"left":5,"right":6,"value":0},{"is_leaf":true,"feature":0,"threshold":0,"left":0,"right":0,"value":-2.197224577336219},{"is_leaf":true,"feature":0,"threshold":0,"left":0,"right":0,"value":-0.4054651081081643},{"is_leaf":true,"feature":0,"threshold":0,"left":0,"right":0,"value":-0.6190392084062235},{"is_leaf":true,"feature":0,"threshold":0,"left":0,"right":0,"value":1.3862943611198908}]}]}'
+) AS model;
+
+statement ok
+CREATE TABLE binary_rows AS
+SELECT * FROM (VALUES
+	(0.0, 0.0),
+	(1.0, 0.0),
+	(2.0, 1.0),
+	(3.0, 1.0)
+) t(x, y);
+
+query I
+SELECT abs(duckboost_evaluate_agg(m.model, r.y, [r.x], MAP {'metric': 'brier_score'}) - 0.158125) < 1e-12
+FROM binary_models m, binary_rows r;
+----
+true
+
+query I
+SELECT abs(duckboost_evaluate_agg(m.model, r.y, [r.x], MAP {'metric': 'brier'}) - 0.158125) < 1e-12
+FROM binary_models m, binary_rows r;
+----
+true
+
+query I
+SELECT abs(duckboost_evaluate_agg(m.model, r.y, [r.x], MAP {'metric': 'roc_auc_ovr'}) - 0.75) < 1e-12
+FROM binary_models m, binary_rows r;
+----
+true
+
+query I
+SELECT abs(duckboost_evaluate_agg(m.model, r.y, [r.x], MAP {'metric': 'roc_auc_ovo'}) - 0.75) < 1e-12
+FROM binary_models m, binary_rows r;
+----
+true
+
+query I
+SELECT duckboost_evaluate_agg(m.model, r.y, [r.x], MAP {'metric': 'roc_auc_ovr'})
+	= duckboost_evaluate_agg(m.model, r.y, [r.x], MAP {'metric': 'auc_ovo'})
+FROM binary_models m, binary_rows r;
+----
+true
+
+# Scalar brier is the per-row contribution; mean matches the aggregate.
+query I
+SELECT abs(avg(duckboost_evaluate(m.model, r.y, [r.x], MAP {'metric': 'brier_score'})) - 0.158125) < 1e-12
+FROM binary_models m, binary_rows r;
+----
+true
+
+statement error
+SELECT duckboost_evaluate(m.model, r.y, [r.x], MAP {'metric': 'roc_auc_ovr'})
+FROM binary_models m, binary_rows r;
+----
+<REGEX>:.*dataset-level only.*
+
+statement error
+SELECT duckboost_evaluate(m.model, r.y, [r.x], MAP {'metric': 'roc_auc_ovo'})
+FROM binary_models m, binary_rows r;
+----
+<REGEX>:.*dataset-level only.*
+
+# Tied scores: all probabilities identical ⇒ AUC 0.5.
+statement ok
+CREATE TABLE constant_binary AS
+SELECT duckboost_import(
+	'reference',
+	'{"duckboost_version":1,"backend":"reference","task":"binary","base_score":0,"learning_rate":1,"n_features":1,"n_classes":1,"feature_names":["x"],"trees":[{"nodes":[{"is_leaf":true,"feature":0,"threshold":0,"left":0,"right":0,"value":0}]}]}'
+) AS model;
+
+query I
+SELECT abs(duckboost_evaluate_agg(m.model, r.y, [r.x], MAP {'metric': 'roc_auc_ovr'}) - 0.5) < 1e-12
+FROM constant_binary m, binary_rows r;
+----
+true
+
+# Multiclass Brier with constant softmax → [0.5, 0.3, 0.2] and label 0 ⇒ 0.38.
+statement ok
+CREATE TABLE mc_brier_models AS
+SELECT duckboost_import(
+	'reference',
+	'{"duckboost_version":1,"backend":"reference","task":"multiclass","base_score":0,"learning_rate":1,"n_features":1,"n_classes":3,"feature_names":["x"],"trees":[{"nodes":[{"is_leaf":true,"feature":0,"threshold":0,"left":0,"right":0,"value":0}]},{"nodes":[{"is_leaf":true,"feature":0,"threshold":0,"left":0,"right":0,"value":-0.5108256237659907}]},{"nodes":[{"is_leaf":true,"feature":0,"threshold":0,"left":0,"right":0,"value":-0.916290731874155}]}]}'
+) AS model;
+
+query I
+SELECT abs(duckboost_evaluate_agg(m.model, r.y, [r.x], MAP {'metric': 'brier_score'}) - 0.38) < 1e-12
+FROM mc_brier_models m, (SELECT 0.0 AS x, 0.0 AS y) r;
+----
+true
+
+# Exact multiclass OvR / OvO / Brier on a handcrafted probability grid (macro AUC = 1, Brier = 0.1).
+statement ok
+CREATE TABLE mc_auc_models AS
+SELECT duckboost_import(
+	'reference',
+	(SELECT content FROM read_text('test/sql/duckboost/data/mc_eval_metrics.json'))
+) AS model;
+
+statement ok
+CREATE TABLE mc_auc_rows AS
+SELECT * FROM (VALUES
+	(0.0, 0.0),
+	(1.0, 0.0),
+	(2.0, 1.0),
+	(3.0, 1.0),
+	(4.0, 2.0),
+	(5.0, 2.0)
+) t(x, y);
+
+query III
+SELECT
+	abs(duckboost_evaluate_agg(m.model, r.y, [r.x], MAP {'metric': 'roc_auc_ovr'}) - 1.0) < 1e-12,
+	abs(duckboost_evaluate_agg(m.model, r.y, [r.x], MAP {'metric': 'roc_auc_ovo'}) - 1.0) < 1e-12,
+	abs(duckboost_evaluate_agg(m.model, r.y, [r.x], MAP {'metric': 'brier_score'}) - 0.1) < 1e-12
+FROM mc_auc_models m, mc_auc_rows r;
+----
+true	true	true
+
+# Separable multiclass on penguins species: both AUC reductions should be strong.
+statement ok
+CREATE TABLE penguins_mc AS
+SELECT
+	duckboost_integer(species, ['Adelie', 'Chinstrap', 'Gentoo']) - 1 AS label,
+	[bill_length_mm, bill_depth_mm, flipper_length_mm, body_mass_g] AS features
+FROM read_csv('data/penguins.csv', nullstr = 'NA')
+WHERE species IS NOT NULL
+	AND bill_length_mm IS NOT NULL
+	AND bill_depth_mm IS NOT NULL
+	AND flipper_length_mm IS NOT NULL
+	AND body_mass_g IS NOT NULL;
+
+statement ok
+CREATE TABLE penguins_mc_models AS
+SELECT duckboost_train(
+	label, features,
+	MAP {
+		'task': 'multiclass',
+		'n_estimators': '40',
+		'max_depth': '3',
+		'learning_rate': '0.2',
+		'feature_names': 'bill_length_mm,bill_depth_mm,flipper_length_mm,body_mass_g'
+	}
+) AS model
+FROM penguins_mc;
+
+query III
+SELECT
+	duckboost_evaluate_agg(model, label, features, MAP {'metric': 'roc_auc_ovr'}) > 0.95,
+	duckboost_evaluate_agg(model, label, features, MAP {'metric': 'roc_auc_ovo'}) > 0.95,
+	duckboost_evaluate_agg(model, label, features, MAP {'metric': 'brier_score'}) < 0.2
+FROM penguins_mc_models, penguins_mc;
+----
+true	true	true
+
+# Regression rejects classification-only metrics.
+statement ok
+CREATE TABLE reg_models AS
+SELECT duckboost_train(y, [x], MAP {'n_estimators': '2', 'max_depth': '1'}) AS model
+FROM (SELECT i::DOUBLE AS x, (2 * i)::DOUBLE AS y FROM range(10) t(i));
+
+statement error
+SELECT duckboost_evaluate_agg(model, y, [x], MAP {'metric': 'brier_score'})
+FROM reg_models, (SELECT i::DOUBLE AS x, (2 * i)::DOUBLE AS y FROM range(10) t(i));
+----
+<REGEX>:.*requires a binary or multiclass model.*
+
+statement error
+SELECT duckboost_evaluate_agg(model, y, [x], MAP {'metric': 'roc_auc_ovr'})
+FROM reg_models, (SELECT i::DOUBLE AS x, (2 * i)::DOUBLE AS y FROM range(10) t(i));
+----
+<REGEX>:.*requires a binary or multiclass model.*
+
+# Single-class labels make ROC undefined.
+statement error
+SELECT duckboost_evaluate_agg(m.model, 1.0, [3.0], MAP {'metric': 'roc_auc_ovr'})
+FROM binary_models m;
+----
+<REGEX>:.*requires both positive and negative labels.*
+
+# Order independence for the new aggregate metrics.
+query I
+SELECT
+	duckboost_evaluate_agg(m.model, r.y, [r.x], MAP {'metric': 'roc_auc_ovr'} ORDER BY r.x)
+	= duckboost_evaluate_agg(m.model, r.y, [r.x], MAP {'metric': 'roc_auc_ovr'} ORDER BY r.x DESC)
+FROM binary_models m, binary_rows r;
+----
+true
+
+query I
+SELECT
+	duckboost_evaluate_agg(m.model, r.y, [r.x], MAP {'metric': 'brier_score'} ORDER BY r.x)
+	= duckboost_evaluate_agg(m.model, r.y, [r.x], MAP {'metric': 'brier_score'} ORDER BY r.x DESC)
+FROM binary_models m, binary_rows r;
+----
+true
