@@ -8,7 +8,7 @@ A build from a release tag reports that version, and any other commit reports it
 SELECT extension_version FROM duckdb_extensions() WHERE extension_name = 'duckboost';
 ```
 
-## 0.0.2 (unreleased)
+## 0.0.2 (2026-10-04)
 
 ### Fixed
 
@@ -21,7 +21,7 @@ SELECT extension_version FROM duckdb_extensions() WHERE extension_name = 'duckbo
 ### Documentation
 
 - The site is re-rendered from scratch on every publish. The docs workflow builds DuckDB with duckboost and runs every example, so the published output matches `main`. Committed `site/_freeze` output is gone.
-- New Changelog page on the site.
+- New Changelog page on the site, and versioned releases: git tags `vX.Y.Z` with GitHub pre-releases, starting from `v0.0.1`.
 - Clarified that the `.duckdb_extension` file is for a separate DuckDB 2.0 shell built from the same `duckdb` commit. This repo's shell already has duckboost linked in.
 
 ## 0.0.1 (2026-10-02)
