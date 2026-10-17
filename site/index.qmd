@@ -11,7 +11,7 @@ image-alt: "duckboost: gradient-boosted trees, trained and scored in DuckDB SQL"
 
 ::: {.callout-note}
 ## Status
-Experimental. Builds against DuckDB 2.0 alpha (`v2.0-cyanoptera`). PyPI / CRAN DuckDB 1.x cannot load this extension yet. Community `INSTALL` waits on the DuckDB 2.0 release.
+Experimental. Builds against the DuckDB 2.0 community alpha pin (`v2.0.0-alpha46057`). PyPI / CRAN DuckDB 1.x cannot load this extension yet. Community `INSTALL` waits on the descriptor PR merging into [`duckdb/community-extensions`](https://github.com/duckdb/community-extensions).
 :::
 
 ## Why train inside the database
@@ -70,6 +70,6 @@ Optional in-process XGBoost and LightGBM training is a compile-time flag (`DUCKB
 
 ## DuckDB 2.0
 
-This repository tracks the DuckDB 2.0 alpha. duckboost is **not** on the community extension store yet (submission waits for the official 2.0 release). Until then, try it by cloning this repo and building the bundled shell — PyPI / CRAN DuckDB 1.x cannot load the extension.
+This repository pins the same DuckDB commit community CI builds against (`b15358c` / `v2.0.0-alpha46057`). duckboost is **not** on the community extension store yet — the descriptor and submission checklist live in the repo (`docs/COMMUNITY_PUBLISH.md`). Until that PR merges, clone this repo and build the bundled shell — PyPI / CRAN DuckDB 1.x cannot load the extension. After DuckDB’s official `v2.0.0` release, community binaries are redeployed under that tag.
 
 [Getting started](getting-started.qmd) is the step-by-step path: clone → `make` → first penguins model.

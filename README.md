@@ -4,9 +4,9 @@ Experimental DuckDB extension for **SQL-native gradient boosting**: train depend
 
 **Documentation:** <https://javorraca.github.io/duckboost/> · [Getting started](https://javorraca.github.io/duckboost/getting-started.html) · [Native trainer vignette](https://javorraca.github.io/duckboost/vignettes/native-trainer.html) · [Changelog](CHANGELOG.md)
 
-Standalone [extension-template](https://github.com/duckdb/extension-template) repository targeting DuckDB 2.0. The `duckdb` submodule is pinned to `v2.0-cyanoptera`.
+Standalone [extension-template](https://github.com/duckdb/extension-template) repository targeting the DuckDB **2.0 community alpha** pin (`b15358c` / `v2.0.0-alpha46057`). PyPI / CRAN DuckDB 1.x cannot load it.
 
-> **Not on the community store yet.** duckboost will be submitted to [`duckdb/community-extensions`](https://github.com/duckdb/community-extensions) **after DuckDB 2.0 is released**. Until then, try it by cloning and building this repo (PyPI / CRAN DuckDB 1.x cannot load it).
+> **Not on the community store yet.** The descriptor is ready at [`docs/community_extensions_description.yml`](docs/community_extensions_description.yml). Submission steps: [`docs/COMMUNITY_PUBLISH.md`](docs/COMMUNITY_PUBLISH.md). Until it merges, clone and build this repo.
 
 ## Motivation
 
@@ -83,14 +83,17 @@ FROM models, penguins;
 
 (Same CSV over HTTPS on the docs site when you have `httpfs`.) More detail: [Getting started](https://javorraca.github.io/duckboost/getting-started.html).
 
-### After DuckDB 2.0
+### After community publication
 
 ```sql
 INSTALL duckboost FROM community;
 LOAD duckboost;
 ```
 
-That path is intentional held until 2.0 + community publication. See [`docs/COMMUNITY_PUBLISH.md`](docs/COMMUNITY_PUBLISH.md).
+That path works once the descriptor PR merges into
+[`duckdb/community-extensions`](https://github.com/duckdb/community-extensions)
+(builds against `v2.0.0-alpha46057`, then redeploys for `v2.0.0`). See
+[`docs/COMMUNITY_PUBLISH.md`](docs/COMMUNITY_PUBLISH.md).
 
 ## SQL API
 
@@ -286,7 +289,7 @@ Split nodes may use `"compare":"equal"` with `threshold`, or `"compare":"in"` wi
 
 ## Design notes
 
-- **Layout**: standalone community extension ([extension-template](https://github.com/duckdb/extension-template)) so optional vendor ML libraries stay out of core DuckDB builds. The `duckdb` submodule tracks DuckDB 2.0 (`v2.0-cyanoptera`).
+- **Layout**: standalone community extension ([extension-template](https://github.com/duckdb/extension-template)) so optional vendor ML libraries stay out of core DuckDB builds. The `duckdb` submodule is pinned to the community 2.0 alpha commit (`b15358c` / `v2.0.0-alpha46057`).
 - **SQL export** mirrors orbital's `separate_trees` idea so DuckDB can evaluate ensemble members as independent columns.
 - **Native histogram trainer** (`backend='native'`, alias `'reference'`) is a dependency-free GBDT: global quantile pre-binning, ordered target-statistic categorical partitions (`EQUAL`/`IN`), and depth-wise, loss-guided, or oblivious/symmetric growth. It supports squared-error, absolute-error, quantile, expectile, logistic, and softmax losses plus missing-value defaults, L1/L2/`gamma`, sample weights, and early stopping. Set `categorical_features` to comma-separated feature names or zero-based indices. It buffers rows and bin ids in memory, finds continuous splits from those histograms (depth-wise, loss-guided, and oblivious/symmetric), trains single-threaded, and is aimed at SQL-native workflows rather than replacing production XGBoost/LightGBM/CatBoost at every scale. Model JSON still serializes `"backend":"reference"` for compatibility. `duckboost_predict` caches a parsed model within each chunk when the JSON repeats; for large scoring jobs prefer `duckboost_to_sql`.
 - **Native LightGBM** maps absolute_error / quantile / lossguide / `categorical_features` / `subsample` (`bagging_freq=1`) / seed. Native XGBoost focuses on L2 depth-wise trees (plus seed / `max_bin` / sample weights / `SaveJsonConfig` intercept). Both native backends honor `early_stopping_rounds` with either `validation_fraction` (random hold-out) or a BOOLEAN `is_validation` column (LightGBM uses `early_stopping_round`, XGBoost evaluates each iter and truncates the dump). `class_weight` is folded into sample weights.
@@ -350,4 +353,4 @@ See [`PACKAGING.md`](PACKAGING.md) for the community-extension descriptor and na
 - [x] Docs rebrand: `backend='native'` alias, Pages refresh, native-trainer vignette + holdout benchmarks
 - [x] Medium-scale native vs LightGBM holdout benchmark (`scripts/native_benchmark/`)
 - [x] Community descriptor readiness (penguins `hello_world`, current `repo.ref`, no extra toolchain)
-- [ ] Submit [`docs/community_extensions_description.yml`](docs/community_extensions_description.yml) to `duckdb/community-extensions` after DuckDB 2.0 is released
+- [ ] Submit [`docs/community_extensions_description.yml`](docs/community_extensions_description.yml) to `duckdb/community-extensions` (2.0 alpha track is live; bump `repo.ref` first)

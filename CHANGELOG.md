@@ -1,12 +1,18 @@
 # Changelog
 
-duckboost uses [semantic versioning](https://semver.org/). Releases are git tags (`v0.0.1`, `v0.0.2`, ...) with matching [GitHub releases](https://github.com/JavOrraca/duckboost/releases). Until DuckDB 2.0 ships, every release is a pre-release against the DuckDB 2.0 alpha pinned in the `duckdb` submodule.
+duckboost uses [semantic versioning](https://semver.org/). Releases are git tags (`v0.0.1`, `v0.0.2`, ...) with matching [GitHub releases](https://github.com/JavOrraca/duckboost/releases). Until clients ship DuckDB 2.0.0, GitHub releases stay pre-releases against the community 2.0 alpha pin (`v2.0.0-alpha46057`).
 
 A build from a release tag reports that version, and any other commit reports its short commit hash:
 
 ```sql
 SELECT extension_version FROM duckdb_extensions() WHERE extension_name = 'duckboost';
 ```
+
+## 0.0.4 (unreleased)
+
+### Changed
+
+- Pinned the `duckdb` submodule to community-extensions’ DuckDB 2.0 alpha commit `b15358c` (`v2.0.0-alpha46057`) and aligned local CI / `Makefile` labeling with that pin. Community submission no longer waits on the official 2.0.0 tag; see `docs/COMMUNITY_PUBLISH.md`.
 
 ## 0.0.3 (2026-10-05)
 

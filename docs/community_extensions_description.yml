@@ -1,6 +1,10 @@
 # Submit this file to https://github.com/duckdb/community-extensions as:
 #   extensions/duckboost/description.yml
-# Targets DuckDB 2.0. Hold submission until DuckDB 2.0 is released.
+#
+# DuckDB community CI (as of 2026-10-15) builds `repo.ref` against the DuckDB 2.0
+# alpha pin (commit b15358c / tag v2.0.0-alpha46057). After the official 2.0.0
+# release they redeploy under `v2.0.0`. duckboost is 2.0-only: do not set
+# `variegata` (v1.5.6) or `ref_next` (prerelease leg is retired for new PRs).
 
 extension:
   name: duckboost
@@ -17,6 +21,7 @@ extension:
 repo:
   github: JavOrraca/duckboost
   # Bump to the commit you want community CI to build when submitting.
+  # Must be a raw commit SHA (not a movable tag).
   ref: 133cda15be9b387fd6fe6b899f944d864ea6fb17
 
 docs:
