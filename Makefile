@@ -18,3 +18,8 @@ export DUCKDB_COMMIT ?= $(DUCKDB_COMMUNITY_COMMIT)
 
 # Include the Makefile from extension-ci-tools
 include extension-ci-tools/makefiles/duckdb_extension.Makefile
+
+.PHONY: check-extension-metadata
+check-extension-metadata:
+	python3 $(PROJ_DIR)scripts/check_extension_metadata.py \
+		--expect-tag $(DUCKDB_COMMUNITY_TAG)

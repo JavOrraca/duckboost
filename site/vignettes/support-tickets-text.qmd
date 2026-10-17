@@ -23,7 +23,7 @@ Examples use a balanced English sample (400 tickets per queue) from Tobias Bueck
 ::: {.callout-warning}
 ## Docs execution on DuckDB 2.0 alpha
 
-This repository builds against DuckDB 2.0 alpha (`v2.0-cyanoptera`). Community `quackformers` is not published for that pin on the community CDN yet, so the **numbers on this page** use the **same MiniLM-L6-v2 model** offline via a cached Parquet sample. The SQL in the fences is the recipe for a DuckDB build where `INSTALL quackformers FROM community` works (current 1.x community builds). Replace the precomputed `emb` column with `embed(text)::FLOAT[384]` when you run it yourself.
+This repository builds against the DuckDB 2.0 community alpha pin (`v2.0.0-alpha46057`). Community `quackformers` is not published for that pin on the community CDN yet, so the **numbers on this page** use the **same MiniLM-L6-v2 model** offline via a cached Parquet sample. The SQL in the fences is the recipe for a DuckDB build where `INSTALL quackformers FROM community` works (current 1.x community builds). Replace the precomputed `emb` column with `embed(text)::FLOAT[384]` when you run it yourself.
 :::
 
 ## 1. Load tickets from a public URL

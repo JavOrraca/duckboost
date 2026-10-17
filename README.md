@@ -336,7 +336,7 @@ export LD_LIBRARY_PATH="$HOME/.local/lib/python3.12/site-packages/xgboost/lib:$H
 DUCKBOOST_NATIVE_TRAIN_TEST=1 make test T=test/sql/duckboost/native_train.test
 ```
 
-Before opening a PR that touches C++ sources, run `make format-check` (or `make format-fix`) so CI Format Check stays green.
+Before opening a PR that touches C++ sources, run `make format-check` (or `make format-fix`) so CI Format Check stays green. Before a community submission, also run `make check-extension-metadata` so the loadable binary footer carries `v2.0.0-alpha46057`.
 
 See [`PACKAGING.md`](PACKAGING.md) for the community-extension descriptor and native-trainer flags.
 

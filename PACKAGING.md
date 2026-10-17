@@ -34,6 +34,7 @@ Artifacts:
 - Shell: `./build/release/duckdb`
 - Tests: `make test`
 - Loadable extension: `build/release/extension/duckboost/duckboost.duckdb_extension`
+- Footer check: `make check-extension-metadata` (expects `v2.0.0-alpha46057` in the binary)
 
 The shell, `libduckdb` and `make test` have duckboost statically linked
 (`duckdb_extension_statically_link` in `extension_config.cmake`), so

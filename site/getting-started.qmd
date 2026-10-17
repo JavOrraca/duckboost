@@ -2,12 +2,12 @@
 title: "Getting started"
 ---
 
-A short path from zero to a first model. You do **not** need PyPI/CRAN DuckDB for this, and duckboost is **not** on the community extension store yet — that submission waits until DuckDB 2.0 is released. Until then, the supported way to try duckboost is to **clone this repository and build the bundled DuckDB 2.0 alpha shell**.
+A short path from zero to a first model. You do **not** need PyPI/CRAN DuckDB for this, and duckboost is **not** on the community extension store yet. Until the community descriptor PR merges, the supported way to try duckboost is to **clone this repository and build the bundled DuckDB 2.0 alpha shell** (`v2.0.0-alpha46057`).
 
 ::: {.callout-note}
 ## Why clone?
 
-`pip install duckdb` / CRAN DuckDB are still **1.x** and cannot load this extension. Community `INSTALL duckboost FROM community` is planned **after** DuckDB 2.0 ships. Cloning gives you a matching 2.0 alpha CLI with duckboost already linked.
+`pip install duckdb` / CRAN DuckDB are still **1.x** and cannot load this extension. Community `INSTALL duckboost FROM community` lands after the descriptor PR merges into [`duckdb/community-extensions`](https://github.com/duckdb/community-extensions). Cloning gives you a matching 2.0 alpha CLI with duckboost already linked.
 :::
 
 ## 1. Prerequisites
