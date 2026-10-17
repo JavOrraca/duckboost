@@ -20,9 +20,9 @@ extension:
 
 repo:
   github: JavOrraca/duckboost
-  # Bump to the commit you want community CI to build when submitting.
-  # Must be a raw commit SHA (not a movable tag).
-  ref: 133cda15be9b387fd6fe6b899f944d864ea6fb17
+  # Bump again to the exact commit you want community CI to build when submitting
+  # (never a movable tag). Currently points at the community-alpha prep merge on main.
+  ref: fe9c9def62d9b55860e904d5ad0ab8b40d927219
 
 docs:
   # Mirrors the Getting Started penguins first-model loop. Uses a public raw URL so the

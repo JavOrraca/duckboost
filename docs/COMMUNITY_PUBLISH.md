@@ -11,32 +11,56 @@ the DuckDB team redeploys under `v2.0.0`.
 > `community-extensions` `.github/workflows/build.yml` is `v2.0.0-alpha46057` —
 > that is what this repo matches.
 
+## Gate: wait for extension-ci-tools#439 (or equivalent)
+
+Community CI passes a **commit** as `duckdb_version` and `v2.0.0-alpha46057` as
+`duckdb_tag`. DuckDB 2.0 stamps the engine label from `DUCKDB_VERSION`, so until
+[extension-ci-tools#439](https://github.com/duckdb/extension-ci-tools/pull/439)
+merges into `v2.0-cyanoptera`, community builds label the footer with the commit
+and `LOAD` on an alpha host fails unless `allow_extensions_metadata_mismatch` is
+set.
+
+This was reproduced on duckboost’s own CI after the pin bump:
+
+```
+-- git hash b15358c371, version b15358c371daf10dad799a43b6167f6ccdce84d8,
+   extension folder b15358c371daf10dad799a43b6167f6ccdce84d8
+```
+
+Local `make` is fine (Makefile exports `DUCKDB_VERSION=v2.0.0-alpha46057`). Do
+**not** open the community-extensions PR until #439 is merged (or DuckDB confirms
+another fix), or the published binary will not `LOAD`.
+
 ## Checklist before opening the PR
 
 1. **Public GitHub repo** — `JavOrraca/duckboost` (already).
-2. **Build locally against the community DuckDB pin** (this repo’s `duckdb`
-   submodule and `Makefile` defaults):
+2. **Prefer cutting a release** that includes the community-alpha pin (CHANGELOG
+   `0.0.4` / tag `v0.0.4`) so `extension.version` matches what community ships.
+3. **Build locally against the community DuckDB pin**:
 
    ```bash
    git submodule update --init --recursive
    make
    make test
+   make check-extension-metadata
    ```
 
-   Confirm configure logs something like:
+   Configure should log
    `version v2.0.0-alpha46057, extension folder v2.0.0-alpha46057`.
-
-3. **Bump `repo.ref`** in
+   `make check-extension-metadata` asserts the same string is in the
+   `.duckdb_extension` footer.
+4. **Bump `repo.ref`** in
    [`docs/community_extensions_description.yml`](community_extensions_description.yml)
    to the **commit SHA** you want built (never a movable tag). Usually the merge
    commit of the release you are publishing.
-4. Keep `extension.version` in sync with [`CHANGELOG.md`](../CHANGELOG.md) /
+5. Keep `extension.version` in sync with [`CHANGELOG.md`](../CHANGELOG.md) /
    the git tag.
-5. Keep `docs.hello_world` aligned with
+6. Keep `docs.hello_world` aligned with
    [Getting Started](https://javorraca.github.io/duckboost/getting-started.html)
    (HTTPS CSV; no repo checkout required).
-6. Do **not** add `variegata` (v1.5.6 last-minute track) or `ref_next`
+7. Do **not** add `variegata` (v1.5.6 last-minute track) or `ref_next`
    (prerelease leg retired for new PRs). duckboost is 2.0-only.
+8. Confirm #439 (above) is on the community CI tools ref.
 
 ## Open the community-extensions PR
 
@@ -45,7 +69,9 @@ the DuckDB team redeploys under `v2.0.0`.
    `extensions/duckboost/description.yml` (**that file only**).
 3. Open a PR. Community CI builds and tests via
    `extension-ci-tools` `@v2.0-cyanoptera`.
-4. After merge + deploy, users can:
+4. In the PR checks, confirm configure logs
+   `version v2.0.0-alpha46057` (not the bare commit).
+5. After merge + deploy, users can:
 
 ```sql
 INSTALL duckboost FROM community;
@@ -54,23 +80,15 @@ LOAD duckboost;
 
 Docs: https://duckdb.org/community_extensions/documentation.html
 
-## `duckdb_version` vs `duckdb_tag` (important)
-
-Community CI passes:
+## `duckdb_version` vs `duckdb_tag`
 
 | Input | Example | Role |
 | --- | --- | --- |
 | `duckdb_version` | `b15358c…` (commit) | Git checkout of DuckDB |
 | `duckdb_tag` | `v2.0.0-alpha46057` | Deploy path + extension footer label |
 
-DuckDB 2.0 stamps the engine label from `DUCKDB_VERSION` and no longer derives it
-from git tags. Until
-[duckdb/extension-ci-tools#439](https://github.com/duckdb/extension-ci-tools/pull/439)
-merges into `v2.0-cyanoptera`, community builds can label the footer with the
-**commit** instead of the tag, and `LOAD` against an alpha host then fails unless
-`allow_extensions_metadata_mismatch` is set. This repo’s `Makefile` exports
-`DUCKDB_VERSION` / `OVERRIDE_GIT_DESCRIBE` so **local** builds get the correct
-footer today. Watch #439 for the community CI side.
+See [extension-ci-tools#439](https://github.com/duckdb/extension-ci-tools/pull/439)
+for why both inputs are required on DuckDB 2.0.
 
 ## After official DuckDB 2.0.0
 
