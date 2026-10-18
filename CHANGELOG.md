@@ -15,6 +15,7 @@ SELECT extension_version FROM duckdb_extensions() WHERE extension_name = 'duckbo
 - Pinned the `duckdb` submodule to community-extensions’ DuckDB 2.0 alpha commit `b15358c` (`v2.0.0-alpha46057`) and aligned local CI / `Makefile` labeling with that pin. Community submission no longer waits on the official 2.0.0 tag; see `docs/COMMUNITY_PUBLISH.md`.
 - Added `make check-extension-metadata` to assert the loadable extension footer carries `v2.0.0-alpha46057` before a community submission.
 - Refreshed Getting Started / ticket-NLP status copy so they no longer say submission waits on the DuckDB 2.0 release.
+- Getting Started’s closing section now points at community publication (not “after DuckDB 2.0 is released”).
 
 ## 0.0.3 (2026-10-05)
 

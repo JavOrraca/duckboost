@@ -168,16 +168,16 @@ LIMIT 5;
 """)
 ```
 
-## After DuckDB 2.0
+## After community publication
 
-Once DuckDB 2.0 is released and duckboost is published to the community repository, analysts will be able to skip the clone/build steps:
+Once duckboost is on the community extension store, analysts can skip the clone/build steps:
 
 ```sql
 INSTALL duckboost FROM community;
 LOAD duckboost;
 ```
 
-Until then, stay on the clone path above. The descriptor is already prepared in [`docs/community_extensions_description.yml`](https://github.com/JavOrraca/duckboost/blob/main/docs/community_extensions_description.yml); submission is intentionally held.
+That path is not live yet. The descriptor is ready in [`docs/community_extensions_description.yml`](https://github.com/JavOrraca/duckboost/blob/main/docs/community_extensions_description.yml); see [`docs/COMMUNITY_PUBLISH.md`](https://github.com/JavOrraca/duckboost/blob/main/docs/COMMUNITY_PUBLISH.md) for the submission checklist. Until the community PR merges, stay on the clone path above.
 
 ## Next steps
 
