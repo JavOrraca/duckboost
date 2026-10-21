@@ -1,6 +1,6 @@
 # Changelog
 
-duckboost uses [semantic versioning](https://semver.org/). Releases are git tags (`v0.0.1`, `v0.0.2`, ...) with matching [GitHub releases](https://github.com/JavOrraca/duckboost/releases). Until clients ship DuckDB 2.0.0, GitHub releases stay pre-releases against the community 2.0 alpha pin (`v2.0.0-alpha46057`).
+duckboost uses [semantic versioning](https://semver.org/). Releases are git tags (`v0.0.1`, `v0.0.2`, ...) with matching [GitHub releases](https://github.com/JavOrraca/duckboost/releases). Targets DuckDB **2.0.0 LTS** (“Cinnamon Teal”).
 
 A build from a release tag reports that version, and any other commit reports its short commit hash:
 
@@ -12,10 +12,10 @@ SELECT extension_version FROM duckdb_extensions() WHERE extension_name = 'duckbo
 
 ### Changed
 
-- Pinned the `duckdb` submodule to community-extensions’ DuckDB 2.0 alpha commit `b15358c` (`v2.0.0-alpha46057`) and aligned local CI / `Makefile` labeling with that pin. Community submission no longer waits on the official 2.0.0 tag; see `docs/COMMUNITY_PUBLISH.md`.
-- Added `make check-extension-metadata` to assert the loadable extension footer carries `v2.0.0-alpha46057` before a community submission.
-- Refreshed Getting Started / ticket-NLP status copy so they no longer say submission waits on the DuckDB 2.0 release.
-- Getting Started’s closing section now points at community publication (not “after DuckDB 2.0 is released”).
+- Pinned `duckdb` to the official `v2.0.0` release (`d54cbbe`) and `extension-ci-tools` to current `v2.0-cyanoptera` (`78bd1e4`). Local CI / `Makefile` label builds as `v2.0.0` to match community-extensions.
+- Kept the `duckdb` and `extension-ci-tools` git submodules (required by the extension-template layout for local `make`); documented why in `PACKAGING.md`.
+- Added `make check-extension-metadata` to assert the loadable extension footer carries the expected DuckDB version before a community submission.
+- Updated README, site, and publish docs for DuckDB 2.0.0 GA; community submission checklist is in `docs/COMMUNITY_PUBLISH.md`.
 
 ## 0.0.3 (2026-10-05)
 

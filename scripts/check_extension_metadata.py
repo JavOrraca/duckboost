@@ -2,8 +2,8 @@
 """Assert a built .duckdb_extension footer carries the expected DuckDB version.
 
 DuckDB appends fixed-width metadata fields near the end of the binary. Local
-`make` labels with DUCKDB_COMMUNITY_TAG; community CI needs extension-ci-tools#439
-to do the same when duckdb_version is a commit SHA.
+`make` labels with DUCKDB_COMMUNITY_TAG (v2.0.0). Community CI passes
+duckdb_version=v2.0.0 with duckdb_commit set to the release SHA.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from pathlib import Path
 
 
 DEFAULT_EXTENSION = Path("build/release/extension/duckboost/duckboost.duckdb_extension")
-DEFAULT_TAG = "v2.0.0-alpha46057"
+DEFAULT_TAG = "v2.0.0"
 
 
 def printable_tail(data: bytes, nbytes: int = 8192) -> list[str]:
@@ -56,7 +56,7 @@ def main() -> int:
             print(f"  {item}", file=sys.stderr)
         print(
             "hint: local builds need DUCKDB_VERSION / OVERRIDE_GIT_DESCRIBE set "
-            "(see Makefile). Community CI needs extension-ci-tools#439.",
+            "(see Makefile).",
             file=sys.stderr,
         )
         return 1

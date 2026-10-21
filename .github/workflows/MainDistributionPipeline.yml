@@ -1,6 +1,6 @@
 #
 # Calls the main distribution pipeline from DuckDB to build, test and (optionally) release the extension.
-# Pins match duckdb/community-extensions build.yml (DuckDB 2.0 alpha track).
+# Pins match duckdb/community-extensions build.yml (DuckDB 2.0.0 LTS).
 #
 name: Main Extension Distribution Pipeline
 on:
@@ -29,12 +29,10 @@ jobs:
     name: Build extension binaries
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v2.0-cyanoptera
     with:
-      # Commit to check out (community-extensions DUCKDB_LATEST_STABLE / duckdb_version).
-      duckdb_version: b15358c371daf10dad799a43b6167f6ccdce84d8
-      # Version directory / footer label community deploys under (duckdb_tag).
-      # Until duckdb/extension-ci-tools#439 lands on v2.0-cyanoptera, CI may still
-      # stamp the commit into the footer; local `make` sets DUCKDB_VERSION correctly.
-      duckdb_tag: v2.0.0-alpha46057
+      # Version label + deploy path (community DUCKDB_LATEST_STABLE).
+      duckdb_version: v2.0.0
+      # Exact checkout SHA for the v2.0.0 release tag.
+      duckdb_commit: d54cbbe3df17e8e5ce68312f483b4155836112aa
       ci_tools_version: v2.0-cyanoptera
       extension_name: duckboost
 
@@ -42,7 +40,7 @@ jobs:
     name: Code Quality Check
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_code_quality.yml@v2.0-cyanoptera
     with:
-      duckdb_version: b15358c371daf10dad799a43b6167f6ccdce84d8
+      duckdb_version: v2.0.0
       ci_tools_version: v2.0-cyanoptera
       extension_name: duckboost
       format_checks: 'format'

@@ -1,10 +1,9 @@
 # Submit this file to https://github.com/duckdb/community-extensions as:
 #   extensions/duckboost/description.yml
 #
-# DuckDB community CI (as of 2026-10-15) builds `repo.ref` against the DuckDB 2.0
-# alpha pin (commit b15358c / tag v2.0.0-alpha46057). After the official 2.0.0
-# release they redeploy under `v2.0.0`. duckboost is 2.0-only: do not set
-# `variegata` (v1.5.6) or `ref_next` (prerelease leg is retired for new PRs).
+# DuckDB community CI builds `repo.ref` against DuckDB 2.0.0 LTS
+# (duckdb_version=v2.0.0, duckdb_commit=d54cbbe…). duckboost is 2.0-only:
+# do not set `variegata` or `ref_next`.
 
 extension:
   name: duckboost
@@ -20,9 +19,9 @@ extension:
 
 repo:
   github: JavOrraca/duckboost
-  # Bump again to the exact commit you want community CI to build when submitting
-  # (never a movable tag). Currently points at the community-alpha prep merge on main.
-  ref: fe9c9def62d9b55860e904d5ad0ab8b40d927219
+  # Bump to the exact commit SHA to publish (never a movable tag). Prefer the
+  # v0.0.4 release commit once you cut that tag.
+  ref: 5cbafd0858d491fb54d242c27984f1b93235d129
 
 docs:
   # Mirrors the Getting Started penguins first-model loop. Uses a public raw URL so the
