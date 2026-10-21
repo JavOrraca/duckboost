@@ -354,4 +354,5 @@ See [`PACKAGING.md`](PACKAGING.md) for the community-extension descriptor and na
 - [x] Docs rebrand: `backend='native'` alias, Pages refresh, native-trainer vignette + holdout benchmarks
 - [x] Medium-scale native vs LightGBM holdout benchmark (`scripts/native_benchmark/`)
 - [x] Community descriptor readiness (penguins `hello_world`, current `repo.ref`, no extra toolchain)
-- [ ] Cut `0.0.4`, bump `repo.ref`, submit [`docs/community_extensions_description.yml`](docs/community_extensions_description.yml) to `duckdb/community-extensions` for DuckDB 2.0.0
+- [x] Cut `0.0.4` against DuckDB 2.0.0 LTS
+- [ ] Bump `repo.ref` to the `v0.0.4` commit and submit [`docs/community_extensions_description.yml`](docs/community_extensions_description.yml) to `duckdb/community-extensions`
