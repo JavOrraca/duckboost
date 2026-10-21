@@ -8,7 +8,7 @@
 extension:
   name: duckboost
   description: SQL-native histogram GBDT in DuckDB with vendor dump import and plain-SQL export
-  version: 0.0.3
+  version: 0.0.4
   language: C++
   build: cmake
   license: MIT
@@ -19,8 +19,8 @@ extension:
 
 repo:
   github: JavOrraca/duckboost
-  # Bump to the exact commit SHA to publish (never a movable tag). Prefer the
-  # v0.0.4 release commit once you cut that tag.
+  # Set to the v0.0.4 release commit SHA after that tag lands on main
+  # (never a movable tag). Updated in the post-tag follow-up commit.
   ref: 5cbafd0858d491fb54d242c27984f1b93235d129
 
 docs:
