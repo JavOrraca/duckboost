@@ -11,7 +11,7 @@ image-alt: "duckboost: gradient-boosted trees, trained and scored in DuckDB SQL"
 
 ::: {.callout-note}
 ## Status
-Experimental. Builds against the DuckDB 2.0 community alpha pin (`v2.0.0-alpha46057`). PyPI / CRAN DuckDB 1.x cannot load this extension yet. Community `INSTALL` waits on the descriptor PR merging into [`duckdb/community-extensions`](https://github.com/duckdb/community-extensions).
+Experimental. Builds against **DuckDB 2.0.0 LTS** (“Cinnamon Teal”). DuckDB 1.x cannot load this extension. Community `INSTALL duckboost FROM community` waits on the descriptor PR merging into [`duckdb/community-extensions`](https://github.com/duckdb/community-extensions).
 :::
 
 ## Why train inside the database
@@ -68,8 +68,8 @@ Read penguins with `nullstr = 'NA'`. [Getting started](getting-started.qmd) fits
 
 Optional in-process XGBoost and LightGBM training is a compile-time flag (`DUCKBOOST_WITH_XGBOOST`, `DUCKBOOST_WITH_LIGHTGBM`). CatBoost has no public training C API, so it is import-only. A default `make` build ships the native trainer and dump import, not the vendor libraries.
 
-## DuckDB 2.0
+## DuckDB 2.0.0
 
-This repository pins the same DuckDB commit community CI builds against (`b15358c` / `v2.0.0-alpha46057`). duckboost is **not** on the community extension store yet — the descriptor and submission checklist live in the repo (`docs/COMMUNITY_PUBLISH.md`). Until that PR merges, clone this repo and build the bundled shell — PyPI / CRAN DuckDB 1.x cannot load the extension. After DuckDB’s official `v2.0.0` release, community binaries are redeployed under that tag.
+[DuckDB 2.0.0 LTS](https://duckdb.org/2026/10/21/announcing-duckdb-200) is out. This repository pins the same release community CI builds against (`v2.0.0` / `d54cbbe`). duckboost is **not** on the community extension store yet — open the descriptor PR when ready (`docs/COMMUNITY_PUBLISH.md`). Until then, clone this repo and build the bundled shell. DuckDB 1.x clients cannot load the extension.
 
 [Getting started](getting-started.qmd) is the step-by-step path: clone → `make` → first penguins model.
