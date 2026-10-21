@@ -8,7 +8,7 @@ A build from a release tag reports that version, and any other commit reports it
 SELECT extension_version FROM duckdb_extensions() WHERE extension_name = 'duckboost';
 ```
 
-## 0.0.4 (unreleased)
+## 0.0.4 (2026-10-21)
 
 ### Changed
 
