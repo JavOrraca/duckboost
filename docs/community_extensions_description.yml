@@ -1,5 +1,8 @@
-# Submit this file to https://github.com/duckdb/community-extensions as:
+# Source of truth for https://github.com/duckdb/community-extensions
 #   extensions/duckboost/description.yml
+# Also ship docs/community_extensions_function_descriptions.csv as
+#   extensions/duckboost/docs/function_descriptions.csv
+# so the community “Added Functions” table is populated.
 #
 # DuckDB community CI builds `repo.ref` against DuckDB 2.0.0 LTS
 # (duckdb_version=v2.0.0, duckdb_commit=d54cbbe…). duckboost is 2.0-only:

@@ -2,56 +2,26 @@
 title: "Getting started"
 ---
 
-A short path from zero to a first model. duckboost is **not** on the community extension store yet. Until the descriptor PR merges, the supported way to try it is to **clone this repository and build the bundled DuckDB 2.0.0 shell**.
+A short path from zero to a first model on **DuckDB 2.0.0+**. The usual path is a community install; clone and build only if you are developing duckboost or need a custom binary.
 
 ::: {.callout-note}
-## Why clone?
+## DuckDB 1.x
 
-DuckDB 1.x cannot load this extension. Community `INSTALL duckboost FROM community` lands after the descriptor PR merges into [`duckdb/community-extensions`](https://github.com/duckdb/community-extensions). Cloning gives you a matching DuckDB 2.0.0 CLI with duckboost already linked. Once published, DuckDB 2.0.0+ clients can `INSTALL` from community instead.
+DuckDB 1.x cannot load this extension. Use a DuckDB **2.0.0** (or newer) CLI, Python, R, or other client. Listing: [duckboost on Community Extensions](https://duckdb.org/community_extensions/extensions/duckboost).
 :::
 
-## 1. Prerequisites
+## 1. Install and load
 
-You need a normal C++ build environment:
-
-- `git`
-- A C++17 compiler (`clang` or `gcc`)
-- `cmake` and `make` (optional: `ninja`)
-
-On macOS, Xcode Command Line Tools plus Homebrew `cmake` is enough. On Ubuntu/Debian, `build-essential` and `cmake` cover it.
-
-## 2. Clone and build
-
-```bash
-git clone --recurse-submodules https://github.com/JavOrraca/duckboost.git
-cd duckboost
-make
-```
-
-If you already cloned without submodules:
-
-```bash
-git submodule update --init --recursive
-make
-```
-
-`make` produces:
-
-- `./build/release/duckdb` — CLI with duckboost **statically linked**
-- `./build/release/extension/duckboost/duckboost.duckdb_extension` — loadable extension file
-
-Optional: `GEN=ninja make` if Ninja is installed. `make test` runs the SQL tests under `test/sql/` (not required just to try the examples).
-
-## 3. Open the shell
-
-```bash
-./build/release/duckdb -unsigned
-```
-
-In that shell, duckboost is already registered, so this works:
+In any DuckDB 2.0.0+ session:
 
 ```sql
+INSTALL duckboost FROM community;
 LOAD duckboost;
+```
+
+Confirm the backends this binary can train or import:
+
+```sql
 SELECT backend, training_supported, notes
 FROM duckboost_backends()
 ORDER BY backend;
@@ -70,25 +40,13 @@ ORDER BY backend;
 """)
 ```
 
-`training_supported` is true only for backends this binary can train in-process. A default `make` enables the native histogram trainer (pass `backend = 'native'` in train options; model JSON may still say `"reference"`). XGBoost, LightGBM, and CatBoost stay import-only unless you linked the vendor libraries — see the README build notes.
+`training_supported` is true only for backends this binary can train in-process. Community builds enable the native histogram trainer (pass `backend = 'native'` in train options; model JSON may still say `"reference"`). XGBoost, LightGBM, and CatBoost stay import-only unless you linked the vendor libraries — see the README build notes.
 
-To load the `.duckdb_extension` into a **different** DuckDB 2.0.0 shell (not this repo’s binary), build that shell from the same `duckdb` submodule commit:
-
-```bash
-/path/to/other/duckdb -unsigned
-```
-
-```sql
-LOAD '/path/to/duckboost/build/release/extension/duckboost/duckboost.duckdb_extension';
-```
-
-## 4. First model
+## 2. First model
 
 Train a small body-mass regression on the [Palmer penguins](https://allisonhorst.github.io/palmerpenguins/) data. Named features, an explicit target, and training RMSE show the usual loop: table → feature list → `duckboost_train` → metric.
 
-From a checkout, the most reliable load is the thin CSV under `data/` (no network). On released DuckDB with `httpfs`, the same file is also on GitHub raw HTTPS — the SQL below uses that public URL so you can copy it into any networked session. Swap in `read_csv('data/penguins.csv', nullstr = 'NA')` if you are offline in this repo’s shell.
-
-Each block on this site starts a new in-memory database.
+The SQL below loads the public CSV over HTTPS (`httpfs` autoloads on released DuckDB). Each block on this site starts a new in-memory database.
 
 ```{python}
 #| echo: false
@@ -168,16 +126,57 @@ LIMIT 5;
 """)
 ```
 
-## After community publication
+## Build from source (optional)
 
-Once duckboost is on the community extension store, analysts can skip the clone/build steps:
+Use this path when contributing to duckboost, debugging, or building with optional vendor trainers.
+
+### Prerequisites
+
+- `git`
+- A C++17 compiler (`clang` or `gcc`)
+- `cmake` and `make` (optional: `ninja`)
+
+On macOS, Xcode Command Line Tools plus Homebrew `cmake` is enough. On Ubuntu/Debian, `build-essential` and `cmake` cover it.
+
+### Clone and build
+
+```bash
+git clone --recurse-submodules https://github.com/JavOrraca/duckboost.git
+cd duckboost
+make
+```
+
+If you already cloned without submodules:
+
+```bash
+git submodule update --init --recursive
+make
+```
+
+`make` produces:
+
+- `./build/release/duckdb` — CLI with duckboost **statically linked**
+- `./build/release/extension/duckboost/duckboost.duckdb_extension` — loadable extension file
+
+Optional: `GEN=ninja make` if Ninja is installed. `make test` runs the SQL tests under `test/sql/`.
+
+### Open the shell
+
+```bash
+./build/release/duckdb -unsigned
+```
 
 ```sql
-INSTALL duckboost FROM community;
 LOAD duckboost;
 ```
 
-That path is not live yet. The descriptor is ready in [`docs/community_extensions_description.yml`](https://github.com/JavOrraca/duckboost/blob/main/docs/community_extensions_description.yml); see [`docs/COMMUNITY_PUBLISH.md`](https://github.com/JavOrraca/duckboost/blob/main/docs/COMMUNITY_PUBLISH.md) for the submission checklist. Until the community PR merges, stay on the clone path above.
+From a checkout, you can also load penguins offline with `read_csv('data/penguins.csv', nullstr = 'NA')` instead of the HTTPS URL.
+
+To load the `.duckdb_extension` into a **different** DuckDB 2.0.0 shell (not this repo’s binary), build that shell from the same `duckdb` submodule commit:
+
+```sql
+LOAD '/path/to/duckboost/build/release/extension/duckboost/duckboost.duckdb_extension';
+```
 
 ## Next steps
 

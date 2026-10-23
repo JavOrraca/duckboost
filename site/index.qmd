@@ -11,7 +11,7 @@ image-alt: "duckboost: gradient-boosted trees, trained and scored in DuckDB SQL"
 
 ::: {.callout-note}
 ## Status
-Experimental. Builds against **DuckDB 2.0.0 LTS** (“Cinnamon Teal”). DuckDB 1.x cannot load this extension. Community `INSTALL duckboost FROM community` waits on the descriptor PR merging into [`duckdb/community-extensions`](https://github.com/duckdb/community-extensions).
+Experimental. Builds against **DuckDB 2.0.0 LTS** (“Cinnamon Teal”). DuckDB 1.x cannot load this extension. Install from the [community store](https://duckdb.org/community_extensions/extensions/duckboost): `INSTALL duckboost FROM community;` then `LOAD duckboost;`.
 :::
 
 ## Why train inside the database
@@ -70,6 +70,6 @@ Optional in-process XGBoost and LightGBM training is a compile-time flag (`DUCKB
 
 ## DuckDB 2.0.0
 
-[DuckDB 2.0.0 LTS](https://duckdb.org/2026/10/21/announcing-duckdb-200) is out. This repository pins the same release community CI builds against (`v2.0.0` / `d54cbbe`). duckboost is **not** on the community extension store yet — open the descriptor PR when ready (`docs/COMMUNITY_PUBLISH.md`). Until then, clone this repo and build the bundled shell. DuckDB 1.x clients cannot load the extension.
+[DuckDB 2.0.0 LTS](https://duckdb.org/2026/10/21/announcing-duckdb-200) is out. This repository pins the same release community CI builds against (`v2.0.0` / `d54cbbe`). DuckDB 1.x clients cannot load the extension.
 
-[Getting started](getting-started.qmd) is the step-by-step path: clone → `make` → first penguins model.
+[Getting started](getting-started.qmd) is the step-by-step path: `INSTALL duckboost FROM community` → first penguins model (clone/`make` is optional for contributors).

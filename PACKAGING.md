@@ -59,22 +59,29 @@ duckboost linked:
 LOAD '<path>/build/release/extension/duckboost/duckboost.duckdb_extension';
 ```
 
-## Community extensions submission
+## Community extensions
 
-Descriptor: [`docs/community_extensions_description.yml`](docs/community_extensions_description.yml).
-Full checklist: [`docs/COMMUNITY_PUBLISH.md`](docs/COMMUNITY_PUBLISH.md).
-
-Summary:
-
-1. Cut a release and set `repo.ref` to that commit SHA.
-2. Copy that YAML into a fork as `extensions/duckboost/description.yml`.
-3. Open a PR against [duckdb/community-extensions](https://github.com/duckdb/community-extensions).
-4. After merge and CI, users install with:
+duckboost is published:
+https://duckdb.org/community_extensions/extensions/duckboost
 
 ```sql
 INSTALL duckboost FROM community;
 LOAD duckboost;
 ```
+
+Descriptor source of truth:
+[`docs/community_extensions_description.yml`](docs/community_extensions_description.yml).
+Function docs for the community “Added Functions” table:
+[`docs/community_extensions_function_descriptions.csv`](docs/community_extensions_function_descriptions.csv).
+Republish checklist: [`docs/COMMUNITY_PUBLISH.md`](docs/COMMUNITY_PUBLISH.md).
+
+To bump a release:
+
+1. Cut a duckboost release and set `repo.ref` to that commit SHA.
+2. Copy the YAML to `extensions/duckboost/description.yml` on a
+   [community-extensions](https://github.com/duckdb/community-extensions) fork.
+3. Copy the CSV to `extensions/duckboost/docs/function_descriptions.csv`.
+4. Open a PR; after merge and deploy, `INSTALL` picks up the new build.
 
 Docs: https://duckdb.org/community_extensions/documentation.html
 
