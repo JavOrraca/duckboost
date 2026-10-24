@@ -1,8 +1,10 @@
 # Publishing duckboost as a community extension
 
-duckboost targets DuckDB **2.0.0 LTS** (“Cinnamon Teal”) only. As of the
-2026-10-21 release, [`duckdb/community-extensions`](https://github.com/duckdb/community-extensions)
-builds new PRs from `repo.ref` against:
+duckboost targets DuckDB **2.0.0 LTS** (“Cinnamon Teal”) only. It is already listed at
+https://duckdb.org/community_extensions/extensions/duckboost (merged via
+[duckdb/community-extensions#3236](https://github.com/duckdb/community-extensions/pull/3236)).
+
+Community CI builds `repo.ref` against:
 
 | Input | Value |
 | --- | --- |
@@ -12,11 +14,18 @@ builds new PRs from `repo.ref` against:
 
 Announcement: https://duckdb.org/2026/10/21/announcing-duckdb-200
 
-## Checklist before opening the PR
+Users install with:
+
+```sql
+INSTALL duckboost FROM community;
+LOAD duckboost;
+```
+
+## Checklist before bumping / republishing
 
 1. **Public GitHub repo** — `JavOrraca/duckboost` (already).
-2. **Cut a duckboost release** that builds cleanly on `v2.0.0` (recommended:
-   `0.0.4` / tag `v0.0.4`) so `extension.version` matches what community ships.
+2. **Cut a duckboost release** that builds cleanly on `v2.0.0` so
+   `extension.version` matches what community ships.
 3. **Build and test locally** against the pinned `duckdb` submodule:
 
    ```bash
@@ -38,24 +47,29 @@ Announcement: https://duckdb.org/2026/10/21/announcing-duckdb-200
 6. Keep `docs.hello_world` aligned with
    [Getting Started](https://javorraca.github.io/duckboost/getting-started.html)
    (HTTPS CSV; no repo checkout required).
-7. Do **not** add `variegata` (v1.5.x track) or `ref_next`. duckboost is 2.0-only.
-8. Note: DuckDB no longer builds community extensions for `osx_amd64`
+7. Keep
+   [`docs/community_extensions_function_descriptions.csv`](community_extensions_function_descriptions.csv)
+   in sync with the public SQL surface. Copy it to
+   `extensions/duckboost/docs/function_descriptions.csv` in the community-
+   extensions PR so the [Added Functions](https://duckdb.org/community_extensions/extensions/duckboost)
+   table is not all `NULL` (community docs merge this CSV over
+   `duckdb_functions()`).
+8. Do **not** add `variegata` (v1.5.x track) or `ref_next`. duckboost is 2.0-only.
+9. Note: DuckDB no longer builds community extensions for `osx_amd64`
    (Intel Mac). Users on that platform need to build from source or use arm64.
 
-## Open the community-extensions PR
+## Open / update the community-extensions PR
 
-1. Fork [duckdb/community-extensions](https://github.com/duckdb/community-extensions).
-2. Copy `docs/community_extensions_description.yml` to
-   `extensions/duckboost/description.yml` (**that file only** — no other files).
-3. Open a PR. Community CI builds and tests via
+1. Work in your fork of [duckdb/community-extensions](https://github.com/duckdb/community-extensions)
+   (for example [`JavOrraca/community-extensions`](https://github.com/JavOrraca/community-extensions)).
+2. Copy `docs/community_extensions_description.yml` →
+   `extensions/duckboost/description.yml`.
+3. Copy `docs/community_extensions_function_descriptions.csv` →
+   `extensions/duckboost/docs/function_descriptions.csv` (create the `docs/`
+   directory if needed). This is the same pattern as the `h3` extension.
+4. Open a PR. Community CI builds and tests via
    `extension-ci-tools` `@v2.0-cyanoptera`.
-4. In the PR checks, confirm configure logs `version v2.0.0`.
-5. After merge + deploy, users can:
-
-```sql
-INSTALL duckboost FROM community;
-LOAD duckboost;
-```
+5. In the PR checks, confirm configure logs `version v2.0.0`.
 
 Official docs: https://duckdb.org/community_extensions/documentation.html
 
@@ -68,6 +82,9 @@ local `make` / `make test` and the docs site build need them. Community CI does
 `duckdb_version` / `duckdb_commit` and builds whatever commit `repo.ref` points
 at in *this* repository. Keep the submodules in sync with the community pin so
 local builds match what community ships.
+
+As of 2026-10-23 there is **no** DuckDB `v2.0.0.1` tag; latest release remains
+`v2.0.0` at `d54cbbe`, which this repo already pins.
 
 ## After clients catch up
 

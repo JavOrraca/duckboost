@@ -8,6 +8,13 @@ A build from a release tag reports that version, and any other commit reports it
 SELECT extension_version FROM duckdb_extensions() WHERE extension_name = 'duckboost';
 ```
 
+## Unreleased
+
+### Documentation
+
+- Getting Started / README now lead with `INSTALL duckboost FROM community` (live after [community-extensions#3236](https://github.com/duckdb/community-extensions/pull/3236)).
+- Added `docs/community_extensions_function_descriptions.csv` so the community “Added Functions” table can be populated.
+
 ## 0.0.4 (2026-10-21)
 
 ### Changed

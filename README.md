@@ -4,9 +4,7 @@ Experimental DuckDB extension for **SQL-native gradient boosting**: train depend
 
 **Documentation:** <https://javorraca.github.io/duckboost/> · [Getting started](https://javorraca.github.io/duckboost/getting-started.html) · [Native trainer vignette](https://javorraca.github.io/duckboost/vignettes/native-trainer.html) · [Changelog](CHANGELOG.md)
 
-Standalone [extension-template](https://github.com/duckdb/extension-template) repository targeting **DuckDB 2.0.0 LTS** (“Cinnamon Teal”). DuckDB 1.x clients cannot load it.
-
-> **Not on the community store yet.** DuckDB 2.0.0 is released; duckboost still needs a PR to [`duckdb/community-extensions`](https://github.com/duckdb/community-extensions). Descriptor + steps: [`docs/community_extensions_description.yml`](docs/community_extensions_description.yml), [`docs/COMMUNITY_PUBLISH.md`](docs/COMMUNITY_PUBLISH.md). Until that merges, clone and build this repo (or wait for `INSTALL duckboost FROM community`).
+Standalone [extension-template](https://github.com/duckdb/extension-template) repository targeting **DuckDB 2.0.0 LTS** (“Cinnamon Teal”). DuckDB 1.x clients cannot load it. Listed on [Community Extensions](https://duckdb.org/community_extensions/extensions/duckboost).
 
 ## Motivation
 
@@ -19,45 +17,24 @@ Standalone [extension-template](https://github.com/duckdb/extension-template) re
 
 ## Try it
 
-Four steps for analysts and data scientists. You need `git`, a C++17 compiler, `cmake`, and `make` (optional: `ninja`).
-
-### 1. Clone
-
-```bash
-git clone --recurse-submodules https://github.com/JavOrraca/duckboost.git
-cd duckboost
-```
-
-### 2. Build
-
-```bash
-make
-# or: GEN=ninja make
-```
-
-This builds `./build/release/duckdb` (CLI with duckboost linked in) and the loadable `.duckdb_extension` under `build/release/extension/duckboost/`.
-
-### 3. Open the shell
-
-```bash
-./build/release/duckdb -unsigned
-```
+On DuckDB 2.0.0+:
 
 ```sql
+INSTALL duckboost FROM community;
 LOAD duckboost;
-SELECT * FROM duckboost_backends();
 ```
 
-### 4. Train a first model
-
-From the checkout (offline-friendly):
+Then train a first model (HTTPS CSV; `httpfs` autoloads):
 
 ```sql
 CREATE TABLE penguins AS
 SELECT
 	body_mass_g::DOUBLE AS body_mass_g,
 	[bill_length_mm, bill_depth_mm, flipper_length_mm, (sex = 'male')::DOUBLE] AS features
-FROM read_csv('data/penguins.csv', nullstr = 'NA')
+FROM read_csv(
+	'https://raw.githubusercontent.com/allisonhorst/palmerpenguins/master/inst/extdata/penguins.csv',
+	nullstr = 'NA'
+)
 WHERE body_mass_g IS NOT NULL
 	AND bill_length_mm IS NOT NULL
 	AND sex IS NOT NULL;
@@ -81,20 +58,25 @@ SELECT round(duckboost_evaluate_agg(
 FROM models, penguins;
 ```
 
-(Same CSV over HTTPS on the docs site when you have `httpfs`.) More detail: [Getting started](https://javorraca.github.io/duckboost/getting-started.html).
+More detail: [Getting started](https://javorraca.github.io/duckboost/getting-started.html).
 
-### After community publication
+### Build from source (optional)
 
-On DuckDB 2.0.0+:
+For contributors or custom builds you need `git`, a C++17 compiler, `cmake`, and `make` (optional: `ninja`):
 
-```sql
-INSTALL duckboost FROM community;
-LOAD duckboost;
+```bash
+git clone --recurse-submodules https://github.com/JavOrraca/duckboost.git
+cd duckboost
+make
+./build/release/duckdb -unsigned
 ```
 
-That path works once the descriptor PR merges into
-[`duckdb/community-extensions`](https://github.com/duckdb/community-extensions)
-(builds against `v2.0.0`). See [`docs/COMMUNITY_PUBLISH.md`](docs/COMMUNITY_PUBLISH.md).
+```sql
+LOAD duckboost;
+SELECT * FROM duckboost_backends();
+```
+
+Offline CSV: `read_csv('data/penguins.csv', nullstr = 'NA')`. Descriptor / republish notes: [`docs/COMMUNITY_PUBLISH.md`](docs/COMMUNITY_PUBLISH.md).
 
 ## SQL API
 
