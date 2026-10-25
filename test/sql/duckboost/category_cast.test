@@ -82,7 +82,7 @@ SET VARIABLE lgb_sql = (
 );
 
 query I
-SELECT getvariable('lgb_sql') ILIKE '%trunc("f0") IN (1,3)%';
+SELECT getvariable('lgb_sql') ILIKE '%trunc("f0") IN (1e0,3e0)%';
 ----
 true
 
@@ -108,7 +108,7 @@ SET VARIABLE xgb_sql = (
 );
 
 query I
-SELECT getvariable('xgb_sql') ILIKE '%f0" >= 0 AND trunc("f0") IN (1,3)%';
+SELECT getvariable('xgb_sql') ILIKE '%f0" >= 0 AND trunc("f0") IN (1e0,3e0)%';
 ----
 true
 

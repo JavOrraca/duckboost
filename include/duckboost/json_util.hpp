@@ -54,6 +54,19 @@ inline string FormatDouble(double value) {
 	return string(buf);
 }
 
+// DuckDB parses decimal literals without an exponent as DECIMAL. Large
+// ensembles sum hundreds of leaf / learning-rate literals and can overflow
+// DECIMAL(38, scale). Append e0 so DuckDB binds them as DOUBLE — the same
+// arithmetic duckboost_predict uses.
+inline string FormatDoubleSQL(double value) {
+	auto s = FormatDouble(value);
+	if (s.find('e') == string::npos && s.find('E') == string::npos &&
+	    s.find_first_of("0123456789") != string::npos) {
+		s += "e0";
+	}
+	return s;
+}
+
 struct JsonParser {
 	explicit JsonParser(const string &input_p) : input(input_p), pos(0) {
 	}

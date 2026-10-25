@@ -40,7 +40,7 @@ string CategoryMembershipSQL(const TreeNode &node, const string &feature) {
 	}
 	string membership;
 	if (node.compare == SplitCompare::EQUAL) {
-		membership = membership_value + " = " + FormatDouble(node.threshold);
+		membership = membership_value + " = " + FormatDoubleSQL(node.threshold);
 	} else if (node.categories.empty()) {
 		membership = "false";
 	} else {
@@ -49,7 +49,7 @@ string CategoryMembershipSQL(const TreeNode &node, const string &feature) {
 			if (i > 0) {
 				categories << ',';
 			}
-			categories << FormatDouble(node.categories[i]);
+			categories << FormatDoubleSQL(node.categories[i]);
 		}
 		membership = membership_value + " IN (" + categories.str() + ")";
 	}
@@ -92,7 +92,7 @@ string TreeToSQL(const BoostTree &tree, const vector<string> &feature_columns, i
 	}
 	auto &node = tree.nodes[node_idx];
 	if (node.is_leaf) {
-		return FormatDouble(node.value);
+		return FormatDoubleSQL(node.value);
 	}
 	if (node.feature >= feature_columns.size()) {
 		throw InvalidInputException("duckboost: feature index out of range in SQL export");
@@ -116,7 +116,7 @@ string TreeToSQL(const BoostTree &tree, const vector<string> &feature_columns, i
 		missing_branch = 0.0 < node.threshold ? left : right;
 	}
 	return "CASE WHEN " + missing_test + " THEN " + missing_branch + " WHEN " + feature + " < " +
-	       FormatDouble(node.threshold) + " THEN " + left + " ELSE " + right + " END";
+	       FormatDoubleSQL(node.threshold) + " THEN " + left + " ELSE " + right + " END";
 }
 
 static constexpr uint64_t CTR_MAGIC_MULT = 0x4906ba494954cb65ULL;
@@ -239,10 +239,10 @@ string SqlCtrElementValueExpr(const CtrCombineElement &element, const vector<str
 		// Feature is already a CityHash; cast through INT then UINT32 bit pattern.
 		return "CAST(CAST(CAST(ROUND(" + feature + ") AS BIGINT) AS INTEGER) AS UINTEGER)::UHUGEINT";
 	case CtrElementKind::FLOAT_FEATURE:
-		return "(CASE WHEN " + feature + " >= " + FormatDouble(element.border_or_value) +
+		return "(CASE WHEN " + feature + " >= " + FormatDoubleSQL(element.border_or_value) +
 		       " THEN 1::UHUGEINT ELSE 0::UHUGEINT END)";
 	case CtrElementKind::CAT_FEATURE_EXACT_VALUE:
-		return "(CASE WHEN " + feature + " = " + FormatDouble(element.border_or_value) +
+		return "(CASE WHEN " + feature + " = " + FormatDoubleSQL(element.border_or_value) +
 		       " THEN 1::UHUGEINT ELSE 0::UHUGEINT END)";
 	default:
 		throw InvalidInputException("duckboost: unknown CTR combination element in SQL export");
@@ -276,15 +276,15 @@ string SqlCtrValueExpr(const CtrFeatureSpec &ctr, const vector<string> &feature_
 	auto hash_expr = SqlCombineCtrHashExpr(ctr, feature_columns);
 	double default_value = CtrValueFromCounts(ctr, 0, 0);
 	if (ctr.hash_keys.empty()) {
-		return FormatDouble(default_value);
+		return FormatDoubleSQL(default_value);
 	}
 	string expr = "CASE " + hash_expr;
 	for (idx_t i = 0; i < ctr.hash_keys.size(); i++) {
 		int64_t secondary = i < ctr.hash_values_alt.size() ? ctr.hash_values_alt[i] : 0;
 		auto value = CtrValueFromCounts(ctr, ctr.hash_values[i], secondary);
-		expr += " WHEN " + std::to_string(ctr.hash_keys[i]) + "::UBIGINT THEN " + FormatDouble(value);
+		expr += " WHEN " + std::to_string(ctr.hash_keys[i]) + "::UBIGINT THEN " + FormatDoubleSQL(value);
 	}
-	expr += " ELSE " + FormatDouble(default_value) + " END";
+	expr += " ELSE " + FormatDoubleSQL(default_value) + " END";
 	return expr;
 }
 
@@ -1634,9 +1634,9 @@ string ExportModelSQL(const BoostModel &model, const string &table_name, const v
 			if (c > 0) {
 				inner << ", ";
 			}
-			string expr = FormatDouble(model.ClassBias(c));
+			string expr = FormatDoubleSQL(model.ClassBias(c));
 			for (idx_t round = 0; round < n_rounds; round++) {
-				expr += " + " + FormatDouble(model.learning_rate) + " * (" +
+				expr += " + " + FormatDoubleSQL(model.learning_rate) + " * (" +
 				        TreeToSQL(model.trees[round * model.n_classes + c], columns, 0) + ")";
 			}
 			auto score_name = "__duckboost_score_" + std::to_string(c);
@@ -1700,9 +1700,9 @@ string ExportModelSQL(const BoostModel &model, const string &table_name, const v
 	};
 
 	if (!options.separate_trees) {
-		string expr = FormatDouble(model.ClassBias(0));
+		string expr = FormatDoubleSQL(model.ClassBias(0));
 		for (auto &tree : model.trees) {
-			expr += " + " + FormatDouble(model.learning_rate) + " * (" + TreeToSQL(tree, columns, 0) + ")";
+			expr += " + " + FormatDoubleSQL(model.learning_rate) + " * (" + TreeToSQL(tree, columns, 0) + ")";
 		}
 		if (model.task == BoostTask::BINARY) {
 			expr = "1.0 / (1.0 + EXP(-(" + expr + ")))";
@@ -1728,15 +1728,15 @@ string ExportModelSQL(const BoostModel &model, const string &table_name, const v
 		inner << "(" << TreeToSQL(model.trees[t], columns, 0) << ") AS " << QuoteIdent(tree_name);
 	}
 	if (model.trees.empty()) {
-		inner << FormatDouble(model.ClassBias(0)) << " AS " << QuoteIdent("__duckboost_base");
+		inner << FormatDoubleSQL(model.ClassBias(0)) << " AS " << QuoteIdent("__duckboost_base");
 	} else {
-		inner << ", " << FormatDouble(model.ClassBias(0)) << " AS " << QuoteIdent("__duckboost_base");
+		inner << ", " << FormatDoubleSQL(model.ClassBias(0)) << " AS " << QuoteIdent("__duckboost_base");
 	}
 	inner << " FROM " << from_sql;
 
 	string sum_expr = QuoteIdent("__duckboost_base");
 	for (idx_t t = 0; t < tree_names.size(); t++) {
-		sum_expr += " + " + FormatDouble(model.learning_rate) + " * " + QuoteIdent(tree_names[t]);
+		sum_expr += " + " + FormatDoubleSQL(model.learning_rate) + " * " + QuoteIdent(tree_names[t]);
 	}
 	string pred_expr = sum_expr;
 	if (model.task == BoostTask::BINARY) {

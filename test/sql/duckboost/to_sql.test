@@ -158,3 +158,87 @@ SELECT duckboost_to_sql(
 );
 ----
 <REGEX>:.*proba requires a binary or multiclass model.*
+
+# DuckDB 2.0 parses 17-digit decimal literals as DECIMAL. Large ensembles
+# overflow DECIMAL(38, scale) (v0.0.4). Exported literals now use e0 so they
+# bind as DOUBLE — the same arithmetic duckboost_predict uses.
+query I
+SELECT duckboost_to_sql(
+	(SELECT model FROM models),
+	'score',
+	['x1', 'x2'],
+	MAP {'separate_trees': 'true', 'prediction_alias': 'pred'}
+) ILIKE '%0.29999999999999999e0%';
+----
+true
+
+statement ok
+CREATE TABLE large_train AS
+WITH u AS (
+	SELECT i AS id,
+		(hash(i * 10 + 1) % 1000000) / 1000000.0 AS x1,
+		(hash(i * 10 + 2) % 1000000) / 1000000.0 AS x2,
+		(hash(i * 10 + 3) % 1000000) / 1000000.0 AS x3,
+		(hash(i * 10 + 4) % 1000000) / 1000000.0 AS x4,
+		(hash(i * 10 + 5) % 1000000) / 1000000.0 AS e1,
+		(hash(i * 10 + 6) % 1000000) / 1000000.0 AS e2
+	FROM range(800) t(i)
+)
+SELECT id, x1, x2, x3, x4,
+	(10 * x1 + 6 * sin(6 * x2) + 8 * (x3 > 0.5)::INT * x4 - 4 * x1 * x2
+		+ 2.0 * (e1 + e2 - 1))::DOUBLE AS y
+FROM u;
+
+statement ok
+CREATE TABLE large_models AS
+SELECT duckboost_train(
+	y, [x1, x2, x3, x4],
+	MAP {
+		'backend': 'native',
+		'task': 'regression',
+		'n_estimators': '80',
+		'max_depth': '4',
+		'learning_rate': '0.1',
+		'min_samples_leaf': '5',
+		'seed': '42',
+		'feature_names': 'x1,x2,x3,x4'
+	}
+) AS model
+FROM large_train;
+
+statement ok
+CREATE VIEW large_score AS
+SELECT id, x1, x2, x3, x4 FROM large_train WHERE id % 10 = 0;
+
+statement ok
+SET VARIABLE large_sql = (
+	SELECT duckboost_to_sql(
+		model, 'large_score', ['x1', 'x2', 'x3', 'x4'],
+		MAP {'separate_trees': 'true', 'prediction_alias': 'pred', 'keep_columns': 'id'}
+	)
+	FROM large_models
+);
+
+# Exported text must not leave a 17-digit decimal without an exponent.
+query I
+SELECT getvariable('large_sql') SIMILAR TO '%[0-9]\.[0-9]{10,}[^0-9eE.]%';
+----
+false
+
+statement ok
+CREATE TABLE large_sql_pred AS FROM query(getvariable('large_sql'));
+
+query I
+SELECT typeof(pred) FROM large_sql_pred LIMIT 1;
+----
+DOUBLE
+
+query I
+SELECT bool_and(abs(n.pred - s.pred) < 1e-12)
+FROM (
+	SELECT id, duckboost_predict(m.model, [t.x1, t.x2, t.x3, t.x4]) AS pred
+	FROM large_score t, large_models m
+) n
+JOIN large_sql_pred s USING (id);
+----
+true
