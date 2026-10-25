@@ -48,7 +48,7 @@ FROM score s, models m;
 
 ## Export, then score without calling the extension
 
-`duckboost_to_sql` returns a `SELECT`. The second process runs that text after creating `score` with ordinary SQL. `separate_trees` is true, so the query sums one expression per tree (the default).
+`duckboost_to_sql` returns a `SELECT`. The second process runs that text after creating `score` with ordinary SQL. `separate_trees` is true, so the query sums one expression per tree (the default). Leaf values and the learning rate are spelled as `DOUBLE` literals (`0.3e0`), so DuckDB 2.0 does not read them as `DECIMAL`.
 
 ```{python}
 #| echo: false

@@ -8,7 +8,11 @@ A build from a release tag reports that version, and any other commit reports it
 SELECT extension_version FROM duckdb_extensions() WHERE extension_name = 'duckboost';
 ```
 
-## Unreleased
+## 0.0.5 (2026-10-24)
+
+### Fixed
+
+- `duckboost_to_sql` now writes leaf values, thresholds, and the learning rate as `DOUBLE` literals (`0.1e0` instead of `0.10000000000000001`). DuckDB 2.0 reads long decimal literals as `DECIMAL`, so a 200-tree regression export in v0.0.4 could fail with `DECIMAL(38,37)` overflow. Exported SQL now matches `duckboost_predict` without a `regexp_replace` workaround.
 
 ### Documentation
 

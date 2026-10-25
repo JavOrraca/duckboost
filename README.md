@@ -109,7 +109,8 @@ SELECT duckboost_predict(model, [x1, x2]) FROM models, test;
 SELECT duckboost_evaluate_agg(model, y, [x1, x2], MAP {'metric': 'rmse'})
 FROM models, test;
 
--- Orbital-style SQL export (trees as separate columns for DuckDB parallelism)
+-- Orbital-style SQL export (trees as separate columns for DuckDB parallelism).
+-- Literals use e0 so DuckDB binds them as DOUBLE, not DECIMAL.
 SELECT duckboost_to_sql(
 	model,
 	'test',
@@ -338,4 +339,6 @@ See [`PACKAGING.md`](PACKAGING.md) for the community-extension descriptor and na
 - [x] Community descriptor readiness (penguins `hello_world`, current `repo.ref`, no extra toolchain)
 - [x] Cut `0.0.4` against DuckDB 2.0.0 LTS
 - [x] Bump `repo.ref` to the `v0.0.4` commit (`b775ef4`)
-- [ ] Submit [`docs/community_extensions_description.yml`](docs/community_extensions_description.yml) to `duckdb/community-extensions`
+- [x] Cut `0.0.5`: `duckboost_to_sql` emits `DOUBLE` literals so DuckDB 2.0 does not parse them as `DECIMAL`
+- [ ] Bump community `repo.ref` to the `v0.0.5` commit after the tag lands
+- [ ] Submit the 0.0.5 descriptor to `duckdb/community-extensions` (community versioning is a separate update)

@@ -20,7 +20,7 @@ Experimental. Builds against **DuckDB 2.0.0 LTS** (“Cinnamon Teal”). DuckDB 
 
 1. Train with the built-in native histogram trainer (or an optional vendor backend / imported dump).
 2. Measure fit quality in SQL (`duckboost_evaluate_agg`, `duckboost_importance`).
-3. Export the trees with `duckboost_to_sql` (`CASE` expressions, optionally one column per tree).
+3. Export the trees with `duckboost_to_sql` (`CASE` expressions, optionally one column per tree; numeric literals are `DOUBLE`).
 4. Score later with `duckboost_predict`, or run the exported SQL in any DuckDB session — even without the extension.
 
 ## Native-first, import when you need to
