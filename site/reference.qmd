@@ -262,7 +262,7 @@ duckboost_to_sql(model VARCHAR, table_name VARCHAR, feature_columns VARCHAR[], o
 | `separate_trees` | | `true` | `true` / `1` / `yes` emits one column per tree and sums them. `false` / `0` / `no` inlines a single expression. |
 | `prediction_alias` | `alias` | `prediction` | Output column name. |
 
-`table_name` must be non-empty. `feature_columns` must name at least as many raw features as the model has. Binary predictions are wrapped in a sigmoid. Multiclass export is an argmax over per-class scores. The [train and export](vignettes/train-predict-export.qmd) vignette runs the generated text without calling `duckboost_*`.
+`table_name` must be non-empty. `feature_columns` must name at least as many raw features as the model has. Binary predictions are wrapped in a sigmoid. Multiclass export is an argmax over per-class scores. Numeric literals are written with an `e0` suffix so DuckDB binds them as `DOUBLE` (plain 17-digit decimals would parse as `DECIMAL` and overflow on large ensembles). The [train and export](vignettes/train-predict-export.qmd) vignette runs the generated text without calling `duckboost_*`.
 
 ```{python}
 #| echo: false

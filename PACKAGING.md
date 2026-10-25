@@ -162,9 +162,9 @@ Unreleased changes go under `## X.Y.Z (unreleased)` at the top of
 
    ```bash
    git switch main && git pull
-   git tag -a v0.0.4 -m "duckboost 0.0.4"
-   git push origin v0.0.4
-   gh release create v0.0.4 --title "duckboost 0.0.4" --notes "See CHANGELOG.md"
+   git tag -a v0.0.5 -m "duckboost 0.0.5"
+   git push origin v0.0.5
+   gh release create v0.0.5 --title "duckboost 0.0.5" --notes "See CHANGELOG.md"
    ```
 
 3. Confirm:
