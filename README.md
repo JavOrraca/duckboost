@@ -340,5 +340,5 @@ See [`PACKAGING.md`](PACKAGING.md) for the community-extension descriptor and na
 - [x] Cut `0.0.4` against DuckDB 2.0.0 LTS
 - [x] Bump `repo.ref` to the `v0.0.4` commit (`b775ef4`)
 - [x] Cut `0.0.5`: `duckboost_to_sql` emits `DOUBLE` literals so DuckDB 2.0 does not parse them as `DECIMAL`
-- [ ] Bump community `repo.ref` to the `v0.0.5` commit after the tag lands
+- [x] Bump `repo.ref` to the `v0.0.5` commit (`0c9dc40`)
 - [ ] Submit the 0.0.5 descriptor to `duckdb/community-extensions` (community versioning is a separate update)
