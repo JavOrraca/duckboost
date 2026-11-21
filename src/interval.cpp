@@ -22,13 +22,50 @@ namespace {
 using QuantileFits = std::array<BoostModel, 3>;
 using QuantileJSON = std::array<string, 3>;
 
+void ValidateTree(const BoostTree &tree, idx_t n_features) {
+	vector<idx_t> pending {0};
+	vector<bool> visited(tree.nodes.size(), false);
+	while (!pending.empty()) {
+		const auto idx = pending.back();
+		pending.pop_back();
+		if (idx >= tree.nodes.size() || visited[idx]) {
+			throw InvalidInputException("duckboost: invalid tree in interval fit");
+		}
+		visited[idx] = true;
+		const auto &node = tree.nodes[idx];
+		if (!std::isfinite(node.value) || !std::isfinite(node.threshold) || !std::isfinite(node.gain) ||
+		    !std::isfinite(node.cover) ||
+		    !std::all_of(node.categories.begin(), node.categories.end(), [](double c) { return std::isfinite(c); })) {
+			throw InvalidInputException("duckboost: interval tree values must be finite");
+		}
+		if (!node.is_leaf) {
+			if (node.feature >= n_features) {
+				throw InvalidInputException("duckboost: invalid feature in interval tree");
+			}
+			pending.push_back(node.left);
+			pending.push_back(node.right);
+		}
+	}
+	if (std::find(visited.begin(), visited.end(), false) != visited.end()) {
+		throw InvalidInputException("duckboost: unreachable nodes in interval tree");
+	}
+}
+
 void ValidateFits(const QuantileFits &fits) {
 	for (auto &fit : fits) {
-		if (fit.task != BoostTask::REGRESSION || fit.loss != RegressionLoss::QUANTILE || !fit.ctr_features.empty()) {
+		if (fit.task != BoostTask::REGRESSION || fit.loss != RegressionLoss::QUANTILE || !fit.ctr_features.empty() ||
+		    fit.n_classes != 1 || fit.n_raw_features != fit.n_features) {
 			throw InvalidInputException("duckboost: expected three quantile regression fits over the input features");
 		}
 		if (fit.n_features != fits[0].n_features || fit.feature_names != fits[0].feature_names) {
 			throw InvalidInputException("duckboost: interval fits must have the same feature names and order");
+		}
+		if (!std::isfinite(fit.base_score) || !std::isfinite(fit.learning_rate) ||
+		    !std::all_of(fit.base_scores.begin(), fit.base_scores.end(), [](double b) { return std::isfinite(b); })) {
+			throw InvalidInputException("duckboost: interval fit parameters must be finite");
+		}
+		for (const auto &tree : fit.trees) {
+			ValidateTree(tree, fit.n_features);
 		}
 	}
 	if (!(fits[0].objective_alpha > 0 && fits[0].objective_alpha < 0.5 && fits[1].objective_alpha == 0.5 &&
@@ -83,8 +120,12 @@ struct IntervalModel {
 		parser.Expect('{');
 		double version = 0;
 		string kind, crossing;
+		unordered_set<string> fields;
 		do {
 			auto field = parser.ParseString();
+			if (!fields.insert(field).second) {
+				throw InvalidInputException("duckboost: duplicate interval field '%s'", field);
+			}
 			parser.Expect(':');
 			if (field == "duckboost_version") {
 				version = parser.ParseNumber();
@@ -247,15 +288,17 @@ void CalibrateFinalize(Vector &state_vector, AggregateFinalizeInputData &, Vecto
 void PredictInterval(DataChunk &args, ExpressionState &, Vector &result) {
 	result.SetVectorType(VectorType::FLAT_VECTOR);
 	auto &bounds = StructVector::GetEntries(result);
-	UnifiedVectorFormat format;
+	UnifiedVectorFormat format, feature_format;
 	args.data[0].ToUnifiedFormat(format);
+	args.data[1].ToUnifiedFormat(feature_format);
 	auto input = UnifiedVectorFormat::GetData<string_t>(format);
 	IntervalModel model;
 	string_t previous;
 	bool parsed = false;
 	for (idx_t i = 0; i < args.size(); ++i) {
 		const auto index = format.sel->get_index(i);
-		if (!format.validity.RowIsValid(index)) {
+		if (!format.validity.RowIsValid(index) ||
+		    !feature_format.validity.RowIsValid(feature_format.sel->get_index(i))) {
 			FlatVector::SetNull(result, i, true);
 			continue;
 		}
@@ -294,7 +337,13 @@ string IntervalSQL(const IntervalModel &model, const string &table, const vector
 		}
 		inner += "(" + ExportScoreExpression(model.fits[i], features) + ")";
 	}
-	inner += "]) AS __duckboost_quantiles FROM " + SQLQuotedIdentifier(table);
+	inner += "], 'ASC') AS __duckboost_quantiles FROM " + SQLQuotedIdentifier(table);
+	// Sorting places non-finite scores at either end, including DuckDB's NaN at the upper end.
+	inner = "SELECT " + prefix +
+	        "CASE WHEN isfinite(__duckboost_quantiles[1]) AND isfinite(__duckboost_quantiles[3]) "
+	        "THEN __duckboost_quantiles ELSE error('duckboost: interval quantile predictions must be finite') END "
+	        "AS __duckboost_quantiles FROM (" +
+	        inner + ") AS quantiles";
 	const auto correction = FormatDoubleSQL(model.correction);
 	return "SELECT " + prefix + "(__duckboost_quantiles[1] - (" + correction +
 	       ")) AS lower, __duckboost_quantiles[2] AS median, (__duckboost_quantiles[3] + (" + correction +
@@ -306,7 +355,8 @@ void IntervalToSQL(DataChunk &args, ExpressionState &, Vector &result) {
 	for (idx_t i = 0; i < args.size(); ++i) {
 		auto json = args.data[0].GetValue(i);
 		auto table = args.data[1].GetValue(i);
-		if (json.IsNull() || table.IsNull()) {
+		if (json.IsNull() || table.IsNull() || args.data[2].GetValue(i).IsNull() ||
+		    (args.ColumnCount() == 4 && args.data[3].GetValue(i).IsNull())) {
 			writer.WriteNull();
 			continue;
 		}

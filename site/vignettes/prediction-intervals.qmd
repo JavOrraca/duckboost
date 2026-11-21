@@ -46,7 +46,7 @@ FROM fits, observations WHERE id BETWEEN 700 AND 899;
 CREATE TABLE holdout AS SELECT * FROM observations WHERE id >= 900;
 ```
 
-If you tune hyperparameters or use early stopping, complete those decisions before opening the calibration fold. Each calibration group requires the same three fitted models and `alpha` on every row. Supply the lower quantile fit, the 0.5 fit, and the upper quantile fit in that order.
+If you tune hyperparameters or use early stopping, complete those decisions before opening the calibration fold. Each calibration group requires the same three fitted models and `alpha` on every row. Supply the lower quantile fit, the 0.5 fit, and the upper quantile fit in that order. Calibration rejects NULL targets and feature lists. A NULL feature value inside the list follows each fitted tree’s missing-value routing.
 
 ## Interpret the correction
 
@@ -67,7 +67,7 @@ SELECT count(*) AS test_rows,
 FROM predictions;
 ```
 
-Save `intervals.model` in a DuckDB table or store its text in a model registry. For extension-free deployment, generate the scoring query once and execute it wherever the raw numeric columns are available. The optional fourth argument lists identity columns to return alongside the three estimates.
+Save `intervals.model` in a DuckDB table or store its text in a model registry. A NULL artifact or feature list yields a NULL prediction. For extension-free deployment, generate the scoring query once and execute it wherever the raw numeric columns are available. The optional fourth argument lists identity columns to return alongside the three estimates.
 
 ```sql
 SET VARIABLE score_sql = (

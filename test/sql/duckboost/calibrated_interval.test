@@ -96,3 +96,78 @@ SELECT count(*) = 6 AND bool_and(actual.lower = b.lower AND actual.median = b.me
 FROM actual JOIN expected USING (id);
 ----
 true
+
+# Strong calibration contraction can give an empty set on a different feature value.
+# The calibration rows at x=0 have predictions (0,5,10) and signed score -5.
+# The narrower band at x=1 is empty after subtracting that magnitude from both sides.
+statement ok
+CREATE TABLE narrow AS
+WITH data(x, yl, ym, yu) AS (VALUES (0,0,5,10), (1,5,5,5)), q AS (
+    SELECT duckboost_train(yl, [x], MAP {'objective':'quantile', 'quantile_alpha':'0.05',
+               'n_estimators':'1', 'max_depth':'1', 'learning_rate':'1'}) AS lo,
+           duckboost_train(ym, [x], MAP {'objective':'quantile', 'quantile_alpha':'0.5',
+               'n_estimators':'1', 'max_depth':'1', 'learning_rate':'1'}) AS med,
+           duckboost_train(yu, [x], MAP {'objective':'quantile', 'quantile_alpha':'0.95',
+               'n_estimators':'1', 'max_depth':'1', 'learning_rate':'1'}) AS hi FROM data
+)
+SELECT duckboost_calibrate_interval(lo, med, hi, 0.1, 5, [0.0]) AS model FROM q, range(10);
+
+query III
+SELECT b.lower > b.upper, b.median = 5, model LIKE '%"correction":-5,%' FROM
+(SELECT model, duckboost_predict_interval(model, [1.0]) AS b FROM narrow);
+----
+true	true	true
+
+statement ok
+SET default_order = 'DESC';
+
+statement ok
+SET VARIABLE narrow_sql = (SELECT duckboost_interval_to_sql(model, 'probes', ['x'], ['id']) FROM narrow);
+
+query I
+WITH exported AS (SELECT * FROM query(getvariable('narrow_sql'))),
+native AS (SELECT id, duckboost_predict_interval(model, [x]) AS b FROM narrow, probes)
+SELECT count_if(lower > upper) > 0 AND bool_and(lower = b.lower AND median = b.median AND upper = b.upper)
+FROM exported JOIN native USING (id);
+----
+true
+
+statement ok
+RESET default_order;
+
+# A NULL model or feature list propagates; NULL inside a feature list follows tree missing routing.
+query I
+SELECT count(b) = 1 FROM (
+    SELECT duckboost_predict_interval(CASE WHEN i = 1 THEN NULL ELSE model END,
+        CASE WHEN i = 2 THEN NULL ELSE [NULL::DOUBLE] END) AS b FROM narrow, range(3) t(i)
+);
+----
+true
+
+query I
+SELECT count(q) = 1 FROM (SELECT duckboost_interval_to_sql(model, 'probes', ['x'],
+    CASE WHEN i = 0 THEN NULL ELSE ['id'] END) AS q FROM narrow, range(2) t(i));
+----
+true
+
+statement error
+SELECT duckboost_calibrate_interval(lo, med, hi, 0.1, NULL, [1.0]) FROM fits;
+----
+must not be NULL
+
+statement error
+SELECT duckboost_predict_interval(replace(model, '"correction":10,', '"correction":1e999,'), [0.0]) FROM artifacts;
+----
+expected a format 3 calibrated interval model
+
+statement error
+SELECT duckboost_interval_to_sql(replace(model, '"base_score":0,', '"base_score":1e999,'), 'probes', ['x'])
+FROM artifacts;
+----
+interval fit parameters must be finite
+
+statement error
+SELECT duckboost_predict_interval(replace(model, '"artifact_type":', '"alpha":0.5,"artifact_type":'), [0.0])
+FROM artifacts;
+----
+duplicate interval field
