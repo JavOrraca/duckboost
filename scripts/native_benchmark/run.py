@@ -56,7 +56,7 @@ def _ensure_lib_path() -> None:
     os.environ["LD_LIBRARY_PATH"] = ":".join(parts)
 
 
-def run_sql(sql: str, *, json_output: bool = False) -> tuple[str, float]:
+def run_sql(sql: str, *, json_output: bool = False) -> tuple[str, float | None]:
     if not DUCKDB.is_file():
         raise FileNotFoundError(f"DuckDB binary not found at {DUCKDB}; run `make` first.")
     cmd = [str(DUCKDB), "-unsigned", "-bail"]
@@ -68,15 +68,20 @@ def run_sql(sql: str, *, json_output: bool = False) -> tuple[str, float]:
     # wait4 reports the peak RSS of this CLI, independently of previous fits.
     with tempfile.TemporaryFile(mode="w+") as stdout, tempfile.TemporaryFile(mode="w+") as stderr:
         with subprocess.Popen(cmd, cwd=REPO, stdout=stdout, stderr=stderr) as proc:
-            _, status, usage = os.wait4(proc.pid, 0)
-            proc.returncode = os.waitstatus_to_exitcode(status)
+            if hasattr(os, "wait4"):
+                _, status, usage = os.wait4(proc.pid, 0)
+                proc.returncode = os.waitstatus_to_exitcode(status)
+                rss_bytes = usage.ru_maxrss if sys.platform == "darwin" else usage.ru_maxrss * 1024
+                peak_mib = round(rss_bytes / (1024 * 1024), 2)
+            else:
+                proc.wait()
+                peak_mib = None
             stdout.seek(0)
             output = stdout.read()
             if proc.returncode:
                 stderr.seek(0)
                 raise RuntimeError(f"duckdb failed:\n{stderr.read() or output}\n\nSQL:\n{sql}")
-    rss_bytes = usage.ru_maxrss if sys.platform == "darwin" else usage.ru_maxrss * 1024
-    return output, round(rss_bytes / (1024 * 1024), 2)
+    return output, peak_mib
 
 
 def parse_json_sets(text: str) -> list:
@@ -301,7 +306,11 @@ WHERE name IN ('native_lightgbm_linked', 'native_xgboost_linked');
             run["train_seconds_samples"] = [sample["train_seconds"] for sample in samples]
             run["peak_process_mib_samples"] = [sample["peak_process_mib"] for sample in samples]
             run["train_seconds"] = statistics.median(run["train_seconds_samples"])
-            run["peak_process_mib"] = max(run["peak_process_mib_samples"])
+            measured_peaks = [value for value in run["peak_process_mib_samples"] if value is not None]
+            run["peak_process_mib"] = max(measured_peaks, default=None)
+            run["holdout_metric_samples"] = [sample["holdout_metric"] for sample in samples]
+            if "secondary_metric" in run:
+                run["secondary_metric_samples"] = [sample["secondary_metric"] for sample in samples]
             runs.append(run)
             print(json.dumps(runs[-1], indent=2), flush=True)
 
