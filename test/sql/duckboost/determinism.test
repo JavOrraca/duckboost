@@ -68,7 +68,7 @@ SELECT count(*) FROM parallel_models p JOIN serial_models s USING (max_depth, le
 # Numeric feature blocks can execute concurrently. Tied features choose the same splits at both thread budgets.
 statement ok
 CREATE TABLE block_data AS
-SELECT sin(i/8.0) AS y, list_transform(range(12), j -> ((i * (j % 3 + 1)) % 257)::DOUBLE) AS features
+SELECT sin(i/8.0) AS y, list_transform(range(12), lambda j: ((i * (j % 3 + 1)) % 257)::DOUBLE) AS features
 FROM range(8192) t(i);
 
 statement ok
