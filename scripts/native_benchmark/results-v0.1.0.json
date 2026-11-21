@@ -1,0 +1,1129 @@
+{
+  "measured_on": "2026-11-21",
+  "engine": {
+    "version": "v2.0.1",
+    "commit": "8d78114e90a53823803660bf821f6073ac87da8c",
+    "cli": "Homebrew duckdb 2.0.1"
+  },
+  "host": {
+    "cpu": "Apple M2, 4 performance and 4 efficiency cores",
+    "memory_gib": 24,
+    "os": "macOS 27.2.1 arm64 (26B131)",
+    "compiler": "Apple Clang 21.0.0 (clang-2100.4.1.1)",
+    "python": "3.11.9"
+  },
+  "build": "All four trainer-specific extensions used the release C++17 arm64 flags (-O3 -DNDEBUG -mcpu=apple-m1), the same DuckDB 2.0.1 headers and Homebrew libduckdb_static.a, and no vendor backends. The stock CLI loaded one such extension per fit.",
+  "protocol": "Each cell uses three fresh processes, one at a time. Training seconds include SQL aggregation, canonical sorting, binning, fitting and serialization. Peak MiB is the maximum per-process ru_maxrss including SQL setup and scoring. Summaries use the median time and maximum peak RSS. Lower is better for the holdout metric. The base implementation is the trainer shipped as 0.0.5, as present at the release starting commit.",
+  "seed": 7,
+  "shared_options": {
+    "n_estimators": "80",
+    "max_depth": "5",
+    "learning_rate": "0.1",
+    "min_samples_leaf": "20",
+    "max_bins": "64",
+    "reg_lambda": "1.0",
+    "subsample": "0.8",
+    "colsample_bytree": "0.8",
+    "seed": "7"
+  },
+  "workloads": {
+    "standard": {
+      "n_rows": 200000,
+      "features": 12,
+      "categorical": "cat_a,cat_b,cat_c,cat_d"
+    },
+    "wide-skewed": {
+      "n_rows": 50000,
+      "features": 32,
+      "categorical": null
+    }
+  },
+  "revisions": {
+    "base": {
+      "label": "v0.0.5 trainer on 2.0.1",
+      "measured_source": "b7d2c88b83d6f1772a235610fefa9657380714ba",
+      "matching_trainer_release_commit": "a92d888c3c3c5f4e9cce00b70be48ff010f9aea9",
+      "trainer_blob": "ad4f18f2da4fba3f371fc8d1ff00ea5bdcce0e8c"
+    },
+    "quality": {
+      "label": "Empirical cutpoints",
+      "measured_source": "132b7791363b1198509fdac8d2fcddecefe6bceb",
+      "matching_trainer_release_commit": "c9e72dc67cb885185c64df949bddf81b931701bf",
+      "trainer_blob": "10191ba24660b1389ca21ef36c2f5f1fd4b68ef9"
+    },
+    "layout": {
+      "label": "Packed bins and subtraction",
+      "measured_source": "0f1c31681c9671be98ed55313b3f222ed3a38ad0",
+      "matching_trainer_release_commit": "424a26052d4cc6d1d51ce1b4acb417bb65f718d1",
+      "trainer_blob": "1b4d81bd9bbce6b347df03d1ebba1ff6a37ac51b"
+    },
+    "final": {
+      "label": "0.1.0 trainer with scheduler",
+      "measured_source": "e5ace134041190a8d7f0ad59dcd1033fbbdf7360",
+      "matching_trainer_release_commit": "360c8bd356c7bf1483f1e98ce09bceb362341b7e",
+      "trainer_blob": "727735e8b2276cce2b6a13cf7ee948bcdfc3c291"
+    }
+  },
+  "runs": [
+    {
+      "revision": "base",
+      "threads": 1,
+      "workload": "standard",
+      "task": "regression",
+      "n_train": 160138,
+      "n_test": 39862,
+      "metric": "rmse",
+      "holdout_metric": 0.238832,
+      "train_seconds": 5.319,
+      "peak_process_mib": 154.2,
+      "train_seconds_samples": [
+        5.308,
+        5.369,
+        5.319
+      ],
+      "peak_process_mib_samples": [
+        153.78,
+        154.2,
+        153.86
+      ]
+    },
+    {
+      "revision": "base",
+      "threads": 1,
+      "workload": "standard",
+      "task": "binary",
+      "n_train": 160138,
+      "n_test": 39862,
+      "metric": "logloss",
+      "holdout_metric": 0.048162,
+      "secondary_metric_name": "accuracy",
+      "secondary_metric": 0.993703,
+      "train_seconds": 3.774,
+      "peak_process_mib": 153.28,
+      "train_seconds_samples": [
+        3.774,
+        3.736,
+        3.932
+      ],
+      "peak_process_mib_samples": [
+        152.92,
+        152.92,
+        153.28
+      ]
+    },
+    {
+      "revision": "base",
+      "threads": 1,
+      "workload": "wide-skewed",
+      "task": "regression",
+      "n_train": 40086,
+      "n_test": 9914,
+      "metric": "rmse",
+      "holdout_metric": 1.831095,
+      "train_seconds": 1.577,
+      "peak_process_mib": 102.91,
+      "train_seconds_samples": [
+        1.525,
+        1.577,
+        1.726
+      ],
+      "peak_process_mib_samples": [
+        100.41,
+        100.36,
+        102.91
+      ]
+    },
+    {
+      "revision": "base",
+      "threads": 4,
+      "workload": "standard",
+      "task": "regression",
+      "n_train": 160138,
+      "n_test": 39862,
+      "metric": "rmse",
+      "holdout_metric": 0.238832,
+      "train_seconds": 5.273,
+      "peak_process_mib": 152.5,
+      "train_seconds_samples": [
+        5.273,
+        5.186,
+        5.758
+      ],
+      "peak_process_mib_samples": [
+        151.12,
+        152.5,
+        149.22
+      ],
+      "holdout_metric_samples": [
+        0.238832,
+        0.238832,
+        0.238832
+      ]
+    },
+    {
+      "revision": "base",
+      "threads": 4,
+      "workload": "standard",
+      "task": "binary",
+      "n_train": 160138,
+      "n_test": 39862,
+      "metric": "logloss",
+      "holdout_metric": 0.048162,
+      "secondary_metric_name": "accuracy",
+      "secondary_metric": 0.993703,
+      "train_seconds": 3.973,
+      "peak_process_mib": 152.62,
+      "train_seconds_samples": [
+        3.973,
+        4.005,
+        3.906
+      ],
+      "peak_process_mib_samples": [
+        150.72,
+        150.66,
+        152.62
+      ],
+      "holdout_metric_samples": [
+        0.048162,
+        0.048162,
+        0.048162
+      ],
+      "secondary_metric_samples": [
+        0.993703,
+        0.993703,
+        0.993703
+      ]
+    },
+    {
+      "revision": "base",
+      "threads": 4,
+      "workload": "wide-skewed",
+      "task": "regression",
+      "n_train": 40086,
+      "n_test": 9914,
+      "metric": "rmse",
+      "holdout_metric": 1.831095,
+      "train_seconds": 1.566,
+      "peak_process_mib": 111.67,
+      "train_seconds_samples": [
+        1.541,
+        1.568,
+        1.566
+      ],
+      "peak_process_mib_samples": [
+        111.64,
+        111.5,
+        111.67
+      ]
+    },
+    {
+      "revision": "base",
+      "threads": 8,
+      "workload": "standard",
+      "task": "regression",
+      "n_train": 160138,
+      "n_test": 39862,
+      "metric": "rmse",
+      "holdout_metric": 0.238832,
+      "train_seconds": 5.508,
+      "peak_process_mib": 152.27,
+      "train_seconds_samples": [
+        5.215,
+        5.508,
+        5.742
+      ],
+      "peak_process_mib_samples": [
+        152.27,
+        151.7,
+        151.69
+      ]
+    },
+    {
+      "revision": "base",
+      "threads": 8,
+      "workload": "standard",
+      "task": "binary",
+      "n_train": 160138,
+      "n_test": 39862,
+      "metric": "logloss",
+      "holdout_metric": 0.048162,
+      "secondary_metric_name": "accuracy",
+      "secondary_metric": 0.993703,
+      "train_seconds": 4.059,
+      "peak_process_mib": 155.48,
+      "train_seconds_samples": [
+        4.549,
+        4.059,
+        3.995
+      ],
+      "peak_process_mib_samples": [
+        155.48,
+        150.58,
+        151.83
+      ]
+    },
+    {
+      "revision": "base",
+      "threads": 8,
+      "workload": "wide-skewed",
+      "task": "regression",
+      "n_train": 40086,
+      "n_test": 9914,
+      "metric": "rmse",
+      "holdout_metric": 1.831095,
+      "train_seconds": 1.571,
+      "peak_process_mib": 112.31,
+      "train_seconds_samples": [
+        1.571,
+        1.61,
+        1.526
+      ],
+      "peak_process_mib_samples": [
+        111.72,
+        112.31,
+        112.16
+      ],
+      "holdout_metric_samples": [
+        1.831095,
+        1.831095,
+        1.831095
+      ]
+    },
+    {
+      "revision": "quality",
+      "threads": 1,
+      "workload": "standard",
+      "task": "regression",
+      "n_train": 160138,
+      "n_test": 39862,
+      "metric": "rmse",
+      "holdout_metric": 0.24056,
+      "train_seconds": 5.656,
+      "peak_process_mib": 159.52,
+      "train_seconds_samples": [
+        5.465,
+        5.808,
+        5.656
+      ],
+      "peak_process_mib_samples": [
+        154.19,
+        159.52,
+        156.41
+      ]
+    },
+    {
+      "revision": "quality",
+      "threads": 1,
+      "workload": "standard",
+      "task": "binary",
+      "n_train": 160138,
+      "n_test": 39862,
+      "metric": "logloss",
+      "holdout_metric": 0.048164,
+      "secondary_metric_name": "accuracy",
+      "secondary_metric": 0.993678,
+      "train_seconds": 4.002,
+      "peak_process_mib": 153.12,
+      "train_seconds_samples": [
+        3.826,
+        4.002,
+        4.192
+      ],
+      "peak_process_mib_samples": [
+        152.69,
+        152.75,
+        153.12
+      ]
+    },
+    {
+      "revision": "quality",
+      "threads": 1,
+      "workload": "wide-skewed",
+      "task": "regression",
+      "n_train": 40086,
+      "n_test": 9914,
+      "metric": "rmse",
+      "holdout_metric": 0.142511,
+      "train_seconds": 1.327,
+      "peak_process_mib": 102.23,
+      "train_seconds_samples": [
+        1.4,
+        1.327,
+        1.272
+      ],
+      "peak_process_mib_samples": [
+        102.23,
+        102.19,
+        101.97
+      ]
+    },
+    {
+      "revision": "quality",
+      "threads": 4,
+      "workload": "standard",
+      "task": "regression",
+      "n_train": 160138,
+      "n_test": 39862,
+      "metric": "rmse",
+      "holdout_metric": 0.24056,
+      "train_seconds": 5.37,
+      "peak_process_mib": 152.89,
+      "train_seconds_samples": [
+        5.37,
+        5.171,
+        5.793
+      ],
+      "peak_process_mib_samples": [
+        149.55,
+        152.12,
+        152.89
+      ]
+    },
+    {
+      "revision": "quality",
+      "threads": 4,
+      "workload": "standard",
+      "task": "binary",
+      "n_train": 160138,
+      "n_test": 39862,
+      "metric": "logloss",
+      "holdout_metric": 0.048164,
+      "secondary_metric_name": "accuracy",
+      "secondary_metric": 0.993678,
+      "train_seconds": 3.964,
+      "peak_process_mib": 151.38,
+      "train_seconds_samples": [
+        3.964,
+        3.836,
+        4.042
+      ],
+      "peak_process_mib_samples": [
+        150.7,
+        151.38,
+        150.75
+      ]
+    },
+    {
+      "revision": "quality",
+      "threads": 4,
+      "workload": "wide-skewed",
+      "task": "regression",
+      "n_train": 40086,
+      "n_test": 9914,
+      "metric": "rmse",
+      "holdout_metric": 0.142511,
+      "train_seconds": 1.319,
+      "peak_process_mib": 113.44,
+      "train_seconds_samples": [
+        1.319,
+        1.345,
+        1.292
+      ],
+      "peak_process_mib_samples": [
+        112.94,
+        113.44,
+        113.16
+      ]
+    },
+    {
+      "revision": "quality",
+      "threads": 8,
+      "workload": "standard",
+      "task": "regression",
+      "n_train": 160138,
+      "n_test": 39862,
+      "metric": "rmse",
+      "holdout_metric": 0.24056,
+      "train_seconds": 5.544,
+      "peak_process_mib": 152.59,
+      "train_seconds_samples": [
+        5.308,
+        5.544,
+        5.817
+      ],
+      "peak_process_mib_samples": [
+        152.45,
+        152.59,
+        152.16
+      ],
+      "holdout_metric_samples": [
+        0.24056,
+        0.24056,
+        0.24056
+      ]
+    },
+    {
+      "revision": "quality",
+      "threads": 8,
+      "workload": "standard",
+      "task": "binary",
+      "n_train": 160138,
+      "n_test": 39862,
+      "metric": "logloss",
+      "holdout_metric": 0.048164,
+      "secondary_metric_name": "accuracy",
+      "secondary_metric": 0.993678,
+      "train_seconds": 3.988,
+      "peak_process_mib": 153.72,
+      "train_seconds_samples": [
+        4.917,
+        3.988,
+        3.812
+      ],
+      "peak_process_mib_samples": [
+        153.72,
+        152.05,
+        147.91
+      ],
+      "holdout_metric_samples": [
+        0.048164,
+        0.048164,
+        0.048164
+      ],
+      "secondary_metric_samples": [
+        0.993678,
+        0.993678,
+        0.993678
+      ]
+    },
+    {
+      "revision": "quality",
+      "threads": 8,
+      "workload": "wide-skewed",
+      "task": "regression",
+      "n_train": 40086,
+      "n_test": 9914,
+      "metric": "rmse",
+      "holdout_metric": 0.142511,
+      "train_seconds": 1.319,
+      "peak_process_mib": 113.53,
+      "train_seconds_samples": [
+        1.359,
+        1.252,
+        1.319
+      ],
+      "peak_process_mib_samples": [
+        112.14,
+        113.38,
+        113.53
+      ],
+      "holdout_metric_samples": [
+        0.142511,
+        0.142511,
+        0.142511
+      ]
+    },
+    {
+      "revision": "layout",
+      "threads": 1,
+      "workload": "standard",
+      "task": "regression",
+      "n_train": 160138,
+      "n_test": 39862,
+      "metric": "rmse",
+      "holdout_metric": 0.24056,
+      "train_seconds": 3.844,
+      "peak_process_mib": 150.38,
+      "train_seconds_samples": [
+        4.283,
+        3.808,
+        3.844
+      ],
+      "peak_process_mib_samples": [
+        150.38,
+        149.47,
+        149.34
+      ],
+      "holdout_metric_samples": [
+        0.24056,
+        0.24056,
+        0.24056
+      ]
+    },
+    {
+      "revision": "layout",
+      "threads": 1,
+      "workload": "standard",
+      "task": "binary",
+      "n_train": 160138,
+      "n_test": 39862,
+      "metric": "logloss",
+      "holdout_metric": 0.048164,
+      "secondary_metric_name": "accuracy",
+      "secondary_metric": 0.993678,
+      "train_seconds": 2.91,
+      "peak_process_mib": 149.22,
+      "train_seconds_samples": [
+        2.983,
+        2.904,
+        2.91
+      ],
+      "peak_process_mib_samples": [
+        149.22,
+        148.33,
+        147.98
+      ],
+      "holdout_metric_samples": [
+        0.048164,
+        0.048164,
+        0.048164
+      ],
+      "secondary_metric_samples": [
+        0.993678,
+        0.993678,
+        0.993678
+      ]
+    },
+    {
+      "revision": "layout",
+      "threads": 1,
+      "workload": "wide-skewed",
+      "task": "regression",
+      "n_train": 40086,
+      "n_test": 9914,
+      "metric": "rmse",
+      "holdout_metric": 0.142511,
+      "train_seconds": 0.685,
+      "peak_process_mib": 97.39,
+      "train_seconds_samples": [
+        0.653,
+        0.685,
+        0.697
+      ],
+      "peak_process_mib_samples": [
+        97.34,
+        97.39,
+        97.06
+      ],
+      "holdout_metric_samples": [
+        0.142511,
+        0.142511,
+        0.142511
+      ]
+    },
+    {
+      "revision": "layout",
+      "threads": 4,
+      "workload": "standard",
+      "task": "regression",
+      "n_train": 160138,
+      "n_test": 39862,
+      "metric": "rmse",
+      "holdout_metric": 0.24056,
+      "train_seconds": 3.763,
+      "peak_process_mib": 146.77,
+      "train_seconds_samples": [
+        3.763,
+        3.915,
+        3.745
+      ],
+      "peak_process_mib_samples": [
+        146.14,
+        146.59,
+        146.77
+      ],
+      "holdout_metric_samples": [
+        0.24056,
+        0.24056,
+        0.24056
+      ]
+    },
+    {
+      "revision": "layout",
+      "threads": 4,
+      "workload": "standard",
+      "task": "binary",
+      "n_train": 160138,
+      "n_test": 39862,
+      "metric": "logloss",
+      "holdout_metric": 0.048164,
+      "secondary_metric_name": "accuracy",
+      "secondary_metric": 0.993678,
+      "train_seconds": 3.105,
+      "peak_process_mib": 145.08,
+      "train_seconds_samples": [
+        3.105,
+        2.898,
+        3.163
+      ],
+      "peak_process_mib_samples": [
+        141.8,
+        145.08,
+        144.78
+      ],
+      "holdout_metric_samples": [
+        0.048164,
+        0.048164,
+        0.048164
+      ],
+      "secondary_metric_samples": [
+        0.993678,
+        0.993678,
+        0.993678
+      ]
+    },
+    {
+      "revision": "layout",
+      "threads": 4,
+      "workload": "wide-skewed",
+      "task": "regression",
+      "n_train": 40086,
+      "n_test": 9914,
+      "metric": "rmse",
+      "holdout_metric": 0.142511,
+      "train_seconds": 0.652,
+      "peak_process_mib": 108.89,
+      "train_seconds_samples": [
+        0.653,
+        0.647,
+        0.652
+      ],
+      "peak_process_mib_samples": [
+        108.31,
+        108.89,
+        108.45
+      ],
+      "holdout_metric_samples": [
+        0.142511,
+        0.142511,
+        0.142511
+      ]
+    },
+    {
+      "revision": "layout",
+      "threads": 8,
+      "workload": "standard",
+      "task": "regression",
+      "n_train": 160138,
+      "n_test": 39862,
+      "metric": "rmse",
+      "holdout_metric": 0.24056,
+      "train_seconds": 3.811,
+      "peak_process_mib": 146.7,
+      "train_seconds_samples": [
+        3.811,
+        3.872,
+        3.795
+      ],
+      "peak_process_mib_samples": [
+        144.83,
+        143.5,
+        146.7
+      ],
+      "holdout_metric_samples": [
+        0.24056,
+        0.24056,
+        0.24056
+      ]
+    },
+    {
+      "revision": "layout",
+      "threads": 8,
+      "workload": "standard",
+      "task": "binary",
+      "n_train": 160138,
+      "n_test": 39862,
+      "metric": "logloss",
+      "holdout_metric": 0.048164,
+      "secondary_metric_name": "accuracy",
+      "secondary_metric": 0.993678,
+      "train_seconds": 2.951,
+      "peak_process_mib": 145.66,
+      "train_seconds_samples": [
+        3.098,
+        2.951,
+        2.701
+      ],
+      "peak_process_mib_samples": [
+        142.14,
+        145.31,
+        145.66
+      ],
+      "holdout_metric_samples": [
+        0.048164,
+        0.048164,
+        0.048164
+      ],
+      "secondary_metric_samples": [
+        0.993678,
+        0.993678,
+        0.993678
+      ]
+    },
+    {
+      "revision": "layout",
+      "threads": 8,
+      "workload": "wide-skewed",
+      "task": "regression",
+      "n_train": 40086,
+      "n_test": 9914,
+      "metric": "rmse",
+      "holdout_metric": 0.142511,
+      "train_seconds": 0.653,
+      "peak_process_mib": 110.8,
+      "train_seconds_samples": [
+        0.699,
+        0.653,
+        0.652
+      ],
+      "peak_process_mib_samples": [
+        108.97,
+        108.77,
+        110.8
+      ],
+      "holdout_metric_samples": [
+        0.142511,
+        0.142511,
+        0.142511
+      ]
+    },
+    {
+      "revision": "final",
+      "threads": 1,
+      "workload": "standard",
+      "task": "regression",
+      "n_train": 160138,
+      "n_test": 39862,
+      "metric": "rmse",
+      "holdout_metric": 0.24056,
+      "train_seconds": 3.946,
+      "peak_process_mib": 149.3,
+      "train_seconds_samples": [
+        3.946,
+        4.037,
+        3.858
+      ],
+      "peak_process_mib_samples": [
+        149.17,
+        148.95,
+        149.3
+      ],
+      "holdout_metric_samples": [
+        0.24056,
+        0.24056,
+        0.24056
+      ]
+    },
+    {
+      "revision": "final",
+      "threads": 1,
+      "workload": "standard",
+      "task": "binary",
+      "n_train": 160138,
+      "n_test": 39862,
+      "metric": "logloss",
+      "holdout_metric": 0.048164,
+      "secondary_metric_name": "accuracy",
+      "secondary_metric": 0.993678,
+      "train_seconds": 2.99,
+      "peak_process_mib": 148.44,
+      "train_seconds_samples": [
+        3.013,
+        2.87,
+        2.99
+      ],
+      "peak_process_mib_samples": [
+        147.89,
+        147.98,
+        148.44
+      ],
+      "holdout_metric_samples": [
+        0.048164,
+        0.048164,
+        0.048164
+      ],
+      "secondary_metric_samples": [
+        0.993678,
+        0.993678,
+        0.993678
+      ]
+    },
+    {
+      "revision": "final",
+      "threads": 1,
+      "workload": "wide-skewed",
+      "task": "regression",
+      "n_train": 40086,
+      "n_test": 9914,
+      "metric": "rmse",
+      "holdout_metric": 0.142511,
+      "train_seconds": 0.66,
+      "peak_process_mib": 97.44,
+      "train_seconds_samples": [
+        0.657,
+        0.66,
+        0.66
+      ],
+      "peak_process_mib_samples": [
+        97.14,
+        97.44,
+        97.25
+      ],
+      "holdout_metric_samples": [
+        0.142511,
+        0.142511,
+        0.142511
+      ]
+    },
+    {
+      "revision": "final",
+      "threads": 4,
+      "workload": "standard",
+      "task": "regression",
+      "n_train": 160138,
+      "n_test": 39862,
+      "metric": "rmse",
+      "holdout_metric": 0.24056,
+      "train_seconds": 3.106,
+      "peak_process_mib": 147.19,
+      "train_seconds_samples": [
+        3.106,
+        3.021,
+        3.369
+      ],
+      "peak_process_mib_samples": [
+        147.19,
+        146.41,
+        146.38
+      ],
+      "holdout_metric_samples": [
+        0.24056,
+        0.24056,
+        0.24056
+      ]
+    },
+    {
+      "revision": "final",
+      "threads": 4,
+      "workload": "standard",
+      "task": "binary",
+      "n_train": 160138,
+      "n_test": 39862,
+      "metric": "logloss",
+      "holdout_metric": 0.048164,
+      "secondary_metric_name": "accuracy",
+      "secondary_metric": 0.993678,
+      "train_seconds": 2.418,
+      "peak_process_mib": 145.78,
+      "train_seconds_samples": [
+        2.418,
+        2.392,
+        2.495
+      ],
+      "peak_process_mib_samples": [
+        141.62,
+        145.67,
+        145.78
+      ],
+      "holdout_metric_samples": [
+        0.048164,
+        0.048164,
+        0.048164
+      ],
+      "secondary_metric_samples": [
+        0.993678,
+        0.993678,
+        0.993678
+      ]
+    },
+    {
+      "revision": "final",
+      "threads": 4,
+      "workload": "wide-skewed",
+      "task": "regression",
+      "n_train": 40086,
+      "n_test": 9914,
+      "metric": "rmse",
+      "holdout_metric": 0.142511,
+      "train_seconds": 0.512,
+      "peak_process_mib": 110.09,
+      "train_seconds_samples": [
+        0.532,
+        0.388,
+        0.512
+      ],
+      "peak_process_mib_samples": [
+        110.09,
+        108.8,
+        108.61
+      ],
+      "holdout_metric_samples": [
+        0.142511,
+        0.142511,
+        0.142511
+      ]
+    },
+    {
+      "revision": "final",
+      "threads": 8,
+      "workload": "standard",
+      "task": "regression",
+      "n_train": 160138,
+      "n_test": 39862,
+      "metric": "rmse",
+      "holdout_metric": 0.24056,
+      "train_seconds": 2.831,
+      "peak_process_mib": 147.5,
+      "train_seconds_samples": [
+        3.049,
+        2.831,
+        2.746
+      ],
+      "peak_process_mib_samples": [
+        144.11,
+        147.42,
+        147.5
+      ],
+      "holdout_metric_samples": [
+        0.24056,
+        0.24056,
+        0.24056
+      ]
+    },
+    {
+      "revision": "final",
+      "threads": 8,
+      "workload": "standard",
+      "task": "binary",
+      "n_train": 160138,
+      "n_test": 39862,
+      "metric": "logloss",
+      "holdout_metric": 0.048164,
+      "secondary_metric_name": "accuracy",
+      "secondary_metric": 0.993678,
+      "train_seconds": 2.19,
+      "peak_process_mib": 147.73,
+      "train_seconds_samples": [
+        2.259,
+        2.119,
+        2.19
+      ],
+      "peak_process_mib_samples": [
+        147.73,
+        146.98,
+        145.97
+      ],
+      "holdout_metric_samples": [
+        0.048164,
+        0.048164,
+        0.048164
+      ],
+      "secondary_metric_samples": [
+        0.993678,
+        0.993678,
+        0.993678
+      ]
+    },
+    {
+      "revision": "final",
+      "threads": 8,
+      "workload": "wide-skewed",
+      "task": "regression",
+      "n_train": 40086,
+      "n_test": 9914,
+      "metric": "rmse",
+      "holdout_metric": 0.142511,
+      "train_seconds": 0.396,
+      "peak_process_mib": 109.33,
+      "train_seconds_samples": [
+        0.396,
+        0.396,
+        0.48
+      ],
+      "peak_process_mib_samples": [
+        109.33,
+        108.73,
+        108.95
+      ],
+      "holdout_metric_samples": [
+        0.142511,
+        0.142511,
+        0.142511
+      ]
+    }
+  ],
+  "default_harness": {
+    "command": "python3 scripts/native_benchmark/run.py --n-rows 200000 --seed 7 --skip-lightgbm",
+    "build": "Integrated release candidate, project CMake Release build. Fresh stock DuckDB 2.0.1 CLI; default thread budget.",
+    "extension_sha256": "886a8d54571aa74fc43d684ea278634f4e16452ccd5f2165823da5c3e1015cb3",
+    "runs": [
+      {
+        "backend": "native",
+        "peak_process_mib": 149.52,
+        "threads": null,
+        "workload": "standard",
+        "task": "regression",
+        "metric": "rmse",
+        "holdout_metric": 0.24056,
+        "train_seconds": 2.826,
+        "n_train": 160138,
+        "n_test": 39862,
+        "options": {
+          "n_estimators": "80",
+          "max_depth": "5",
+          "learning_rate": "0.1",
+          "min_samples_leaf": "20",
+          "max_bins": "64",
+          "reg_lambda": "1.0",
+          "subsample": "0.8",
+          "colsample_bytree": "0.8",
+          "seed": "7",
+          "backend": "native",
+          "task": "regression",
+          "feature_names": "cat_a,cat_b,cat_c,cat_d,x1,x2,x3,x4,x5,x6,x7,x8",
+          "categorical_features": "cat_a,cat_b,cat_c,cat_d"
+        },
+        "train_seconds_samples": [
+          2.826
+        ],
+        "peak_process_mib_samples": [
+          149.52
+        ],
+        "holdout_metric_samples": [
+          0.24056
+        ]
+      },
+      {
+        "backend": "native",
+        "peak_process_mib": 145.48,
+        "threads": null,
+        "workload": "standard",
+        "task": "binary",
+        "metric": "logloss",
+        "holdout_metric": 0.048164,
+        "train_seconds": 2.196,
+        "n_train": 160138,
+        "n_test": 39862,
+        "options": {
+          "n_estimators": "80",
+          "max_depth": "5",
+          "learning_rate": "0.1",
+          "min_samples_leaf": "20",
+          "max_bins": "64",
+          "reg_lambda": "1.0",
+          "subsample": "0.8",
+          "colsample_bytree": "0.8",
+          "seed": "7",
+          "backend": "native",
+          "task": "binary",
+          "feature_names": "cat_a,cat_b,cat_c,cat_d,x1,x2,x3,x4,x5,x6,x7,x8",
+          "categorical_features": "cat_a,cat_b,cat_c,cat_d"
+        },
+        "secondary_metric_name": "accuracy",
+        "secondary_metric": 0.993678,
+        "train_seconds_samples": [
+          2.196
+        ],
+        "peak_process_mib_samples": [
+          145.48
+        ],
+        "holdout_metric_samples": [
+          0.048164
+        ],
+        "secondary_metric_samples": [
+          0.993678
+        ]
+      }
+    ]
+  }
+}
