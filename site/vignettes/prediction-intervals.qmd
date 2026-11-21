@@ -1,7 +1,5 @@
 ---
 title: "Calibrated prediction intervals"
-execute:
-  enabled: false
 ---
 
 Fit three quantile models on training rows, freeze those fits, and estimate the calibration correction on a separate fold. The interval artifact stores the three fits, target miscoverage, calibration count, crossing policy, and correction in one JSON string. Scoring needs only the artifact and the input features.
@@ -10,7 +8,12 @@ Fit three quantile models on training rows, freeze those fits, and estimate the 
 
 This example uses row IDs to create three disjoint sets. The generated features and noise depend on separate hashes of each ID.
 
-```sql
+```{python}
+#| echo: false
+#| output: asis
+from _helpers.duckrun import show
+
+fit_and_calibrate = """
 LOAD duckboost;
 
 CREATE TABLE observations AS
@@ -44,6 +47,12 @@ SELECT duckboost_calibrate_interval(lo, med, hi, 0.10, y, [x]) AS model
 FROM fits, observations WHERE id BETWEEN 700 AND 899;
 
 CREATE TABLE holdout AS SELECT * FROM observations WHERE id >= 900;
+"""
+show(fit_and_calibrate + """
+SELECT round((model::JSON->>'correction')::DOUBLE, 5) AS correction,
+       (model::JSON->>'n_calibration')::INTEGER AS calibration_rows
+FROM intervals;
+""")
 ```
 
 If you tune hyperparameters or use early stopping, complete those decisions before opening the calibration fold. Each calibration group requires the same three fitted models and `alpha` on every row. Supply the lower quantile fit, the 0.5 fit, and the upper quantile fit in that order. Calibration rejects NULL targets and feature lists. A NULL feature value inside the list follows each fitted tree’s missing-value routing.
@@ -56,22 +65,28 @@ The returned fields are `lower` = \(L-c\), `median` = \(M\), and `upper` = \(U+c
 
 ## Score untouched rows and export
 
-```sql
+```{python}
+#| echo: false
+#| output: asis
+show("""
 WITH predictions AS (
     SELECT y, duckboost_predict_interval(model, [x]) AS band
     FROM holdout, intervals
 )
 SELECT count(*) AS test_rows,
+       count_if(y BETWEEN band.lower AND band.upper) AS covered,
        round(avg((y BETWEEN band.lower AND band.upper)::INTEGER), 4) AS coverage,
        round(avg(greatest(0, band.upper - band.lower)), 4) AS mean_width
 FROM predictions;
+""", setup=fit_and_calibrate)
 ```
-
-On DuckDB 2.0.1, the correction was 0.01470. The intervals covered 264 of the 300 test outcomes (88.0%) with a mean width of 1.4968.
 
 Save `intervals.model` in a DuckDB table or store its text in a model registry. A NULL artifact or feature list yields a NULL prediction. For extension-free deployment, generate the scoring query once and execute it wherever the raw numeric columns are available. The optional fourth argument lists identity columns to return alongside the three estimates.
 
-```sql
+```{python}
+#| echo: false
+#| output: asis
+show("""
 SET VARIABLE score_sql = (
     SELECT duckboost_interval_to_sql(model, 'holdout', ['x'], ['id'])
     FROM intervals
@@ -80,4 +95,5 @@ SET VARIABLE score_sql = (
 SELECT id, lower, median, upper
 FROM query(getvariable('score_sql'))
 ORDER BY id LIMIT 5;
+""", setup=fit_and_calibrate)
 ```
