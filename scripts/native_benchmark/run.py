@@ -20,6 +20,8 @@ import os
 import platform
 import subprocess
 import sys
+import statistics
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -54,7 +56,7 @@ def _ensure_lib_path() -> None:
     os.environ["LD_LIBRARY_PATH"] = ":".join(parts)
 
 
-def run_sql(sql: str, *, json_output: bool = False) -> str:
+def run_sql(sql: str, *, json_output: bool = False) -> tuple[str, float]:
     if not DUCKDB.is_file():
         raise FileNotFoundError(f"DuckDB binary not found at {DUCKDB}; run `make` first.")
     cmd = [str(DUCKDB), "-unsigned", "-bail"]
@@ -63,11 +65,18 @@ def run_sql(sql: str, *, json_output: bool = False) -> str:
     else:
         cmd.append("-box")
     cmd.extend(["-c", sql])
-    proc = subprocess.run(cmd, cwd=REPO, capture_output=True, text=True, check=False)
-    if proc.returncode != 0:
-        detail = (proc.stderr or proc.stdout).strip()
-        raise RuntimeError(f"duckdb failed:\n{detail}\n\nSQL:\n{sql}")
-    return proc.stdout
+    # wait4 reports the peak RSS of this CLI, independently of previous fits.
+    with tempfile.TemporaryFile(mode="w+") as stdout, tempfile.TemporaryFile(mode="w+") as stderr:
+        with subprocess.Popen(cmd, cwd=REPO, stdout=stdout, stderr=stderr) as proc:
+            _, status, usage = os.wait4(proc.pid, 0)
+            proc.returncode = os.waitstatus_to_exitcode(status)
+            stdout.seek(0)
+            output = stdout.read()
+            if proc.returncode:
+                stderr.seek(0)
+                raise RuntimeError(f"duckdb failed:\n{stderr.read() or output}\n\nSQL:\n{sql}")
+    rss_bytes = usage.ru_maxrss if sys.platform == "darwin" else usage.ru_maxrss * 1024
+    return output, round(rss_bytes / (1024 * 1024), 2)
 
 
 def parse_json_sets(text: str) -> list:
@@ -136,7 +145,25 @@ FROM bench;
 """
 
 
-def train_and_eval(backend: str, task: str, n_rows: int, seed: int) -> dict:
+def wide_skewed_sql(n_rows: int, seed: int) -> str:
+    # Each of the 32 numeric columns has a zero/one spike and a long right tail.
+    columns = []
+    for j in range(32):
+        h = f"hash(i, {j}, {seed})"
+        columns.append(f"(CASE WHEN {h} % 100 < 48 THEN 0 WHEN {h} % 100 < 96 "
+                       f"THEN 1 ELSE 2 + {h} % 10000 END)::DOUBLE")
+    return f"""
+CREATE TABLE wide AS SELECT i, [{', '.join(columns)}] AS features FROM range({n_rows}) t(i);
+CREATE TABLE bench_feat AS
+SELECT *, IF(hash(i, {seed}) % 5 = 0, 'test', 'train') AS split,
+       (3 * (features[1] > 0)::INT + 2 * (features[2] > 0)::INT +
+        (features[3] > 0)::INT + 0.2 * sin(i))::DOUBLE AS y_reg
+FROM wide;
+"""
+
+
+def train_and_eval(backend: str, task: str, n_rows: int, seed: int,
+                   threads: int | None = None, wide: bool = False) -> dict:
     options = dict(TRAIN_OPTIONS)
     options["backend"] = backend
     options["seed"] = str(seed)
@@ -151,11 +178,14 @@ def train_and_eval(backend: str, task: str, n_rows: int, seed: int) -> dict:
         metric = "rmse"
         secondary = None
 
-    options["feature_names"] = "cat_a,cat_b,cat_c,cat_d,x1,x2,x3,x4,x5,x6,x7,x8"
-    options["categorical_features"] = "cat_a,cat_b,cat_c,cat_d"
+    if not wide:
+        options["feature_names"] = "cat_a,cat_b,cat_c,cat_d,x1,x2,x3,x4,x5,x6,x7,x8"
+        options["categorical_features"] = "cat_a,cat_b,cat_c,cat_d"
 
     load = f"LOAD '{EXTENSION.as_posix()}';" if EXTENSION.is_file() else "LOAD duckboost;"
-    setup = load + "\n" + build_dataset_sql(n_rows, seed)
+    settings = f"SET threads={threads};" if threads else ""
+    dataset = wide_skewed_sql if wide else build_dataset_sql
+    setup = load + settings + "\n" + dataset(n_rows, seed)
 
     # One session: time only duckboost_train via epoch_ms, then evaluate holdout.
     sql = f"""
@@ -191,7 +221,8 @@ SELECT
 FROM bench_feat;
 """
 
-    sets = parse_json_sets(run_sql(sql, json_output=True))
+    output, peak_mib = run_sql(sql, json_output=True)
+    sets = parse_json_sets(output)
     train_ms = float(sets[0][0]["train_ms"])
     primary = float(sets[1][0]["primary_metric"])
     idx = 2
@@ -203,6 +234,9 @@ FROM bench_feat;
 
     result = {
         "backend": backend,
+        "peak_process_mib": peak_mib,
+        "threads": threads,
+        "workload": "wide-skewed" if wide else "standard",
         "task": task,
         "metric": metric,
         "holdout_metric": primary,
@@ -222,7 +256,17 @@ def main() -> int:
     parser.add_argument("--n-rows", type=int, default=200_000)
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--skip-lightgbm", action="store_true")
+    parser.add_argument("--threads", type=int)
+    parser.add_argument("--repeats", type=int, default=1)
+    parser.add_argument("--wide", action="store_true", help="Run the 32-feature skewed regression workload.")
+    parser.add_argument("--output", type=Path, default=RESULTS)
+    global DUCKDB, EXTENSION
+    parser.add_argument("--cli", type=Path, default=DUCKDB)
+    parser.add_argument("--extension", type=Path, default=EXTENSION)
     args = parser.parse_args()
+    if args.repeats < 1 or (args.threads is not None and args.threads < 1):
+        parser.error("--repeats and --threads must be positive")
+    DUCKDB, EXTENSION = args.cli.resolve(), args.extension.resolve()
 
     _ensure_lib_path()
     load = f"LOAD '{EXTENSION.as_posix()}';" if EXTENSION.is_file() else "LOAD duckboost;"
@@ -234,7 +278,7 @@ SELECT name, enabled FROM duckboost_build_info()
 WHERE name IN ('native_lightgbm_linked', 'native_xgboost_linked');
 """,
             json_output=True,
-        )
+        )[0]
     )[0]
     linked = {row["name"]: bool(row["enabled"]) for row in info}
     if not args.skip_lightgbm and not linked.get("native_lightgbm_linked"):
@@ -246,10 +290,19 @@ WHERE name IN ('native_lightgbm_linked', 'native_xgboost_linked');
         backends.append("lightgbm")
 
     runs = []
-    for task in ("regression", "binary"):
+    for task in (("regression",) if args.wide else ("regression", "binary")):
         for backend in backends:
             print(f"training task={task} backend={backend} n_rows={args.n_rows} ...", flush=True)
-            runs.append(train_and_eval(backend, task, args.n_rows, args.seed))
+            samples = [
+                train_and_eval(backend, task, args.n_rows, args.seed, args.threads, args.wide)
+                for _ in range(args.repeats)
+            ]
+            run = samples[0].copy()
+            run["train_seconds_samples"] = [sample["train_seconds"] for sample in samples]
+            run["peak_process_mib_samples"] = [sample["peak_process_mib"] for sample in samples]
+            run["train_seconds"] = statistics.median(run["train_seconds_samples"])
+            run["peak_process_mib"] = max(run["peak_process_mib_samples"])
+            runs.append(run)
             print(json.dumps(runs[-1], indent=2), flush=True)
 
     payload = {
@@ -267,12 +320,12 @@ WHERE name IN ('native_lightgbm_linked', 'native_xgboost_linked');
             "Synthetic data generated in DuckDB from range(n); ~20% holdout via hash(i, seed) % 5 = 0.",
             "Train wall time is epoch_ms(current_timestamp) around duckboost_train only (dataset build excluded).",
             "Holdout metrics use duckboost_evaluate_agg on the test split.",
-            "Categorical features cat_a..cat_d are marked for both backends.",
+            "Training includes sorting and binning. Peak process RSS also includes dataset creation and evaluation.",
             "Same hyperparameter map is passed to both trainers (mapped where the vendor bridge supports it).",
         ],
     }
-    RESULTS.write_text(json.dumps(payload, indent=2) + "\n")
-    print(f"wrote {RESULTS}", flush=True)
+    args.output.write_text(json.dumps(payload, indent=2) + "\n")
+    print(f"wrote {args.output}", flush=True)
     return 0
 
 
