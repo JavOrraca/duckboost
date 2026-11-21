@@ -22,6 +22,10 @@ SELECT extension_version FROM duckdb_extensions() WHERE extension_name = 'duckbo
 - Every SQL tree split emits its left and right children once. Compact binary probability exports reuse the score across all outputs. In a complete depth-eight tree, leaf literal occurrences fell from 6,561 to 256. Compact SQL shrank from 292,757 to 19,843 bytes. Median prepare time on an Apple M2 fell from 254 to 21 ms, and scoring 100,000 rows fell from 188 to 29 ms (three runs, one thread).
 - Numeric cuts now follow training observation ranks while retaining all midpoints on low-cardinality features. In the skew fixture the first split moved from 3.5 to 0.5, separating its 10,000 zeros from its 10,000 ones. Numeric bins use packed columns. Sibling histograms use parent subtraction and large feature scans use DuckDB’s thread budget with deterministic tie-breaking.
 
+### Measured training results
+
+Three repeats per configuration, Apple M2, DuckDB 2.0.1, seed 7. Times include binning. At eight threads the 200,000-row regression fit went from 5.508 to 2.831 seconds, and maximum process RSS from 152.27 to 147.50 MiB. Binary training went from 4.059 to 2.190 seconds and 155.48 to 147.73 MiB. Standard regression RMSE rose from 0.238832 to 0.240560, and binary log loss rose from 0.048162 to 0.048164. On the 50,000-row, 32-feature skewed workload, RMSE improved from 1.831095 to 0.142511 and training time fell from 1.571 to 0.396 seconds. [All revisions, thread counts and export timings](https://javorraca.github.io/duckboost/benchmarks.html)
+
 ### DuckDB 2.0.1 compatibility
 
 These fixes ship in [DuckDB 2.0.1 LTS](https://github.com/duckdb/duckdb/releases/tag/v2.0.1). Both sides of the duckboost benchmark use this engine.

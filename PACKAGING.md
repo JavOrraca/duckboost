@@ -156,8 +156,8 @@ Unreleased changes go under `## X.Y.Z (unreleased)` at the top of
 [`CHANGELOG.md`](CHANGELOG.md). To cut a release:
 
 1. In a PR, replace `(unreleased)` with the date, set `extension.version` in
-   `docs/community_extensions_description.yml`, and merge.
-2. Tag and publish:
+   `docs/community_extensions_description.yml`, and merge after the release checks pass. Verify the deployed Pages changelog and a changed example.
+2. Set `release_commit` to the tested full SHA on main and `release_notes_file` to the reviewed changelog entry with installation instructions. Tag and publish:
 
    ```bash
    git switch main && git pull

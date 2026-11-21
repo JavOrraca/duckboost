@@ -1,5 +1,5 @@
 ---
-title: "Native training benchmarks"
+title: "Training and SQL export benchmarks"
 ---
 
 ## duckboost 0.1.0 on DuckDB 2.0.1 LTS
@@ -69,3 +69,14 @@ for r in historical["runs"]:
 ```
 
 For worked SQL examples on real CSVs, see the [native trainer vignette](vignettes/native-trainer.qmd).
+
+## SQL export size and execution
+
+On the same Apple M2, each fixed ensemble scored 100,000 rows in a stock DuckDB 2.0.1 CLI with one thread. The table reports the median of three fresh processes. PREPARE includes parsing, binding, optimization and physical planning. EXECUTE computes the sum of predictions to force every row to be scored. All four before/after checksums matched. The baseline is the v0.0.5 implementation built for 2.0.1. [Reproduce the export benchmark](https://github.com/JavOrraca/duckboost/blob/v0.1.0/scripts/native_benchmark/sql_export.py)
+
+| Ensemble | Separate trees | SQL bytes, before → after | Leaf literals, before → after | Prepare (ms) | Execute (ms) |
+| --- | --- | ---: | ---: | ---: | ---: |
+| 1 × depth 8 | false | 292,757 → 19,843 | 6,561 → 256 | 254 → 21 | 188 → 29 |
+| 1 × depth 8 | true | 292,880 → 19,966 | 6,561 → 256 | 229 → 19 | 165 → 27 |
+| 8 × depth 5 | false | 85,850 → 19,218 | 1,944 → 256 | 84 → 24 | 79 → 42 |
+| 8 × depth 5 | true | 86,295 → 19,663 | 1,944 → 256 | 65 → 19 | 63 → 38 |
