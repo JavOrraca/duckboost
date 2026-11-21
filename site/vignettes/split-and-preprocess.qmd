@@ -433,6 +433,7 @@ A subscription model can learn its category dictionary and numeric medians durin
 ```{python}
 #| echo: false
 #| output: asis
+import json
 from _helpers.duckrun import parse_json_sets, run_sql
 
 raw_fit = """
@@ -452,11 +453,12 @@ SELECT duckboost_train_raw(spend, struct_pack(
 FROM subscriptions;
 """
 
-show(raw_fit + """
-SELECT model::JSON->'features'->0->'levels' AS plans,
-       model::JSON->'features'->1->'median' AS tenure_median
-FROM models;
-""")
+print("```sql", raw_fit.strip(), "```", sep=chr(10))
+stored = parse_json_sets(run_sql(raw_fit + "SELECT model FROM models;", json_output=True))[-1][0]["model"]
+fields = {f["name"]: f for f in json.loads(stored)["features"]}
+plans = ", ".join(fields["plan_type"]["levels"])
+print(f"The saved plan dictionary contains {plans}. The fitted tenure median is "
+      f"{fields['tenure_months']['median']:g} months.")
 ```
 
 Numeric inputs pass through as doubles. With `numeric_imputation = 'median'`, SQL `NULL`, NaN and infinities take the median of the finite training observations. If a feature has no finite training observations, the model uses the tree's missing direction. The default `'none'` sends missing numeric values directly to that branch. A `VARCHAR` feature uses a byte-sorted dictionary fitted on training rows. A missing string or an unfamiliar category also follows the tree's missing direction.

@@ -33,10 +33,11 @@ statement ok
 SET VARIABLE model = (SELECT model FROM reloaded);
 
 query I
-SELECT json_extract(getvariable('model'), '$.duckboost_version')::INT = 3
-   AND json_extract(getvariable('model'), '$.features[0].levels')::VARCHAR[] = ['basic','pro''s']
-   AND json_extract(getvariable('model'), '$.features[1].median')::DOUBLE = 5
-   AND json_extract(getvariable('model'), '$.features[2].median')::DOUBLE = 4;
+SELECT contains(m, '"duckboost_version":3,')
+   AND contains(m, '{"name":"plan_type","type":"VARCHAR","levels":["basic","pro''s"]}')
+   AND regexp_extract(m, '"name":"tenure_months","type":"INTEGER","median":([0-9.]+)', 1)::DOUBLE = 5
+   AND regexp_extract(m, '"name":"usage_30d","type":"DOUBLE","median":([0-9.]+)', 1)::DOUBLE = 4
+FROM (SELECT getvariable('model') AS m);
 ----
 true
 
@@ -81,23 +82,23 @@ endloop
 
 # No median exists for an entirely missing training feature; default passthrough also learns no median.
 query I
-SELECT (json_extract(m,'$.features[0].median')::VARCHAR = 'null' AND
-        json_extract(m,'$.features[1].levels')::VARCHAR[] = []::VARCHAR[])
+SELECT contains(m, '{"name":"x","type":"DOUBLE","median":null}')
+   AND contains(m, '{"name":"cat","type":"VARCHAR","levels":[]}')
 FROM (SELECT duckboost_train_raw(y, {'x':NULL::DOUBLE, 'cat':NULL::VARCHAR},
       MAP {'numeric_imputation':'median'}) AS m FROM obs);
 ----
 true
 
 query I
-SELECT json_extract_string(m,'$.numeric_imputation') = 'none' AND
-       json_extract(m,'$.features[0].median')::VARCHAR = 'null'
+SELECT contains(m, '"numeric_imputation":"none"') AND
+       contains(m, '{"name":"x","type":"DOUBLE","median":null}')
 FROM (SELECT duckboost_train_raw(y, {'x':usage_30d}) AS m FROM obs);
 ----
 true
 
 # Every distinct category identifies one row. The implicit validation split must exclude its categories.
 query I
-SELECT json_array_length(m, '$.features[0].levels') = 15
+SELECT len(string_split(regexp_extract(m, '"levels":\[([^]]*)\]', 1), ',')) = 15
 FROM (SELECT duckboost_train_raw(i, {'c': i::VARCHAR}, MAP {
   'early_stopping_rounds':'1','validation_fraction':'0.25','seed':'10','n_estimators':'2'
 }) AS m FROM range(20) t(i));
