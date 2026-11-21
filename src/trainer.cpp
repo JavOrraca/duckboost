@@ -114,38 +114,50 @@ GradStat SumStats(const vector<double> &gradients, const vector<double> &hessian
 	return sum;
 }
 
-//! Midpoints between distinct present values, thinned to at most max_bins quantiles.
-vector<double> CandidateThresholds(const vector<double> &sorted_present_values, idx_t max_bins) {
-	if (sorted_present_values.size() <= 1) {
-		return {};
-	}
-	vector<double> unique;
-	unique.reserve(sorted_present_values.size());
-	for (auto value : sorted_present_values) {
-		if (unique.empty() || value != unique.back()) {
-			unique.push_back(value);
-		}
-	}
-	if (unique.size() <= 1) {
-		return {};
-	}
+//! For the strict-less split, a separating threshold must be in (lower, upper].
+double SeparatingMidpoint(double lower, double upper) {
+	const double mid = (lower < 0) == (upper < 0) ? lower + (upper - lower) * 0.5 : lower * 0.5 + upper * 0.5;
+	return mid > lower && mid <= upper ? mid : upper;
+}
+
+vector<double> CandidateThresholds(const vector<double> &values, idx_t max_bins) {
 	vector<double> thresholds;
-	if (unique.size() <= max_bins + 1) {
-		thresholds.reserve(unique.size() - 1);
-		for (idx_t i = 0; i + 1 < unique.size(); i++) {
-			thresholds.push_back(0.5 * (unique[i] + unique[i + 1]));
-		}
+	if (values.size() <= 1) {
 		return thresholds;
 	}
-	for (idx_t b = 1; b <= max_bins; b++) {
-		double q = static_cast<double>(b) / static_cast<double>(max_bins + 1);
-		idx_t idx = static_cast<idx_t>(q * static_cast<double>(unique.size() - 1));
-		if (idx + 1 < unique.size()) {
-			thresholds.push_back(0.5 * (unique[idx] + unique[idx + 1]));
+	// Retain every boundary on low-cardinality features, regardless of frequency.
+	for (idx_t i = 1; i < values.size(); i++) {
+		if (values[i - 1] != values[i]) {
+			thresholds.push_back(SeparatingMidpoint(values[i - 1], values[i]));
+			if (thresholds.size() > max_bins) {
+				break;
+			}
 		}
 	}
-	std::sort(thresholds.begin(), thresholds.end());
-	thresholds.erase(std::unique(thresholds.begin(), thresholds.end()), thresholds.end());
+	if (thresholds.size() <= max_bins) {
+		return thresholds;
+	}
+	thresholds.clear();
+	// Rank observations, then advance past the whole tie before taking a midpoint.
+	idx_t next = 0;
+	for (idx_t b = 1; b <= max_bins; b++) {
+		const double q = static_cast<double>(b) / static_cast<double>(max_bins + 1);
+		const idx_t rank = static_cast<idx_t>(q * static_cast<double>(values.size() - 1));
+		if (rank < next) {
+			continue;
+		}
+		next = std::upper_bound(values.begin() + rank, values.end(), values[rank]) - values.begin();
+		if (next == values.size()) {
+			// A large tie at the maximum still needs a boundary on its lower side.
+			auto first = std::lower_bound(values.begin(), values.end(), values.back()) - values.begin();
+			auto cut = SeparatingMidpoint(values[first - 1], values[first]);
+			if (thresholds.empty() || thresholds.back() != cut) {
+				thresholds.push_back(cut);
+			}
+			break;
+		}
+		thresholds.push_back(SeparatingMidpoint(values[rank], values[next]));
+	}
 	return thresholds;
 }
 

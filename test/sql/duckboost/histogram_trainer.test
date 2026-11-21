@@ -19,7 +19,7 @@ FROM (
 	FROM iris
 );
 ----
-2.45	3.15
+2.45	3.4
 
 # Ordered target-statistic partitions can emit multi-category IN splits.
 statement ok
@@ -127,3 +127,24 @@ SELECT duckboost_train(y, [x1], MAP {'growth_policy': 'sideways'})
 FROM obl_train;
 ----
 <REGEX>:.*expected depthwise, lossguide, or oblivious.*
+
+# Frequent adjacent values stay separable in a high-cardinality tail. Validation features do not set cutpoints.
+statement ok
+CREATE TABLE skewed_fits AS
+WITH raw AS (
+	SELECT i, CASE WHEN i < 10000 THEN 0 WHEN i < 20000 THEN 1 ELSE i - 19998 END AS x
+	FROM range(20999) t(i)
+)
+SELECT shift, duckboost_train((x > 0)::DOUBLE, [x], false,
+	MAP {'n_estimators':'1', 'max_depth':'1', 'max_bins':'256', 'learning_rate':'1'}) FILTER (WHERE i < 20999) AS train_only,
+	duckboost_train((x > 0)::DOUBLE, [CASE WHEN i < 20999 THEN x ELSE x + shift END], i >= 20999,
+	MAP {'n_estimators':'1', 'max_depth':'1', 'max_bins':'256', 'learning_rate':'1'}) AS with_validation
+FROM (SELECT * FROM raw UNION ALL SELECT i, i FROM range(20999, 21999) t(i)), (VALUES (0), (-22000)) v(shift)
+GROUP BY shift;
+
+query III
+SELECT bool_and(train_only = with_validation), min(duckboost_predict(train_only, [1])) > 0.99,
+	max(duckboost_predict(train_only, [0])) < 0.01
+FROM skewed_fits;
+----
+true	true	true
