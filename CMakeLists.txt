@@ -13,8 +13,13 @@ project(DuckboostExtension)
 include_directories(include)
 
 set(EXTENSION_SOURCES
-    duckboost_extension.cpp src/model.cpp src/trainer.cpp src/native_train.cpp
-    src/import.cpp src/interval.cpp src/duckboost_functions.cpp)
+    duckboost_extension.cpp
+    src/model.cpp
+    src/trainer.cpp
+    src/native_train.cpp
+    src/import.cpp
+    src/interval.cpp
+    src/duckboost_functions.cpp)
 
 if(COMMAND build_extension_library)
   build_extension_library(${TARGET_NAME} ${EXTENSION_SOURCES})

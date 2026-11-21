@@ -327,7 +327,7 @@ void RegisterIntervalFunctions(ExtensionLoader &loader) {
 	AggregateFunction calibrate(
 	    "duckboost_calibrate_interval",
 	    {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::DOUBLE, LogicalType::DOUBLE,
-		 numeric_list},
+	     numeric_list},
 	    LogicalType::VARCHAR, AggregateFunction::StateSize<CalibrationState>,
 	    AggregateFunction::StateInitialize<CalibrationState, CalibrationOperation, AggregateDestructorType::LEGACY>,
 	    CalibrateUpdate, CalibrateCombine, CalibrateFinalize, AggregateFunction::NoClusterUpdate(),

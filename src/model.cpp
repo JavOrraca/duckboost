@@ -1528,7 +1528,8 @@ vector<double> BoostModel::PredictProba(const vector<double> &features) const {
 string ExportScoreExpression(const BoostModel &model, const vector<string> &columns) {
 	string expr = FormatDoubleSQL(model.ClassBias(0));
 	for (auto &tree : model.trees) {
-		expr += " + " + FormatDoubleSQL(model.learning_rate) + " * (" + TreeToSQL(tree, columns, 0, model.backend) + ")";
+		expr +=
+		    " + " + FormatDoubleSQL(model.learning_rate) + " * (" + TreeToSQL(tree, columns, 0, model.backend) + ")";
 	}
 	return expr;
 }
