@@ -21,10 +21,16 @@ CREATE TABLE fitted AS SELECT duckboost_train_raw(y, {
 }, is_validation, MAP {'numeric_imputation':'median', 'task':'binary', 'n_estimators':'3'}) AS model FROM obs;
 
 statement ok
-COPY fitted TO '{TEST_DIR}/raw_model.parquet';
+COPY fitted TO '{TEST_DIR}/raw_model.csv' (FORMAT CSV, HEADER);
 
 statement ok
-SET VARIABLE model = (SELECT model FROM read_parquet('{TEST_DIR}/raw_model.parquet'));
+CREATE TABLE reloaded(model VARCHAR);
+
+statement ok
+COPY reloaded FROM '{TEST_DIR}/raw_model.csv' (FORMAT CSV, HEADER);
+
+statement ok
+SET VARIABLE model = (SELECT model FROM reloaded);
 
 query I
 SELECT json_extract(getvariable('model'), '$.duckboost_version')::INT = 3
