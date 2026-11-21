@@ -127,7 +127,7 @@ SELECT * FROM query(getvariable('wrong_sql'));
 raw column 'tenure_months' expected INTEGER
 
 statement error
-SELECT duckboost_train_raw(y, {'date':current_date}) FROM obs;
+SELECT duckboost_train_raw(y, {'date':DATE '2026-11-21'}) FROM obs;
 ----
 must be numeric or VARCHAR
 
