@@ -256,6 +256,8 @@ BoostModel TrainModel(const vector<double> &y, const vector<vector<double>> &x, 
                       const vector<double> &weights = {}, const vector<bool> &is_validation = {});
 double EvaluateModel(const BoostModel &model, const vector<double> &y, const vector<vector<double>> &x,
                      const EvalOptions &options);
+//! Raw score expression for a single-output ensemble over already prepared feature columns.
+string ExportScoreExpression(const BoostModel &model, const vector<string> &columns);
 string ExportModelSQL(const BoostModel &model, const string &table_name, const vector<string> &feature_columns,
                       const SqlExportOptions &options);
 

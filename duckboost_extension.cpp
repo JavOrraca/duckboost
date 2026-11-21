@@ -7,6 +7,7 @@ namespace duckdb {
 
 static void LoadInternal(ExtensionLoader &loader) {
 	duckboost::RegisterDuckBoostFunctions(loader);
+	duckboost::RegisterIntervalFunctions(loader);
 }
 
 void DuckboostExtension::Load(ExtensionLoader &loader) {

@@ -29,8 +29,6 @@
 namespace duckdb {
 namespace duckboost {
 
-namespace {
-
 unordered_map<string, string> MapVectorToOptions(Vector &map_vector, idx_t row) {
 	unordered_map<string, string> options;
 	if (map_vector.GetType().id() != LogicalTypeId::MAP) {
@@ -114,6 +112,8 @@ vector<string> ReadVarcharList(Vector &list_vector, idx_t row) {
 	}
 	return values;
 }
+
+namespace {
 
 // Total order on doubles with every NaN equal to every other NaN and after all numbers, so std::sort stays well
 // defined when a feature is NaN.

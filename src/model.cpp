@@ -1525,6 +1525,14 @@ vector<double> BoostModel::PredictProba(const vector<double> &features) const {
 	return proba;
 }
 
+string ExportScoreExpression(const BoostModel &model, const vector<string> &columns) {
+	string expr = FormatDoubleSQL(model.ClassBias(0));
+	for (auto &tree : model.trees) {
+		expr += " + " + FormatDoubleSQL(model.learning_rate) + " * (" + TreeToSQL(tree, columns, 0, model.backend) + ")";
+	}
+	return expr;
+}
+
 string ExportModelSQL(const BoostModel &model, const string &table_name, const vector<string> &feature_columns,
                       const SqlExportOptions &options) {
 	if (table_name.empty()) {
@@ -1703,11 +1711,7 @@ string ExportModelSQL(const BoostModel &model, const string &table_name, const v
 	};
 
 	if (!options.separate_trees) {
-		string expr = FormatDoubleSQL(model.ClassBias(0));
-		for (auto &tree : model.trees) {
-			expr += " + " + FormatDoubleSQL(model.learning_rate) + " * (" + TreeToSQL(tree, columns, 0, model.backend) +
-			        ")";
-		}
+		auto expr = ExportScoreExpression(model, columns);
 		if (model.task == BoostTask::BINARY) {
 			expr = "1.0 / (1.0 + EXP(-(" + expr + ")))";
 		}
