@@ -56,6 +56,13 @@ def _ensure_lib_path() -> None:
     os.environ["LD_LIBRARY_PATH"] = ":".join(parts)
 
 
+def load_extension_sql() -> str:
+    if not EXTENSION.is_file():
+        return "LOAD duckboost;"
+    path = EXTENSION.as_posix().replace("'", "''")
+    return f"LOAD '{path}';"
+
+
 def run_sql(sql: str, *, json_output: bool = False) -> tuple[str, float | None]:
     if not DUCKDB.is_file():
         raise FileNotFoundError(f"DuckDB binary not found at {DUCKDB}; run `make` first.")
@@ -187,7 +194,7 @@ def train_and_eval(backend: str, task: str, n_rows: int, seed: int,
         options["feature_names"] = "cat_a,cat_b,cat_c,cat_d,x1,x2,x3,x4,x5,x6,x7,x8"
         options["categorical_features"] = "cat_a,cat_b,cat_c,cat_d"
 
-    load = f"LOAD '{EXTENSION.as_posix()}';" if EXTENSION.is_file() else "LOAD duckboost;"
+    load = load_extension_sql()
     settings = f"SET threads={threads};" if threads else ""
     dataset = wide_skewed_sql if wide else build_dataset_sql
     setup = load + settings + "\n" + dataset(n_rows, seed)
@@ -267,14 +274,18 @@ def main() -> int:
     parser.add_argument("--output", type=Path, default=RESULTS)
     global DUCKDB, EXTENSION
     parser.add_argument("--cli", type=Path, default=DUCKDB)
-    parser.add_argument("--extension", type=Path, default=EXTENSION)
+    parser.add_argument("--extension", type=Path)
     args = parser.parse_args()
     if args.repeats < 1 or (args.threads is not None and args.threads < 1):
         parser.error("--repeats and --threads must be positive")
-    DUCKDB, EXTENSION = args.cli.resolve(), args.extension.resolve()
+    DUCKDB = args.cli.resolve()
+    if args.extension is not None:
+        EXTENSION = args.extension.resolve()
+        if not EXTENSION.is_file():
+            parser.error(f"--extension does not exist: {EXTENSION}")
 
     _ensure_lib_path()
-    load = f"LOAD '{EXTENSION.as_posix()}';" if EXTENSION.is_file() else "LOAD duckboost;"
+    load = load_extension_sql()
     info = parse_json_sets(
         run_sql(
             f"""
