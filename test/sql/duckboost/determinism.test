@@ -64,3 +64,25 @@ query I
 SELECT count(*) FROM parallel_models p JOIN serial_models s USING (max_depth, learning_rate) WHERE p.model = s.model;
 ----
 6
+
+# Numeric feature blocks can execute concurrently. Tied features choose the same splits at both thread budgets.
+statement ok
+CREATE TABLE block_data AS
+SELECT sin(i/8.0) AS y, list_transform(range(12), j -> ((i * (j % 3 + 1)) % 257)::DOUBLE) AS features
+FROM range(8192) t(i);
+
+statement ok
+SET threads=1;
+
+statement ok
+CREATE TABLE serial_blocks AS
+SELECT duckboost_train(y, features, MAP {'n_estimators':'2','max_depth':'3'}) AS model FROM block_data;
+
+statement ok
+SET threads=4;
+
+query I
+SELECT (SELECT model FROM serial_blocks) = duckboost_train(y, features, MAP {'n_estimators':'2','max_depth':'3'})
+FROM block_data;
+----
+true

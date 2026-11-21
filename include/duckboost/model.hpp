@@ -15,6 +15,7 @@
 #include "duckdb/common/vector.hpp"
 
 namespace duckdb {
+class TaskScheduler;
 namespace duckboost {
 
 //! REFERENCE is the built-in native histogram trainer. JSON still serializes as "reference";
@@ -134,6 +135,8 @@ struct BoostModel {
 };
 
 struct TrainOptions {
+	//! Shared DuckDB scheduler of the calling aggregate; standalone fits run serially.
+	TaskScheduler *scheduler = nullptr;
 	BoostBackend backend = BoostBackend::REFERENCE;
 	BoostTask task = BoostTask::REGRESSION;
 	RegressionLoss loss = RegressionLoss::SQUARED_ERROR;

@@ -10,8 +10,13 @@
 #include "duckdb/main/extension/extension_loader.hpp"
 
 namespace duckdb {
+class AggregateFunctionSet;
+struct AggregateFinalizeInputData;
+class TaskScheduler;
 namespace duckboost {
 
+void ConfigureTrainingScheduler(AggregateFunctionSet &functions, ExtensionLoader &loader);
+TaskScheduler &GetTrainingScheduler(const AggregateFinalizeInputData &input);
 void RegisterDuckBoostFunctions(ExtensionLoader &loader);
 void RegisterIntervalFunctions(ExtensionLoader &loader);
 

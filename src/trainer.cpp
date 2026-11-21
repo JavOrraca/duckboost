@@ -4,10 +4,12 @@
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/numeric_utils.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/parallel/task_executor.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <numeric>
 #include <unordered_map>
@@ -229,6 +231,24 @@ struct HistogramEntry {
 
 using Histograms = vector<vector<HistogramEntry>>;
 
+//! Each task owns a disjoint range of feature positions. The caller participates in the scheduler.
+class FeatureBlockTask : public BaseExecutorTask {
+public:
+	FeatureBlockTask(TaskExecutor &executor, const std::function<void(idx_t)> &scan, idx_t begin, idx_t end)
+	    : BaseExecutorTask(executor), scan(scan), begin(begin), end(end) {
+	}
+	void ExecuteTask() override {
+		for (idx_t i = begin; i < end; i++) {
+			scan(i);
+		}
+	}
+
+private:
+	const std::function<void(idx_t)> &scan;
+	idx_t begin;
+	idx_t end;
+};
+
 //! A tree uses the same sampled feature set and derivatives at every node.
 struct TreeHistograms {
 	const vector<BinColumn> &columns;
@@ -238,12 +258,35 @@ struct TreeHistograms {
 	const vector<idx_t> &features;
 	const TrainOptions &options;
 
+	void ScanFeatures(idx_t row_count, const std::function<void(idx_t)> &scan) const {
+		// Amortize task creation on small leaves and respect the database-wide worker budget.
+		const idx_t work_blocks = row_count * features.size() / 32768;
+		const idx_t n = features.size();
+		const idx_t blocks = options.scheduler && work_blocks > 1
+		                         ? MinValue(n, MinValue(work_blocks, options.scheduler->NumberOfThreads()))
+		                         : 1;
+		if (blocks <= 1) {
+			for (idx_t i = 0; i < n; i++) {
+				scan(i);
+			}
+			return;
+		}
+		TaskExecutor executor(*options.scheduler);
+		vector<unique_ptr<BaseExecutorTask>> tasks;
+		for (idx_t i = 0; i < blocks; i++) {
+			tasks.push_back(make_uniq<FeatureBlockTask>(executor, scan, n * i / blocks, n * (i + 1) / blocks));
+		}
+		executor.ScheduleTasks(std::move(tasks));
+		executor.WorkOnTasks();
+	}
+
 	Histograms Build(const vector<idx_t> &rows) const {
 		Histograms result(binnings.size());
-		for (auto f : features) {
+		ScanFeatures(rows.size(), [&](idx_t i) {
+			const auto f = features[i];
 			const auto &thresholds = binnings[f].thresholds;
 			if (thresholds.empty()) {
-				continue;
+				return;
 			}
 			auto &hist = result[f];
 			hist.resize(thresholds.size() + 2);
@@ -256,7 +299,7 @@ struct TreeHistograms {
 				    }
 			    },
 			    columns[f]);
-		}
+		});
 		return result;
 	}
 
@@ -430,14 +473,23 @@ void FindBestHistogramSplit(SplitCandidate &best, idx_t feature, const vector<Hi
 
 SplitCandidate FindBestSplit(const vector<vector<double>> &x, const TreeHistograms &tree_hists,
                              const Histograms &histograms, const vector<idx_t> &rows, const GradStat &parent) {
-	SplitCandidate best;
-	for (auto f : tree_hists.features) {
+	vector<SplitCandidate> candidates(tree_hists.features.size());
+	tree_hists.ScanFeatures(rows.size(), [&](idx_t i) {
+		const auto f = tree_hists.features[i];
+		auto &best = candidates[i];
 		const auto &binning = tree_hists.binnings[f];
 		if (binning.categorical) {
 			FindBestCategoricalSplit(best, f, x, tree_hists.gradients, tree_hists.hessians, rows, parent,
 			                         tree_hists.options);
 		} else {
 			FindBestHistogramSplit(best, f, histograms[f], binning.thresholds, rows.size(), parent, tree_hists.options);
+		}
+	});
+	// Preserve the original feature order (and its exact-gain tie break) under every thread budget.
+	SplitCandidate best;
+	for (auto &candidate : candidates) {
+		if (candidate.gain > best.gain) {
+			best = std::move(candidate);
 		}
 	}
 	return best;
