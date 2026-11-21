@@ -260,9 +260,7 @@ string RawPipeline::ExportSQL(const string &table, const SqlExportOptions &optio
 	case_insensitive_set_t output_names = {options.prediction_alias};
 	auto keep = options.keep_columns;
 	StringUtil::Trim(keep);
-	if (keep == "*") {
-		projection = "unnest(s.input_row), ";
-	} else if (!keep.empty()) {
+	if (!keep.empty() && keep != "*") {
 		for (auto name : StringUtil::Split(keep, ',')) {
 			StringUtil::Trim(name);
 			if (name.empty() || !output_names.insert(name).second) {
@@ -272,7 +270,7 @@ string RawPipeline::ExportSQL(const string &table, const SqlExportOptions &optio
 			projection += "s.input_row." + id + " AS " + id + ", ";
 		}
 	}
-	projection += "s.prediction AS " + SQLQuotedIdentifier::ToString(options.prediction_alias);
+	string outputs = SQLQuotedIdentifier::ToString(options.prediction_alias) + " := s.prediction";
 	if (options.proba) {
 		idx_t width = model.task == BoostTask::BINARY ? 2 : model.n_classes;
 		for (idx_t i = 0; i < width; i++) {
@@ -280,9 +278,16 @@ string RawPipeline::ExportSQL(const string &table, const SqlExportOptions &optio
 			if (!output_names.insert(name).second) {
 				throw InvalidInputException("duckboost: output column collides with %s", name);
 			}
-			projection += ", s." + name;
+			outputs += ", " + name + " := s." + name;
 		}
 	}
+	// struct_concat rejects duplicate output field names at bind time, including
+	// collisions with passthrough fields that are known only in the deployment database.
+	auto output_struct = "struct_pack(" + outputs + ")";
+	if (keep == "*") {
+		output_struct = "struct_concat(s.input_row, " + output_struct + ")";
+	}
+	projection += "unnest(" + output_struct + ")";
 	return "WITH " + string(cte) + " AS (" + select + " FROM " + SQLQuotedIdentifier::ToString(table) + " AS r WHERE " +
 	       check + ") SELECT " + projection + " FROM (" + scores + ") AS s";
 }
@@ -407,18 +412,23 @@ void RawUpdate(Vector inputs[], AggregateInputData &, idx_t n_inputs, Vector &st
 	RequireNamedStruct(inputs[1].GetType());
 	auto has_mask = n_inputs > 2 && inputs[2].GetType().id() == LogicalTypeId::BOOLEAN;
 	auto has_options = inputs[n_inputs - 1].GetType().id() == LogicalTypeId::MAP;
+	auto constant_options = has_options && inputs[n_inputs - 1].GetVectorType() == VectorType::CONSTANT_VECTOR;
+	unordered_map<string, string> options;
+	if (constant_options && count) {
+		options = MapVectorToOptions(inputs[n_inputs - 1], 0);
+	}
 	UnifiedVectorFormat format;
 	state_vector.ToUnifiedFormat(format);
 	auto states = UnifiedVectorFormat::GetData<RawState *>(format);
 	for (idx_t i = 0; i < count; i++) {
 		auto &state = *states[format.sel->get_index(i)];
+		if (has_options && !constant_options) {
+			options = MapVectorToOptions(inputs[n_inputs - 1], i);
+		}
 		if (!state.data) {
 			state.data = new RawFit();
-			if (has_options) {
-				state.data->options = MapVectorToOptions(inputs[n_inputs - 1], i);
-			}
-		} else if (has_options && (i == 0 || inputs[n_inputs - 1].GetVectorType() != VectorType::CONSTANT_VECTOR) &&
-		           state.data->options != MapVectorToOptions(inputs[n_inputs - 1], i)) {
+			state.data->options = options;
+		} else if (has_options && state.data->options != options) {
 			throw InvalidInputException("duckboost: raw training options must be constant per fit");
 		}
 		auto target = inputs[0].GetValue(i);
@@ -476,24 +486,24 @@ void RawFinalize(Vector &state_vector, AggregateFinalizeInputData &input, Vector
 
 void RawPredict(DataChunk &args, ExpressionState &, Vector &result) {
 	RawPipeline model;
-	string cached_json;
+	UnifiedVectorFormat model_format;
+	args.data[0].ToUnifiedFormat(model_format);
+	auto texts = UnifiedVectorFormat::GetData<string_t>(model_format);
+	optional_idx previous;
 	vector<idx_t> indices;
-	bool valid = false;
 	auto writer = FlatVector::Writer<double>(result, args.size());
 	for (idx_t i = 0; i < args.size(); i++) {
-		auto json = args.data[0].GetValue(i);
+		auto index = model_format.sel->get_index(i);
 		auto row = args.data[1].GetValue(i);
-		if (json.IsNull() || row.IsNull()) {
+		if (!model_format.validity.RowIsValid(index) || row.IsNull()) {
 			writer.WriteNull();
 			continue;
 		}
-		auto &text = StringValue::Get(json);
-		if (!valid || cached_json != text) {
-			model = RawPipeline::FromJSON(text);
+		if (!previous.IsValid() || (previous.GetIndex() != index && texts[previous.GetIndex()] != texts[index])) {
+			model = RawPipeline::FromJSON(texts[index].GetString());
 			indices = model.MatchColumns(row.type());
-			cached_json = text;
-			valid = true;
 		}
+		previous = index;
 		writer.WriteValue(model.model.Predict(model.Encode(row, indices)));
 	}
 }

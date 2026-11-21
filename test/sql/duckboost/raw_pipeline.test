@@ -123,3 +123,33 @@ statement error
 SELECT duckboost_train_raw(y, {'date':current_date}) FROM obs;
 ----
 must be numeric or VARCHAR
+
+# Neither a table called encoded nor extra fields called r, f0 or input_row
+# may shadow the generated encoding or replace the original passthrough value.
+statement ok
+CREATE TABLE encoded AS SELECT *, 17 AS r, 83 AS f0, 'original' AS input_row FROM raw_score;
+
+statement ok
+SET VARIABLE reserved_sql = duckboost_to_sql_raw(getvariable('model'), 'encoded', MAP {'keep_columns':'*'});
+
+query I
+SELECT count(*) = 5 AND bool_and(r=17 AND f0=83 AND input_row='original' AND abs(p-prediction)<1e-12)
+FROM query(getvariable('reserved_sql')) JOIN native USING (id);
+----
+true
+
+statement ok
+CREATE TABLE already_scored AS SELECT *, -999 AS Prediction FROM raw_score;
+
+statement ok
+SET VARIABLE colliding_sql = duckboost_to_sql_raw(getvariable('model'),'already_scored',MAP {'keep_columns':'*'});
+
+statement error
+SELECT * FROM query(getvariable('colliding_sql'));
+----
+duplicate STRUCT entry
+
+statement error
+SELECT duckboost_train_raw(y, {'x':usage_30d}, MAP {'n_estimators':CASE WHEN id=1 THEN '1' ELSE '2' END}) FROM obs;
+----
+options must be constant per fit
