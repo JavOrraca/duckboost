@@ -17,6 +17,8 @@ namespace duckboost {
 
 namespace {
 
+constexpr double LIGHTGBM_ZERO_THRESHOLD = static_cast<double>(1e-35f);
+
 bool CategoryMatches(const TreeNode &node, double value) {
 	double casted = value;
 	if (node.category_cast == CategoryCast::LIGHTGBM) {
@@ -86,7 +88,7 @@ string QuoteIdent(const string &name) {
 	return "\"" + StringUtil::Replace(name, "\"", "\"\"") + "\"";
 }
 
-string TreeToSQL(const BoostTree &tree, const vector<string> &feature_columns, idx_t node_idx) {
+string TreeToSQL(const BoostTree &tree, const vector<string> &feature_columns, idx_t node_idx, BoostBackend backend) {
 	if (node_idx >= tree.nodes.size()) {
 		throw InvalidInputException("duckboost: invalid tree node index in SQL export");
 	}
@@ -98,25 +100,27 @@ string TreeToSQL(const BoostTree &tree, const vector<string> &feature_columns, i
 		throw InvalidInputException("duckboost: feature index out of range in SQL export");
 	}
 	auto feature = QuoteIdent(feature_columns[node.feature]);
-	auto left = TreeToSQL(tree, feature_columns, node.left);
-	auto right = TreeToSQL(tree, feature_columns, node.right);
-	auto missing_branch = node.default_left ? left : right;
-	if (node.compare == SplitCompare::IN || node.compare == SplitCompare::EQUAL) {
-		if (node.compare == SplitCompare::IN && node.categories.empty()) {
-			return "CASE WHEN " + feature + " IS NULL OR isnan(" + feature + ") THEN " + missing_branch + " ELSE " +
-			       left + " END";
+	if (backend == BoostBackend::LIGHTGBM) {
+		feature = "(CASE WHEN abs(" + feature + ") <= " + FormatDoubleSQL(LIGHTGBM_ZERO_THRESHOLD) + " THEN 0e0 ELSE " +
+		          feature + " END)";
+	}
+	auto missing = feature + " IS NULL OR isnan(" + feature + ")";
+	bool missing_left = node.default_left;
+	string comparison;
+	if (node.compare == SplitCompare::LESS) {
+		comparison = feature + " < " + FormatDoubleSQL(node.threshold);
+		if (node.missing_type == SplitMissingType::ZERO) {
+			missing += " OR " + feature + " = 0";
+		} else if (node.missing_type == SplitMissingType::NONE) {
+			missing_left = 0.0 < node.threshold;
 		}
-		return "CASE WHEN " + feature + " IS NULL OR isnan(" + feature + ") THEN " + missing_branch + " WHEN " +
-		       CategoryMembershipSQL(node, feature) + " THEN " + right + " ELSE " + left + " END";
+	} else {
+		comparison = "NOT (" + CategoryMembershipSQL(node, feature) + ")";
 	}
-	auto missing_test = feature + " IS NULL OR isnan(" + feature + ")";
-	if (node.missing_type == SplitMissingType::ZERO) {
-		missing_test += " OR " + feature + " = 0";
-	} else if (node.missing_type == SplitMissingType::NONE) {
-		missing_branch = 0.0 < node.threshold ? left : right;
-	}
-	return "CASE WHEN " + missing_test + " THEN " + missing_branch + " WHEN " + feature + " < " +
-	       FormatDoubleSQL(node.threshold) + " THEN " + left + " ELSE " + right + " END";
+	const auto goes_left =
+	    missing_left ? "(" + missing + ") OR (" + comparison + ")" : "NOT (" + missing + ") AND (" + comparison + ")";
+	return "CASE WHEN " + goes_left + " THEN " + TreeToSQL(tree, feature_columns, node.left, backend) + " ELSE " +
+	       TreeToSQL(tree, feature_columns, node.right, backend) + " END";
 }
 
 static constexpr uint64_t CTR_MAGIC_MULT = 0x4906ba494954cb65ULL;
@@ -1409,9 +1413,8 @@ vector<double> BoostModel::MaterializeFeatures(const vector<double> &features) c
 	// double against the float32 literal promoted to double — casting the feature
 	// to float32 first collapses distinct doubles around ±1e-35 onto the same bin.
 	if (backend == BoostBackend::LIGHTGBM) {
-		static constexpr double k_lgb_zero_threshold = static_cast<double>(1e-35f);
 		for (auto &value : materialized) {
-			if (!std::isnan(value) && std::fabs(value) <= k_lgb_zero_threshold) {
+			if (!std::isnan(value) && std::fabs(value) <= LIGHTGBM_ZERO_THRESHOLD) {
 				value = 0.0;
 			}
 		}
@@ -1637,7 +1640,7 @@ string ExportModelSQL(const BoostModel &model, const string &table_name, const v
 			string expr = FormatDoubleSQL(model.ClassBias(c));
 			for (idx_t round = 0; round < n_rounds; round++) {
 				expr += " + " + FormatDoubleSQL(model.learning_rate) + " * (" +
-				        TreeToSQL(model.trees[round * model.n_classes + c], columns, 0) + ")";
+				        TreeToSQL(model.trees[round * model.n_classes + c], columns, 0, model.backend) + ")";
 			}
 			auto score_name = "__duckboost_score_" + std::to_string(c);
 			score_names.push_back(score_name);
@@ -1702,17 +1705,26 @@ string ExportModelSQL(const BoostModel &model, const string &table_name, const v
 	if (!options.separate_trees) {
 		string expr = FormatDoubleSQL(model.ClassBias(0));
 		for (auto &tree : model.trees) {
-			expr += " + " + FormatDoubleSQL(model.learning_rate) + " * (" + TreeToSQL(tree, columns, 0) + ")";
+			expr += " + " + FormatDoubleSQL(model.learning_rate) + " * (" + TreeToSQL(tree, columns, 0, model.backend) +
+			        ")";
 		}
 		if (model.task == BoostTask::BINARY) {
 			expr = "1.0 / (1.0 + EXP(-(" + expr + ")))";
 		}
 		std::ostringstream result;
-		result << "SELECT " << select_prefix(true) << "(" << expr << ") AS " << alias;
 		if (options.proba) {
-			emit_binary_proba(result, expr);
+			// Keep a whole source row in its own namespace, even when it has a column
+			// named like our temporary probability. The tree expression occurs once.
+			auto probability = QuoteIdent("__duckboost_probability");
+			result << "SELECT " << (keep_all ? "__duckboost_row.*, " : select_prefix(false)) << probability << " AS "
+			       << alias;
+			emit_binary_proba(result, probability);
+			result << " FROM (SELECT " << (keep_all ? "__duckboost_src AS __duckboost_row, " : select_prefix(false))
+			       << "(" << expr << ") AS " << probability << " FROM (SELECT * FROM " << from_sql
+			       << ") AS __duckboost_src) AS __duckboost_score";
+		} else {
+			result << "SELECT " << select_prefix(true) << "(" << expr << ") AS " << alias << " FROM " << from_sql;
 		}
-		result << " FROM " << from_sql;
 		return result.str();
 	}
 
@@ -1725,7 +1737,7 @@ string ExportModelSQL(const BoostModel &model, const string &table_name, const v
 		}
 		auto tree_name = "__duckboost_tree_" + std::to_string(t);
 		tree_names.push_back(tree_name);
-		inner << "(" << TreeToSQL(model.trees[t], columns, 0) << ") AS " << QuoteIdent(tree_name);
+		inner << "(" << TreeToSQL(model.trees[t], columns, 0, model.backend) << ") AS " << QuoteIdent(tree_name);
 	}
 	if (model.trees.empty()) {
 		inner << FormatDoubleSQL(model.ClassBias(0)) << " AS " << QuoteIdent("__duckboost_base");
