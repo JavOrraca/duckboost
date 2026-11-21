@@ -9,7 +9,6 @@ duckdb_version=v2.0.1 with duckdb_commit set to the release SHA.
 from __future__ import annotations
 
 import argparse
-import re
 import sys
 from pathlib import Path
 
@@ -18,9 +17,17 @@ DEFAULT_EXTENSION = Path("build/release/extension/duckboost/duckboost.duckdb_ext
 DEFAULT_TAG = "v2.0.1"
 
 
-def printable_tail(data: bytes, nbytes: int = 8192) -> list[str]:
-    tail = data[-nbytes:]
-    return [m.decode("ascii") for m in re.findall(rb"[\x20-\x7e]{4,}", tail)]
+def engine_version(path: Path) -> str:
+    # DuckDB's 512-byte footer begins with eight 32-byte fields in reverse
+    # order, followed by the signature. Field 5 is the engine version.
+    with path.open("rb") as extension:
+        if extension.seek(0, 2) < 512:
+            return ""
+        extension.seek(-512, 2)
+        fields = [extension.read(32).rstrip(b"\0") for _ in range(8)]
+    if fields[7] != b"4" or fields[3] != b"CPP":
+        return ""
+    return fields[5].decode("ascii", errors="replace")
 
 
 def main() -> int:
@@ -44,16 +51,12 @@ def main() -> int:
         print("hint: run `make` / `make release` first", file=sys.stderr)
         return 2
 
-    data = args.extension.read_bytes()
-    strings = printable_tail(data)
-    if args.expect_tag not in strings:
+    actual = engine_version(args.extension)
+    if actual != args.expect_tag:
         print(
-            f"error: footer does not contain {args.expect_tag!r} in {args.extension}",
+            f"error: {args.extension} has engine footer {actual!r}, expected {args.expect_tag!r}",
             file=sys.stderr,
         )
-        print("nearby footer strings:", file=sys.stderr)
-        for item in strings[-20:]:
-            print(f"  {item}", file=sys.stderr)
         print(
             "hint: local builds need DUCKDB_VERSION / OVERRIDE_GIT_DESCRIBE set "
             "(see Makefile).",
