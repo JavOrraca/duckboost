@@ -79,7 +79,7 @@ SELECT duckboost_import('lightgbm', (SELECT model FROM models)) LIKE '%"backend"
 true
 
 # Default max_bins (256) considers every gap in a small column: iris petal length separates setosa at 2.45.
-# With max_bins = 16 the quantile thresholds skip that gap.
+# With max_bins = 16 the training observation ranks skip that gap; the selected midpoint is 3.4.
 statement ok
 CREATE TABLE iris AS SELECT (species = 'setosa')::DOUBLE AS y, [petal_length] AS features FROM read_csv('data/iris.csv');
 
@@ -94,4 +94,4 @@ FROM (
 	FROM iris
 );
 ----
-2.45	3.15
+2.45	3.4

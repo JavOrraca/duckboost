@@ -824,41 +824,41 @@ void BuildInfoFunction(ClientContext &, TableFunctionInput &data, DataChunk &out
 	static const BuildInfoRow props[] = {
 	    {"DUCKBOOST_WITH_XGBOOST",
 #if defined(DUCKBOOST_WITH_XGBOOST)
-		 true,
+	     true,
 #else
-		 false,
+	     false,
 #endif
-		 "XGBoost native trainer compile flag"},
+	     "XGBoost native trainer compile flag"},
 	    {"DUCKBOOST_WITH_LIGHTGBM",
 #if defined(DUCKBOOST_WITH_LIGHTGBM)
-		 true,
+	     true,
 #else
-		 false,
+	     false,
 #endif
-		 "LightGBM native trainer compile flag"},
+	     "LightGBM native trainer compile flag"},
 	    {"DUCKBOOST_WITH_CATBOOST",
 #if defined(DUCKBOOST_WITH_CATBOOST)
-		 true,
+	     true,
 #else
-		 false,
+	     false,
 #endif
-		 "CatBoost native trainer compile flag"},
+	     "CatBoost native trainer compile flag"},
 	    {"DUCKBOOST_NATIVE_STUB",
 #if defined(DUCKBOOST_NATIVE_STUB)
-		 true,
+	     true,
 #else
-		 false,
+	     false,
 #endif
-		 "Native trainers compiled as stubs (no vendor link)"},
+	     "Native trainers compiled as stubs (no vendor link)"},
 	    {"native_xgboost_compiled", NativeTrainerCompiled(BoostBackend::XGBOOST), "NativeTrainerCompiled(xgboost)"},
 	    {"native_lightgbm_compiled", NativeTrainerCompiled(BoostBackend::LIGHTGBM), "NativeTrainerCompiled(lightgbm)"},
 	    {"native_catboost_compiled", NativeTrainerCompiled(BoostBackend::CATBOOST), "NativeTrainerCompiled(catboost)"},
 	    {"native_xgboost_linked", NativeTrainerLinked(BoostBackend::XGBOOST),
-		 "NativeTrainerLinked(xgboost) — C API train bridge"},
+	     "NativeTrainerLinked(xgboost) — C API train bridge"},
 	    {"native_lightgbm_linked", NativeTrainerLinked(BoostBackend::LIGHTGBM),
-		 "NativeTrainerLinked(lightgbm) — C API train bridge"},
+	     "NativeTrainerLinked(lightgbm) — C API train bridge"},
 	    {"native_catboost_linked", NativeTrainerLinked(BoostBackend::CATBOOST),
-		 "Always false: CatBoost has no public train C API"},
+	     "Always false: CatBoost has no public train C API"},
 	};
 	static constexpr idx_t prop_count = sizeof(props) / sizeof(props[0]);
 	if (state.offset >= prop_count) {

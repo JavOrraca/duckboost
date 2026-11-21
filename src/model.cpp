@@ -100,7 +100,9 @@ string TreeToSQL(const BoostTree &tree, const vector<string> &feature_columns, i
 		throw InvalidInputException("duckboost: feature index out of range in SQL export");
 	}
 	auto feature = QuoteIdent(feature_columns[node.feature]);
-	if (backend == BoostBackend::LIGHTGBM) {
+	// Truncation already maps tiny categorical values to zero.
+	if (backend == BoostBackend::LIGHTGBM &&
+	    (node.compare == SplitCompare::LESS || node.category_cast != CategoryCast::LIGHTGBM)) {
 		feature = "(CASE WHEN abs(" + feature + ") <= " + FormatDoubleSQL(LIGHTGBM_ZERO_THRESHOLD) + " THEN 0e0 ELSE " +
 		          feature + " END)";
 	}
