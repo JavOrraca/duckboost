@@ -297,10 +297,10 @@ struct RawFit {
 	vector<RawRow> rows;
 	unordered_map<string, string> options;
 
-	RawPipeline Fit();
+	RawPipeline Fit(TaskScheduler &scheduler);
 };
 
-RawPipeline RawFit::Fit() {
+RawPipeline RawFit::Fit(TaskScheduler &scheduler) {
 	RawPipeline pipeline;
 	auto train_options = options;
 	for (auto it = train_options.begin(); it != train_options.end(); ++it) {
@@ -315,6 +315,7 @@ RawPipeline RawFit::Fit() {
 		}
 	}
 	auto training = TrainOptions::FromMap(train_options);
+	training.scheduler = &scheduler;
 	if (!training.feature_names.empty() || !training.categorical_features.empty()) {
 		throw InvalidInputException("duckboost: raw feature names and categorical features come from the named STRUCT");
 	}
@@ -457,7 +458,7 @@ void RawCombine(Vector &source, Vector &target, AggregateInputData &, idx_t coun
 	}
 }
 
-void RawFinalize(Vector &state_vector, AggregateFinalizeInputData &, Vector &result, idx_t count, idx_t offset) {
+void RawFinalize(Vector &state_vector, AggregateFinalizeInputData &input, Vector &result, idx_t count, idx_t offset) {
 	UnifiedVectorFormat format;
 	state_vector.ToUnifiedFormat(format);
 	auto states = UnifiedVectorFormat::GetData<RawState *>(format);
@@ -468,7 +469,7 @@ void RawFinalize(Vector &state_vector, AggregateFinalizeInputData &, Vector &res
 			writer.WriteNull();
 			continue;
 		}
-		auto model = state.data->Fit();
+		auto model = state.data->Fit(GetTrainingScheduler(input));
 		writer.WriteValue(StringVector::AddString(result, model.ToJSON()));
 	}
 }
@@ -544,6 +545,7 @@ void RegisterRawFunctions(ExtensionLoader &loader) {
 			train.AddFunction(fn);
 		}
 	}
+	ConfigureTrainingScheduler(train, loader);
 	loader.RegisterFunction(train);
 	ScalarFunction predict("duckboost_predict_raw", {LogicalType::VARCHAR, LogicalType::ANY}, LogicalType::DOUBLE,
 	                       RawPredict);
