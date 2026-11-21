@@ -1726,7 +1726,9 @@ string ExportModelSQL(const BoostModel &model, const string &table_name, const v
 			result << "SELECT " << (keep_all ? "__duckboost_row.*, " : select_prefix(false)) << probability << " AS "
 			       << alias;
 			emit_binary_proba(result, probability);
-			result << " FROM (SELECT " << (keep_all ? "__duckboost_src AS __duckboost_row, " : select_prefix(false))
+			result << " FROM (SELECT "
+			       << (keep_all ? "struct_pack(*COLUMNS(__duckboost_src.*)) AS __duckboost_row, "
+			                    : select_prefix(false))
 			       << "(" << expr << ") AS " << probability << " FROM (SELECT * FROM " << from_sql
 			       << ") AS __duckboost_src) AS __duckboost_score";
 		} else {

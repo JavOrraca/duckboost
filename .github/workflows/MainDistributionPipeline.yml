@@ -29,7 +29,7 @@ jobs:
     name: Build extension binaries
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@43dae9ec2b843bf9c6200ea4bbe5ad703cd01f77
     with:
-      # Version label + deploy path (community DUCKDB_LATEST_STABLE).
+      # Engine ABI label for the release artifacts.
       duckdb_version: v2.0.1
       # Exact checkout SHA for the v2.0.1 release tag.
       duckdb_commit: 8d78114e90a53823803660bf821f6073ac87da8c

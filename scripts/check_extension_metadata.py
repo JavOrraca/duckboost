@@ -2,8 +2,8 @@
 """Assert a built .duckdb_extension footer carries the expected DuckDB version.
 
 DuckDB appends fixed-width metadata fields near the end of the binary. Local
-`make` labels with DUCKDB_COMMUNITY_TAG (v2.0.1). Community CI passes
-duckdb_version=v2.0.1 with duckdb_commit set to the release SHA.
+`make` labels with DUCKDB_COMMUNITY_TAG (v2.0.1). The project distribution workflow
+uses the same engine label and its exact release SHA.
 """
 
 from __future__ import annotations

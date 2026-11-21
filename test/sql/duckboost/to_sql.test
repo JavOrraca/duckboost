@@ -300,3 +300,20 @@ true
 endloop
 
 endloop
+
+# A passthrough column can share the internal source alias.
+statement ok
+CREATE TABLE named_source AS SELECT id AS __duckboost_src, x FROM bin_score;
+
+statement ok
+SET VARIABLE named_source_sql = (
+    SELECT duckboost_to_sql(model, 'named_source', ['x'], MAP {'separate_trees':'false','keep_columns':'*','proba':'true'})
+    FROM bin_models
+);
+
+query I
+SELECT count(*) = 20 AND bool_and(abs(p.prediction - duckboost_predict(m.model,[p.x])) < 1e-12)
+    AND count(DISTINCT p.__duckboost_src) = 20
+FROM query(getvariable('named_source_sql')) p, bin_models m;
+----
+true
