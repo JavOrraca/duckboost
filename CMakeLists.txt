@@ -19,6 +19,7 @@ set(EXTENSION_SOURCES
     src/native_train.cpp
     src/import.cpp
     src/interval.cpp
+    src/raw_pipeline.cpp
     src/duckboost_functions.cpp)
 
 if(COMMAND build_extension_library)
@@ -65,6 +66,8 @@ macro(duckboost_link_lib LIB)
     endif()
   endforeach()
 endmacro()
+
+duckboost_link_lib(duckdb_yyjson)
 
 if(DUCKBOOST_WITH_XGBOOST)
   duckboost_compile_def(DUCKBOOST_WITH_XGBOOST=1)

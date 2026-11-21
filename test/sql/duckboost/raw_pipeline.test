@@ -1,0 +1,125 @@
+# name: test/sql/duckboost/raw_pipeline.test
+# description: fitted preprocessing, save/load and pure SQL raw scoring
+# group: [duckboost]
+
+require duckboost
+
+statement ok
+CREATE TABLE obs AS
+SELECT * FROM (VALUES
+ (0, 'basic', 2, 1.0::DOUBLE, 0.0, false),
+ (1, 'basic', 4, 4.0, 0.0, false),
+ (2, 'pro''s', NULL, 8.0, 1.0, false),
+ (3, 'pro''s', 6, NULL, 1.0, false),
+ (4, NULL, 8, 'NaN'::DOUBLE, 1.0, false),
+ (5, 'validation only', 1000, 500.0, 0.0, true)
+) AS t(id, plan_type, tenure_months, usage_30d, y, is_validation);
+
+statement ok
+CREATE TABLE fitted AS SELECT duckboost_train_raw(y, {
+ 'plan_type': plan_type, 'tenure_months': tenure_months, 'usage_30d': usage_30d
+}, is_validation, MAP {'numeric_imputation':'median', 'task':'binary', 'n_estimators':'3'}) AS model FROM obs;
+
+statement ok
+COPY fitted TO '{TEST_DIR}/raw_model.parquet';
+
+statement ok
+SET VARIABLE model = (SELECT model FROM read_parquet('{TEST_DIR}/raw_model.parquet'));
+
+query I
+SELECT json_extract(getvariable('model'), '$.duckboost_version')::INT = 3
+   AND json_extract(getvariable('model'), '$.features[0].levels')::VARCHAR[] = ['basic','pro''s']
+   AND json_extract(getvariable('model'), '$.features[1].median')::DOUBLE = 5
+   AND json_extract(getvariable('model'), '$.features[2].median')::DOUBLE = 4;
+----
+true
+
+# A whole table row may include pass-through fields and a different feature order.
+statement ok
+CREATE TABLE raw_score AS SELECT * FROM (VALUES
+ (107, 4.0::DOUBLE, 5, 'basic'),
+ (103, 2.0, 7, 'pro''s'),
+ (105, NULL, NULL, 'never seen'),
+ (104, 4.0, 5, NULL),
+ (106, 'Infinity'::DOUBLE, NULL, 'validation only')
+) AS r(id, usage_30d, tenure_months, plan_type);
+
+statement ok
+CREATE TABLE native AS SELECT id, duckboost_predict_raw(getvariable('model'), r) AS p FROM raw_score r;
+
+query I
+SELECT count(DISTINCT p) = 1 FROM native WHERE id IN (104,105,106);
+----
+true
+
+query I
+SELECT max(p) - min(p) > .01 FROM native;
+----
+true
+
+foreach mode false true
+
+statement ok
+SET VARIABLE q = duckboost_to_sql_raw(getvariable('model'), 'raw_score', MAP {
+ 'keep_columns':'*','prediction_alias':'estimate','proba':'true','separate_trees':'{mode}'
+});
+
+query I
+SELECT count(*) = 5 AND max(abs(p - estimate)) < 1e-12 AND max(abs(p - proba_1)) < 1e-12
+   AND max(abs(1-p - proba_0)) < 1e-12 AND count(usage_30d) = 4
+FROM query(getvariable('q')) JOIN native USING (id);
+----
+true
+
+endloop
+
+# No median exists for an entirely missing training feature; default passthrough also learns no median.
+query I
+SELECT (json_extract(m,'$.features[0].median')::VARCHAR = 'null' AND
+        json_extract(m,'$.features[1].levels')::VARCHAR[] = []::VARCHAR[])
+FROM (SELECT duckboost_train_raw(y, {'x':NULL::DOUBLE, 'cat':NULL::VARCHAR},
+      MAP {'numeric_imputation':'median'}) AS m FROM obs);
+----
+true
+
+query I
+SELECT json_extract_string(m,'$.numeric_imputation') = 'none' AND
+       json_extract(m,'$.features[0].median')::VARCHAR = 'null'
+FROM (SELECT duckboost_train_raw(y, {'x':usage_30d}) AS m FROM obs);
+----
+true
+
+# Every distinct category identifies one row. The implicit validation split must exclude its categories.
+query I
+SELECT json_array_length(m, '$.features[0].levels') = 15
+FROM (SELECT duckboost_train_raw(i, {'c': i::VARCHAR}, MAP {
+  'early_stopping_rounds':'1','validation_fraction':'0.25','seed':'10','n_estimators':'2'
+}) AS m FROM range(20) t(i));
+----
+true
+
+statement error
+SELECT duckboost_predict_raw(getvariable('model'), {'plan_type':'basic', 'usage_30d':4::DOUBLE});
+----
+missing required raw column 'tenure_months'
+
+statement error
+SELECT duckboost_predict_raw(getvariable('model'), {'plan_type':42, 'usage_30d':2::DOUBLE, 'tenure_months':1});
+----
+raw column 'plan_type' expected VARCHAR
+
+statement ok
+CREATE TABLE wrong AS SELECT id, plan_type, usage_30d, tenure_months::VARCHAR AS tenure_months FROM raw_score;
+
+statement ok
+SET VARIABLE wrong_sql = duckboost_to_sql_raw(getvariable('model'),'wrong');
+
+statement error
+SELECT * FROM query(getvariable('wrong_sql'));
+----
+raw column 'tenure_months' expected INTEGER
+
+statement error
+SELECT duckboost_train_raw(y, {'date':current_date}) FROM obs;
+----
+must be numeric or VARCHAR
