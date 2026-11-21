@@ -10,9 +10,9 @@
 #include <cstdint>
 #include <limits>
 #include <numeric>
-#include <queue>
 #include <unordered_map>
 #include <utility>
+#include <variant>
 
 namespace duckdb {
 namespace duckboost {
@@ -54,7 +54,7 @@ struct FeatureBinning {
 	bool categorical = false;
 };
 
-static constexpr uint32_t MISSING_BIN = std::numeric_limits<uint32_t>::max();
+using BinColumn = std::variant<vector<uint8_t>, vector<uint16_t>, vector<uint32_t>, vector<uint64_t>>;
 
 struct SimpleRng {
 	uint64_t state;
@@ -184,25 +184,98 @@ vector<FeatureBinning> BuildFeatureBinnings(const vector<vector<double>> &x, con
 	return binnings;
 }
 
-vector<vector<uint32_t>> AssignFeatureBins(const vector<vector<double>> &x, const vector<FeatureBinning> &binnings) {
-	vector<vector<uint32_t>> bins(x.size(), vector<uint32_t>(binnings.size(), MISSING_BIN));
-	for (idx_t row = 0; row < x.size(); row++) {
-		for (idx_t f = 0; f < binnings.size(); f++) {
-			if (binnings[f].categorical) {
-				continue;
-			}
-			auto value = x[row][f];
-			if (IsMissing(value) || binnings[f].thresholds.empty()) {
-				bins[row][f] = MISSING_BIN;
-				continue;
-			}
-			bins[row][f] = static_cast<uint32_t>(
-			    std::upper_bound(binnings[f].thresholds.begin(), binnings[f].thresholds.end(), value) -
-			    binnings[f].thresholds.begin());
+template <typename ID>
+vector<ID> PackColumn(const vector<vector<double>> &x, idx_t feature, const vector<double> &thresholds) {
+	vector<ID> ids;
+	ids.reserve(x.size());
+	const auto missing = static_cast<ID>(thresholds.size() + 1);
+	for (const auto &row : x) {
+		const auto value = row[feature];
+		const auto bin =
+		    IsMissing(value)
+		        ? missing
+		        : static_cast<ID>(std::upper_bound(thresholds.begin(), thresholds.end(), value) - thresholds.begin());
+		ids.push_back(bin);
+	}
+	return ids;
+}
+
+vector<BinColumn> AssignFeatureBins(const vector<vector<double>> &x, const vector<FeatureBinning> &binnings) {
+	vector<BinColumn> columns(binnings.size());
+	for (idx_t f = 0; f < binnings.size(); f++) {
+		const auto &thresholds = binnings[f].thresholds;
+		if (thresholds.empty()) {
+			continue;
+		}
+		// IDs 0..thresholds.size() are present bins. The last ID is reserved for missing.
+		const idx_t missing = thresholds.size() + 1;
+		if (missing <= UINT8_MAX) {
+			columns[f] = PackColumn<uint8_t>(x, f, thresholds);
+		} else if (missing <= UINT16_MAX) {
+			columns[f] = PackColumn<uint16_t>(x, f, thresholds);
+		} else if (missing <= UINT32_MAX) {
+			columns[f] = PackColumn<uint32_t>(x, f, thresholds);
+		} else {
+			columns[f] = PackColumn<uint64_t>(x, f, thresholds);
 		}
 	}
-	return bins;
+	return columns;
 }
+
+struct HistogramEntry {
+	GradStat stat;
+	idx_t count = 0;
+};
+
+using Histograms = vector<vector<HistogramEntry>>;
+
+//! A tree uses the same sampled feature set and derivatives at every node.
+struct TreeHistograms {
+	const vector<BinColumn> &columns;
+	const vector<FeatureBinning> &binnings;
+	const vector<double> &gradients;
+	const vector<double> &hessians;
+	const vector<idx_t> &features;
+	const TrainOptions &options;
+
+	Histograms Build(const vector<idx_t> &rows) const {
+		Histograms result(binnings.size());
+		for (auto f : features) {
+			const auto &thresholds = binnings[f].thresholds;
+			if (thresholds.empty()) {
+				continue;
+			}
+			auto &hist = result[f];
+			hist.resize(thresholds.size() + 2);
+			std::visit(
+			    [&](const auto &ids) {
+				    for (auto row : rows) {
+					    auto &bin = hist[ids[row]];
+					    bin.stat.Add(gradients[row], hessians[row]);
+					    bin.count++;
+				    }
+			    },
+			    columns[f]);
+		}
+		return result;
+	}
+
+	void Children(Histograms parent, const vector<idx_t> &left_rows, const vector<idx_t> &right_rows, Histograms &left,
+	              Histograms &right) const {
+		const bool scan_left = left_rows.size() <= right_rows.size();
+		auto &small = scan_left ? left : right;
+		auto &large = scan_left ? right : left;
+		small = Build(scan_left ? left_rows : right_rows);
+		for (auto f : features) {
+			for (idx_t b = 0; b < parent[f].size(); b++) {
+				auto &bin = parent[f][b];
+				bin.count -= small[f][b].count;
+				bin.stat = bin.count ? bin.stat.Without(small[f][b].stat) : GradStat {};
+			}
+		}
+		large = std::move(parent);
+	}
+};
 
 bool ChildFeasible(const GradStat &stat, idx_t row_count, const TrainOptions &options) {
 	return row_count >= options.min_samples_leaf && stat.h >= options.min_child_weight;
@@ -321,41 +394,23 @@ void FindBestCategoricalSplit(SplitCandidate &best, idx_t feature, const vector<
 	}
 }
 
-void FindBestHistogramSplit(SplitCandidate &best, idx_t feature, const vector<vector<uint32_t>> &bins,
-                            const vector<double> &thresholds, const vector<double> &gradients,
-                            const vector<double> &hessians, const vector<idx_t> &rows, const GradStat &parent,
+void FindBestHistogramSplit(SplitCandidate &best, idx_t feature, const vector<HistogramEntry> &hist,
+                            const vector<double> &thresholds, idx_t row_count, const GradStat &parent,
                             const TrainOptions &options) {
 	if (thresholds.empty()) {
 		return;
 	}
-	const idx_t n_bins = thresholds.size() + 1;
-	vector<GradStat> hist(n_bins);
-	vector<idx_t> hist_count(n_bins, 0);
-	GradStat missing_stat;
-	idx_t missing_count = 0;
-	idx_t present_count = 0;
-	for (auto row : rows) {
-		auto bin = bins[row][feature];
-		if (bin == MISSING_BIN) {
-			missing_stat.Add(gradients[row], hessians[row]);
-			missing_count++;
-			continue;
-		}
-		if (bin >= n_bins) {
-			continue;
-		}
-		hist[bin].Add(gradients[row], hessians[row]);
-		hist_count[bin]++;
-		present_count++;
-	}
+	const auto &missing_stat = hist.back().stat;
+	const auto missing_count = hist.back().count;
+	const auto present_count = row_count - missing_count;
 	if (present_count < 2) {
 		return;
 	}
 	GradStat left_present;
 	idx_t left_count = 0;
-	for (idx_t b = 0; b + 1 < n_bins; b++) {
-		left_present.Add(hist[b]);
-		left_count += hist_count[b];
+	for (idx_t b = 0; b < thresholds.size(); b++) {
+		left_present.Add(hist[b].stat);
+		left_count += hist[b].count;
 		auto right_count = present_count - left_count;
 		if (left_count == 0 || right_count == 0) {
 			continue;
@@ -373,20 +428,16 @@ void FindBestHistogramSplit(SplitCandidate &best, idx_t feature, const vector<ve
 	}
 }
 
-SplitCandidate FindBestSplit(const vector<vector<double>> &x, const vector<vector<uint32_t>> &bins,
-                             const vector<FeatureBinning> &binnings, const vector<double> &gradients,
-                             const vector<double> &hessians, const vector<idx_t> &rows,
-                             const vector<idx_t> &feature_subset, const TrainOptions &options) {
+SplitCandidate FindBestSplit(const vector<vector<double>> &x, const TreeHistograms &tree_hists,
+                             const Histograms &histograms, const vector<idx_t> &rows, const GradStat &parent) {
 	SplitCandidate best;
-	if (rows.size() < 2 * options.min_samples_leaf) {
-		return best;
-	}
-	auto parent = SumStats(gradients, hessians, rows);
-	for (auto f : feature_subset) {
-		if (binnings[f].categorical) {
-			FindBestCategoricalSplit(best, f, x, gradients, hessians, rows, parent, options);
+	for (auto f : tree_hists.features) {
+		const auto &binning = tree_hists.binnings[f];
+		if (binning.categorical) {
+			FindBestCategoricalSplit(best, f, x, tree_hists.gradients, tree_hists.hessians, rows, parent,
+			                         tree_hists.options);
 		} else {
-			FindBestHistogramSplit(best, f, bins, binnings[f].thresholds, gradients, hessians, rows, parent, options);
+			FindBestHistogramSplit(best, f, histograms[f], binning.thresholds, rows.size(), parent, tree_hists.options);
 		}
 	}
 	return best;
@@ -434,15 +485,14 @@ void PartitionRows(const vector<vector<double>> &x, const vector<idx_t> &rows, c
 	}
 }
 
-idx_t GrowDepthwise(BoostTree &tree, const vector<vector<double>> &x, const vector<vector<uint32_t>> &bins,
-                    const vector<FeatureBinning> &binnings, const vector<double> &gradients,
-                    const vector<double> &hessians, const vector<idx_t> &rows, const vector<idx_t> &feature_subset,
-                    idx_t depth, const TrainOptions &options) {
-	auto parent = SumStats(gradients, hessians, rows);
+idx_t GrowDepthwise(BoostTree &tree, const vector<vector<double>> &x, const TreeHistograms &builder,
+                    Histograms histograms, const vector<idx_t> &rows, idx_t depth) {
+	const auto &options = builder.options;
+	auto parent = SumStats(builder.gradients, builder.hessians, rows);
 	if (depth >= options.max_depth || rows.size() < 2 * options.min_samples_leaf) {
 		return BuildLeaf(tree, LeafWeight(parent, options));
 	}
-	auto split = FindBestSplit(x, bins, binnings, gradients, hessians, rows, feature_subset, options);
+	auto split = FindBestSplit(x, builder, histograms, rows, parent);
 	if (!std::isfinite(split.gain) || split.gain <= 0) {
 		return BuildLeaf(tree, LeafWeight(parent, options));
 	}
@@ -456,10 +506,13 @@ idx_t GrowDepthwise(BoostTree &tree, const vector<vector<double>> &x, const vect
 	auto node = MakeSplitNode(split, parent);
 	auto node_idx = tree.nodes.size();
 	tree.nodes.push_back(node);
-	tree.nodes[node_idx].left =
-	    GrowDepthwise(tree, x, bins, binnings, gradients, hessians, left_rows, feature_subset, depth + 1, options);
-	tree.nodes[node_idx].right =
-	    GrowDepthwise(tree, x, bins, binnings, gradients, hessians, right_rows, feature_subset, depth + 1, options);
+	Histograms left_hist, right_hist;
+	if (depth + 1 < options.max_depth &&
+	    MaxValue(left_rows.size(), right_rows.size()) >= 2 * options.min_samples_leaf) {
+		builder.Children(std::move(histograms), left_rows, right_rows, left_hist, right_hist);
+	}
+	tree.nodes[node_idx].left = GrowDepthwise(tree, x, builder, std::move(left_hist), left_rows, depth + 1);
+	tree.nodes[node_idx].right = GrowDepthwise(tree, x, builder, std::move(right_hist), right_rows, depth + 1);
 	return node_idx;
 }
 
@@ -468,6 +521,7 @@ struct LossguideCandidate {
 	idx_t depth;
 	SplitCandidate split;
 	vector<idx_t> rows;
+	Histograms histograms;
 };
 
 struct LossguideCandidateCompare {
@@ -479,36 +533,38 @@ struct LossguideCandidateCompare {
 	}
 };
 
-using LossguideQueue = std::priority_queue<LossguideCandidate, vector<LossguideCandidate>, LossguideCandidateCompare>;
+using LossguideQueue = vector<LossguideCandidate>;
 
 void EnqueueLossguideCandidate(LossguideQueue &candidates, const vector<vector<double>> &x,
-                               const vector<vector<uint32_t>> &bins, const vector<FeatureBinning> &binnings,
-                               const vector<double> &gradients, const vector<double> &hessians, vector<idx_t> rows,
-                               const vector<idx_t> &feature_subset, idx_t node_idx, idx_t depth,
-                               const TrainOptions &options) {
+                               const TreeHistograms &builder, Histograms histograms, vector<idx_t> rows,
+                               const GradStat &parent, idx_t node_idx, idx_t depth) {
+	const auto &options = builder.options;
 	if ((options.max_depth > 0 && depth >= options.max_depth) || rows.size() < 2 * options.min_samples_leaf) {
 		return;
 	}
-	auto split = FindBestSplit(x, bins, binnings, gradients, hessians, rows, feature_subset, options);
+	auto split = FindBestSplit(x, builder, histograms, rows, parent);
 	if (!std::isfinite(split.gain) || split.gain <= 0) {
 		return;
 	}
-	candidates.push({node_idx, depth, split, std::move(rows)});
+	candidates.push_back({node_idx, depth, std::move(split), std::move(rows), std::move(histograms)});
+	std::push_heap(candidates.begin(), candidates.end(), LossguideCandidateCompare {});
 }
 
-void GrowLossguide(BoostTree &tree, const vector<vector<double>> &x, const vector<vector<uint32_t>> &bins,
-                   const vector<FeatureBinning> &binnings, const vector<double> &gradients,
-                   const vector<double> &hessians, const vector<idx_t> &rows, const vector<idx_t> &feature_subset,
-                   const TrainOptions &options) {
+void GrowLossguide(BoostTree &tree, const vector<vector<double>> &x, const TreeHistograms &builder,
+                   const vector<idx_t> &rows) {
+	const auto &options = builder.options;
+	const auto &gradients = builder.gradients;
+	const auto &hessians = builder.hessians;
 	auto root_stat = SumStats(gradients, hessians, rows);
 	BuildLeaf(tree, LeafWeight(root_stat, options));
 
 	LossguideQueue candidates;
-	EnqueueLossguideCandidate(candidates, x, bins, binnings, gradients, hessians, rows, feature_subset, 0, 0, options);
+	EnqueueLossguideCandidate(candidates, x, builder, builder.Build(rows), rows, root_stat, 0, 0);
 	idx_t leaf_count = 1;
 	while (leaf_count < options.max_leaves && !candidates.empty()) {
-		auto candidate = candidates.top();
-		candidates.pop();
+		std::pop_heap(candidates.begin(), candidates.end(), LossguideCandidateCompare {});
+		auto candidate = std::move(candidates.back());
+		candidates.pop_back();
 
 		vector<idx_t> left_rows;
 		vector<idx_t> right_rows;
@@ -529,10 +585,16 @@ void GrowLossguide(BoostTree &tree, const vector<vector<double>> &x, const vecto
 		tree.nodes[candidate.node_idx] = node;
 		leaf_count++;
 
-		EnqueueLossguideCandidate(candidates, x, bins, binnings, gradients, hessians, std::move(left_rows),
-		                          feature_subset, left_idx, candidate.depth + 1, options);
-		EnqueueLossguideCandidate(candidates, x, bins, binnings, gradients, hessians, std::move(right_rows),
-		                          feature_subset, right_idx, candidate.depth + 1, options);
+		const auto depth = candidate.depth + 1;
+		if (leaf_count == options.max_leaves || (options.max_depth && depth >= options.max_depth)) {
+			continue;
+		}
+		Histograms left_hist, right_hist;
+		builder.Children(std::move(candidate.histograms), left_rows, right_rows, left_hist, right_hist);
+		EnqueueLossguideCandidate(candidates, x, builder, std::move(left_hist), std::move(left_rows), left_stat,
+		                          left_idx, depth);
+		EnqueueLossguideCandidate(candidates, x, builder, std::move(right_hist), std::move(right_rows), right_stat,
+		                          right_idx, depth);
 	}
 }
 
@@ -557,92 +619,46 @@ double LeafSplitGain(const vector<vector<double>> &x, const vector<double> &grad
 	return std::isfinite(gain) && gain > 0 ? gain : 0;
 }
 
-struct ObliviousLeafHist {
-	GradStat parent;
-	GradStat missing_stat;
-	idx_t missing_count = 0;
-	idx_t present_count = 0;
-	vector<GradStat> hist;
-	vector<idx_t> hist_count;
-};
-
-ObliviousLeafHist BuildObliviousLeafHist(idx_t feature, idx_t n_bins, const vector<vector<uint32_t>> &bins,
-                                         const vector<double> &gradients, const vector<double> &hessians,
-                                         const vector<idx_t> &rows) {
-	ObliviousLeafHist leaf;
-	leaf.parent = SumStats(gradients, hessians, rows);
-	leaf.hist.assign(n_bins, {});
-	leaf.hist_count.assign(n_bins, 0);
-	for (auto row : rows) {
-		auto bin = bins[row][feature];
-		if (bin == MISSING_BIN) {
-			leaf.missing_stat.Add(gradients[row], hessians[row]);
-			leaf.missing_count++;
-			continue;
-		}
-		if (bin >= n_bins) {
-			continue;
-		}
-		leaf.hist[bin].Add(gradients[row], hessians[row]);
-		leaf.hist_count[bin]++;
-		leaf.present_count++;
-	}
-	return leaf;
-}
-
-//! Gain for threshold thresholds[threshold_idx] on one oblivious leaf, from its histogram.
-double ObliviousHistogramLeafGain(const ObliviousLeafHist &leaf, idx_t threshold_idx, bool default_left,
-                                  const TrainOptions &options) {
-	if (leaf.present_count < 2 || threshold_idx + 1 >= leaf.hist.size()) {
-		return 0;
-	}
-	GradStat left_present;
-	idx_t left_count = 0;
-	for (idx_t b = 0; b <= threshold_idx; b++) {
-		left_present.Add(leaf.hist[b]);
-		left_count += leaf.hist_count[b];
-	}
-	auto right_count = leaf.present_count - left_count;
+//! Positive split gain contributed by one leaf of a symmetric tree.
+double ObliviousHistogramLeafGain(const GradStat &parent, const HistogramEntry &missing, const GradStat &left_present,
+                                  idx_t left_count, idx_t right_count, bool default_left, const TrainOptions &options) {
 	if (left_count == 0 || right_count == 0) {
 		return 0;
 	}
-	auto right_present = leaf.parent.Without(left_present).Without(leaf.missing_stat);
-	GradStat left;
-	GradStat right;
-	idx_t left_rows;
-	idx_t right_rows;
+	auto left = left_present;
+	auto right = parent.Without(left_present).Without(missing.stat);
 	if (default_left) {
-		left = left_present;
-		left.Add(leaf.missing_stat);
-		right = right_present;
-		left_rows = left_count + leaf.missing_count;
-		right_rows = right_count;
+		left.Add(missing.stat);
+		left_count += missing.count;
 	} else {
-		left = left_present;
-		right = right_present;
-		right.Add(leaf.missing_stat);
-		left_rows = left_count;
-		right_rows = right_count + leaf.missing_count;
+		right.Add(missing.stat);
+		right_count += missing.count;
 	}
-	if (!ChildFeasible(left, left_rows, options) || !ChildFeasible(right, right_rows, options)) {
+	if (!ChildFeasible(left, left_count, options) || !ChildFeasible(right, right_count, options)) {
 		return 0;
 	}
-	auto gain = SplitGain(left, right, leaf.parent, options);
+	auto gain = SplitGain(left, right, parent, options);
 	return std::isfinite(gain) && gain > 0 ? gain : 0;
 }
 
 //! CatBoost-style symmetric trees: one shared (feature, threshold) per depth level.
 //! Continuous candidates are scored from precomputed global bins (same path as depthwise/lossguide).
-void GrowOblivious(BoostTree &tree, const vector<vector<double>> &x, const vector<vector<uint32_t>> &bins,
-                   const vector<FeatureBinning> &binnings, const vector<double> &gradients,
-                   const vector<double> &hessians, const vector<idx_t> &rows, const vector<idx_t> &feature_subset,
-                   const TrainOptions &options) {
+void GrowOblivious(BoostTree &tree, const vector<vector<double>> &x, const TreeHistograms &builder,
+                   const vector<idx_t> &rows) {
+	const auto &gradients = builder.gradients;
+	const auto &hessians = builder.hessians;
+	const auto &binnings = builder.binnings;
+	const auto &feature_subset = builder.features;
+	const auto &options = builder.options;
+	vector<Histograms> level_hist;
+	level_hist.push_back(builder.Build(rows));
 	auto root_stat = SumStats(gradients, hessians, rows);
 	BuildLeaf(tree, LeafWeight(root_stat, options));
 
 	vector<vector<idx_t>> level_rows;
 	level_rows.push_back(rows);
 	vector<idx_t> level_nodes = {0};
+	vector<GradStat> level_stats = {root_stat};
 
 	for (idx_t depth = 0; depth < options.max_depth; depth++) {
 		SplitCandidate best;
@@ -657,24 +673,22 @@ void GrowOblivious(BoostTree &tree, const vector<vector<double>> &x, const vecto
 			if (thresholds.empty()) {
 				continue;
 			}
-			const idx_t n_bins = thresholds.size() + 1;
-			vector<ObliviousLeafHist> leaf_hists;
-			leaf_hists.reserve(level_rows.size());
-			for (auto &leaf_rows : level_rows) {
-				leaf_hists.push_back(BuildObliviousLeafHist(f, n_bins, bins, gradients, hessians, leaf_rows));
-			}
+			vector<HistogramEntry> prefix(level_rows.size());
 			for (idx_t b = 0; b < thresholds.size(); b++) {
+				for (idx_t i = 0; i < level_rows.size(); i++) {
+					const auto &bin = level_hist[i][f][b];
+					prefix[i].stat.Add(bin.stat);
+					prefix[i].count += bin.count;
+				}
 				for (bool default_left : {true, false}) {
 					double total = 0;
-					bool any = false;
-					for (auto &leaf_hist : leaf_hists) {
-						auto gain = ObliviousHistogramLeafGain(leaf_hist, b, default_left, options);
-						if (gain > 0) {
-							any = true;
-							total += gain;
-						}
+					for (idx_t i = 0; i < level_rows.size(); i++) {
+						const auto &missing = level_hist[i][f].back();
+						const auto right_count = level_rows[i].size() - missing.count - prefix[i].count;
+						total += ObliviousHistogramLeafGain(level_stats[i], missing, prefix[i].stat, prefix[i].count,
+						                                    right_count, default_left, options);
 					}
-					if (any && total > best_total) {
+					if (total > 0 && total > best_total) {
 						best_total = total;
 						best.feature = f;
 						best.threshold = thresholds[b];
@@ -727,20 +741,24 @@ void GrowOblivious(BoostTree &tree, const vector<vector<double>> &x, const vecto
 
 		vector<vector<idx_t>> next_rows;
 		vector<idx_t> next_nodes;
+		vector<Histograms> next_hist;
+		vector<GradStat> next_stats;
 		next_rows.reserve(level_rows.size() * 2);
 		next_nodes.reserve(level_nodes.size() * 2);
 		for (idx_t i = 0; i < level_nodes.size(); i++) {
 			vector<idx_t> left_rows;
 			vector<idx_t> right_rows;
 			PartitionRows(x, level_rows[i], best, left_rows, right_rows);
-			auto parent = SumStats(gradients, hessians, level_rows[i]);
-			auto left_stat = left_rows.empty() ? parent : SumStats(gradients, hessians, left_rows);
-			auto right_stat = right_rows.empty() ? parent : SumStats(gradients, hessians, right_rows);
-			if (left_rows.empty()) {
-				left_stat = {};
-			}
-			if (right_rows.empty()) {
-				right_stat = {};
+			auto parent = level_stats[i];
+			auto left_stat = SumStats(gradients, hessians, left_rows);
+			auto right_stat = SumStats(gradients, hessians, right_rows);
+			if (depth + 1 < options.max_depth) {
+				Histograms left_hist, right_hist;
+				builder.Children(std::move(level_hist[i]), left_rows, right_rows, left_hist, right_hist);
+				next_hist.push_back(std::move(left_hist));
+				next_hist.push_back(std::move(right_hist));
+				next_stats.push_back(left_stat);
+				next_stats.push_back(right_stat);
 			}
 			auto left_idx = BuildLeaf(tree, LeafWeight(left_rows.empty() ? parent : left_stat, options));
 			auto right_idx = BuildLeaf(tree, LeafWeight(right_rows.empty() ? parent : right_stat, options));
@@ -754,23 +772,24 @@ void GrowOblivious(BoostTree &tree, const vector<vector<double>> &x, const vecto
 			next_nodes.push_back(left_idx);
 			next_nodes.push_back(right_idx);
 		}
+		level_hist = std::move(next_hist);
+		level_stats = std::move(next_stats);
 		level_rows = std::move(next_rows);
 		level_nodes = std::move(next_nodes);
 	}
 }
 
-void GrowTree(BoostTree &tree, const vector<vector<double>> &x, const vector<vector<uint32_t>> &bins,
+void GrowTree(BoostTree &tree, const vector<vector<double>> &x, const vector<BinColumn> &bins,
               const vector<FeatureBinning> &binnings, const vector<double> &gradients, const vector<double> &hessians,
               const vector<idx_t> &rows, const vector<idx_t> &feature_subset, const TrainOptions &options) {
+	TreeHistograms builder {bins, binnings, gradients, hessians, feature_subset, options};
 	if (options.growth_policy == GrowthPolicy::LOSSGUIDE) {
-		GrowLossguide(tree, x, bins, binnings, gradients, hessians, rows, feature_subset, options);
-		return;
+		GrowLossguide(tree, x, builder, rows);
+	} else if (options.growth_policy == GrowthPolicy::OBLIVIOUS) {
+		GrowOblivious(tree, x, builder, rows);
+	} else {
+		GrowDepthwise(tree, x, builder, builder.Build(rows), rows, 0);
 	}
-	if (options.growth_policy == GrowthPolicy::OBLIVIOUS) {
-		GrowOblivious(tree, x, bins, binnings, gradients, hessians, rows, feature_subset, options);
-		return;
-	}
-	GrowDepthwise(tree, x, bins, binnings, gradients, hessians, rows, feature_subset, 0, options);
 }
 
 vector<idx_t> SampleRows(const vector<idx_t> &pool, double subsample, SimpleRng &rng) {

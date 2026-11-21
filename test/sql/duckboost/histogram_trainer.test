@@ -148,3 +148,19 @@ SELECT bool_and(train_only = with_validation), min(duckboost_predict(train_only,
 FROM skewed_fits;
 ----
 true	true	true
+
+# The highest present bin and the missing ID are distinct at the 8-bit storage boundary.
+query II
+WITH sizes(k) AS (VALUES (254), (255), (256)), rows AS (
+	SELECT k, CASE WHEN i > k THEN NULL ELSE i END AS x
+	FROM sizes, range(258) t(i)
+), models AS (
+	SELECT k, duckboost_train(coalesce((x = k)::DOUBLE, 0), [x],
+		MAP {'n_estimators':'1', 'max_depth':'1', 'max_bins':k::VARCHAR, 'learning_rate':'1'}) AS model
+	FROM rows GROUP BY k
+)
+SELECT count(*), bool_and(duckboost_predict(model,[k]) > 0.99 AND duckboost_predict(model,[k-1]) < 0.01
+	AND duckboost_predict(model,[NULL::DOUBLE]) < 0.01)
+FROM models;
+----
+3	true
