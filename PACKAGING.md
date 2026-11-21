@@ -2,13 +2,13 @@
 
 This repository is a standalone DuckDB extension in the
 [extension-template](https://github.com/duckdb/extension-template) layout. It
-targets DuckDB **2.0.0 LTS** (“Cinnamon Teal”):
+targets DuckDB **2.0.1 LTS** (“Cinnamon Teal”):
 
 | Knob | Value |
 | --- | --- |
-| `duckdb` submodule | `d54cbbe3df17e8e5ce68312f483b4155836112aa` (`v2.0.0`) |
-| Community deploy version | `v2.0.0` |
-| `extension-ci-tools` | `v2.0-cyanoptera` (`78bd1e4`) |
+| `duckdb` submodule | `8d78114e90a53823803660bf821f6073ac87da8c` (`v2.0.1`) |
+| Local binary footer | `v2.0.1` |
+| `extension-ci-tools` | `v2.0-cyanoptera` (`43dae9ec2b843bf9c6200ea4bbe5ad703cd01f77`) |
 
 Optional ML vendor libraries stay out of the default community binary.
 
@@ -22,8 +22,8 @@ template uses both:
 - `duckdb` is the engine the local shell and tests link against.
 
 Community CI ignores these submodule SHAs and builds from its own DuckDB pin
-plus your `repo.ref`. Keeping the submodules aligned with that pin is what makes
-local builds match community binaries.
+plus your `repo.ref`. At release preparation on November 21 its default was still 2.0.0.
+Check the current workflow and confirm the deployed package in a clean 2.0.1 CLI.
 
 ## Build
 
@@ -34,7 +34,7 @@ make
 GEN=ninja make
 ```
 
-The root `Makefile` sets `DUCKDB_VERSION` / `OVERRIDE_GIT_DESCRIBE` to `v2.0.0`
+The root `Makefile` sets `DUCKDB_VERSION` / `OVERRIDE_GIT_DESCRIBE` to `v2.0.1`
 and `DUCKDB_COMMIT` to the release SHA so extension footers match community
 hosts.
 
@@ -43,12 +43,12 @@ Artifacts:
 - Shell: `./build/release/duckdb`
 - Tests: `make test`
 - Loadable extension: `build/release/extension/duckboost/duckboost.duckdb_extension`
-- Footer check: `make check-extension-metadata` (expects `v2.0.0` in the binary)
+- Footer check: `make check-extension-metadata` (expects `v2.0.1` in the binary)
 
 The shell, `libduckdb` and `make test` have duckboost statically linked
 (`duckdb_extension_statically_link` in `extension_config.cmake`), so
 `LOAD duckboost;` works there. To check the loadable file itself, load it from
-an unsigned DuckDB 2.0.0 shell built from the same submodule commit **without**
+an unsigned DuckDB 2.0.1 shell built from the same submodule commit **without**
 duckboost linked:
 
 ```bash
@@ -150,8 +150,7 @@ QUARTO_PYTHON=$PWD/.venv-quarto/bin/python quarto render site
 ## Releases
 
 Versions follow [semantic versioning](https://semver.org/). Git tags `vX.Y.Z`
-are the source of truth. After DuckDB 2.0.0, duckboost GitHub releases can be
-full (non-prerelease) releases once you are ready to publish to community.
+are the source of truth. Publish a full release from the tested commit after the site deploys.
 
 Unreleased changes go under `## X.Y.Z (unreleased)` at the top of
 [`CHANGELOG.md`](CHANGELOG.md). To cut a release:
@@ -162,9 +161,9 @@ Unreleased changes go under `## X.Y.Z (unreleased)` at the top of
 
    ```bash
    git switch main && git pull
-   git tag -a v0.0.5 -m "duckboost 0.0.5"
-   git push origin v0.0.5
-   gh release create v0.0.5 --title "duckboost 0.0.5" --notes "See CHANGELOG.md"
+   git tag -a v0.1.0 "$release_commit" -m "duckboost 0.1.0"
+   git push origin v0.1.0
+   gh release create v0.1.0 --title "duckboost 0.1.0" --verify-tag --latest --notes-file "$release_notes_file"
    ```
 
 3. Confirm:

@@ -10,7 +10,7 @@ This page walks through a realistic SQL path — categoricals, early stopping, f
 
 | Capability | Option / behavior |
 | --- | --- |
-| Global quantile bins | `max_bins` (default 256); thresholds fixed once from training rows |
+| Global quantile bins | `max_bins` (default 256); thresholds follow training observation ranks and preserve ties |
 | Categoricals | `categorical_features`: ordered `g/h` partitions → `EQUAL` or `IN` |
 | Growth | `growth_policy`: `depthwise` (default), `lossguide`, `oblivious` / `symmetric` (all score continuous splits from the same global bins) |
 | Losses | squared / absolute / quantile / expectile; binary logistic; multiclass softmax |
@@ -19,7 +19,9 @@ This page walks through a realistic SQL path — categoricals, early stopping, f
 | Early stopping | `early_stopping_rounds` + `validation_fraction`, or a BOOLEAN `is_validation` column |
 | Missing values | Feature `NULL` → NaN; per-split `default_left` |
 
-Limits to keep in mind: single-threaded, materializes all training rows, no monotonic constraints or CatBoost CTRs. See [Use cases](../use-cases.qmd).
+For numeric features the trainer packs bin IDs into contiguous columns, scans the smaller child, and subtracts its histogram from the parent to obtain the sibling. Large feature scans can use DuckDB workers up to the configured thread budget. Ties are resolved in feature order. The trainer holds training rows in memory. [Measured time, memory and holdout quality](../benchmarks.qmd)
+
+With `class_weight='balanced'`, the native and linked trainers estimate multipliers from training sample weights. The validation loss uses those same multipliers. Changing only validation labels can affect early stopping. With early stopping disabled, the fixed-round training estimate stays the same.
 
 ## End-to-end: penguins with a categorical
 

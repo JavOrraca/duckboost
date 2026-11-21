@@ -4,6 +4,8 @@ title: "Train, predict, and export SQL"
 
 This walkthrough fits a reference model, scores it, measures RMSE, and exports the trees. The exported query is then run in a second `build/release/duckdb` process whose script never calls `duckboost_*`.
 
+Each split emits one copy of each child subtree. For binary classification, a compact export with `proba=true` reuses the ensemble probability for both class columns.
+
 The holdout is `x1 >= 20` from a 30-row line. Predictions below are whatever this build's reference trainer produces; the check is that the SQL matches `duckboost_predict`, not a hand-written target.
 
 ## Train, predict, evaluate

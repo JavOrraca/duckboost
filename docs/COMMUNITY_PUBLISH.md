@@ -1,18 +1,18 @@
 # Publishing duckboost as a community extension
 
-duckboost targets DuckDB **2.0.0 LTS** (“Cinnamon Teal”) only. It is already listed at
+duckboost targets DuckDB **2.0.1 LTS** (“Cinnamon Teal”) only. It is already listed at
 https://duckdb.org/community_extensions/extensions/duckboost (merged via
 [duckdb/community-extensions#3236](https://github.com/duckdb/community-extensions/pull/3236)).
 
-Community CI builds `repo.ref` against:
+The release candidate uses these pins. The [community build](https://github.com/duckdb/community-extensions/blob/main/.github/workflows/build.yml) still defaulted to 2.0.0 at catalog commit `f47566c7` on November 21, 2026.
 
 | Input | Value |
 | --- | --- |
-| `duckdb_version` | `v2.0.0` |
-| `duckdb_commit` | `d54cbbe3df17e8e5ce68312f483b4155836112aa` |
-| `ci_tools_version` | `v2.0-cyanoptera` |
+| `duckdb_version` | `v2.0.1` |
+| `duckdb_commit` | `8d78114e90a53823803660bf821f6073ac87da8c` |
+| `ci_tools_version` | `43dae9ec2b843bf9c6200ea4bbe5ad703cd01f77` (v2.0-cyanoptera) |
 
-Announcement: https://duckdb.org/2026/10/21/announcing-duckdb-200
+Announcement: https://duckdb.org/2026/11/20/announcing-duckdb-201
 
 Users install with:
 
@@ -24,7 +24,7 @@ LOAD duckboost;
 ## Checklist before bumping / republishing
 
 1. **Public GitHub repo** — `JavOrraca/duckboost` (already).
-2. **Cut a duckboost release** that builds cleanly on `v2.0.0` so
+2. **Cut a duckboost release** that builds cleanly on `v2.0.1` so
    `extension.version` matches what community ships.
 3. **Build and test locally** against the pinned `duckdb` submodule:
 
@@ -35,7 +35,7 @@ LOAD duckboost;
    make check-extension-metadata
    ```
 
-   Configure should log `version v2.0.0, extension folder v2.0.0`.
+   Configure should log `version v2.0.1, extension folder v2.0.1`.
    `make check-extension-metadata` asserts the same string is in the
    `.duckdb_extension` footer.
 4. **Bump `repo.ref`** in
@@ -69,7 +69,7 @@ LOAD duckboost;
    directory if needed). This is the same pattern as the `h3` extension.
 4. Open a PR. Community CI builds and tests via
    `extension-ci-tools` `@v2.0-cyanoptera`.
-5. In the PR checks, confirm configure logs `version v2.0.0`.
+5. In the PR checks, record the engine and tools actually selected by upstream. A successful 2.0.0 job verifies that engine only.
 
 Official docs: https://duckdb.org/community_extensions/documentation.html
 
@@ -83,14 +83,11 @@ local `make` / `make test` and the docs site build need them. Community CI does
 at in *this* repository. Keep the submodules in sync with the community pin so
 local builds match what community ships.
 
-As of 2026-10-23 there is **no** DuckDB `v2.0.0.1` tag; latest release remains
-`v2.0.0` at `d54cbbe`, which this repo already pins.
+After upstream deployment, use a fresh extension directory in a stock 2.0.1 shell. Run the install and load above, train and predict, and verify the engine and extension independently.
 
-## After clients catch up
+```sql
+SELECT version() AS engine, extension_version
+FROM duckdb_extensions() WHERE extension_name = 'duckboost' AND loaded;
+```
 
-Python / CLI DuckDB 2.0.0 may land before every client library (R, Java, Go,
-etc.). The announcement notes some clients and extensions can take a few days.
-Community `INSTALL` only requires a DuckDB 2.0 host that can load community
-extensions.
-
-See also [`PACKAGING.md`](../PACKAGING.md).
+See also [the packaging guide](../PACKAGING.md).

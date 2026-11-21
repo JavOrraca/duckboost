@@ -69,7 +69,7 @@ ORDER BY species;
 
 - **Data larger than memory.** `duckboost_train` materializes every training row (and bin ids) before it fits. DuckDB can scan more than that; the training step cannot stream.
 - **Vendor-only features.** Monotonic constraints, interaction constraints, GPU training, GOSS/EFB, and CatBoost ordered CTRs are not exposed through `duckboost_train`. Train with the vendor library and import the result.
-- **Huge production ensembles.** The native trainer is single-threaded and aimed at SQL pipelines and moderate sizes. For tens of millions of rows or latency-critical HPO, prefer LightGBM/XGBoost outside DuckDB (or a vendor-linked build) and import.
+- **Huge production ensembles.** The native trainer parallelizes sufficiently large feature scans and materializes the training set in memory. For tens of millions of rows or latency-critical HPO, prefer LightGBM/XGBoost outside DuckDB (or a vendor-linked build) and import.
 - **Deep explanation tooling.** `duckboost_importance` covers gain / cover / frequency. There is no SHAP API; use the vendor library if you need it.
 
 ## Choosing a trainer

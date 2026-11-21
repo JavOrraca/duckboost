@@ -4,7 +4,7 @@ Experimental DuckDB extension for **SQL-native gradient boosting**: train depend
 
 **Documentation:** <https://javorraca.github.io/duckboost/> · [Getting started](https://javorraca.github.io/duckboost/getting-started.html) · [Native trainer vignette](https://javorraca.github.io/duckboost/vignettes/native-trainer.html) · [Changelog](CHANGELOG.md)
 
-Standalone [extension-template](https://github.com/duckdb/extension-template) repository targeting **DuckDB 2.0.0 LTS** (“Cinnamon Teal”). DuckDB 1.x clients cannot load it. Listed on [Community Extensions](https://duckdb.org/community_extensions/extensions/duckboost).
+Standalone [extension-template](https://github.com/duckdb/extension-template) repository targeting **DuckDB 2.0.1 LTS** (“Cinnamon Teal”). DuckDB 1.x clients cannot load it. Listed on [Community Extensions](https://duckdb.org/community_extensions/extensions/duckboost).
 
 ## Motivation
 
@@ -17,11 +17,13 @@ Standalone [extension-template](https://github.com/duckdb/extension-template) re
 
 ## Try it
 
-On DuckDB 2.0.0+:
+On a stock DuckDB 2.0.1 client, the community install picks up the version deployed for your platform. Check both version fields before running the 0.1.0 examples.
 
 ```sql
 INSTALL duckboost FROM community;
 LOAD duckboost;
+SELECT version() AS engine, extension_version FROM duckdb_extensions()
+WHERE extension_name = 'duckboost' AND loaded;
 ```
 
 Then train a first model (HTTPS CSV; `httpfs` autoloads):
@@ -60,12 +62,30 @@ FROM models, penguins;
 
 More detail: [Getting started](https://javorraca.github.io/duckboost/getting-started.html).
 
+### Save a model that accepts raw columns
+
+The same named fields can appear in a different order at scoring time. The saved JSON includes the training dictionary, optional numeric medians and the trees.
+
+```sql
+CREATE TABLE customer_fit AS
+SELECT duckboost_train_raw(y, struct_pack(plan_type := plan_type, tenure := tenure),
+                           MAP {'numeric_imputation':'median'}) AS model
+FROM (VALUES (1.0,'basic',2), (4.0,'pro',12), (1.5,'basic',NULL)) t(y,plan_type,tenure);
+
+CREATE TABLE customers AS SELECT 7 AS id, 6 AS tenure, 'new plan' AS plan_type;
+SELECT id, duckboost_predict_raw(model, struct_pack(tenure := tenure, plan_type := plan_type))
+FROM customer_fit, customers;
+SELECT duckboost_to_sql_raw(model, 'customers', MAP {'keep_columns':'id'}) FROM customer_fit;
+```
+
+For uncertainty estimates, use three quantile fits and a separate calibration set. Save the result of `duckboost_calibrate_interval` and export all three predictions with `duckboost_interval_to_sql`. [Prediction intervals](https://javorraca.github.io/duckboost/vignettes/prediction-intervals.html)
+
 ### Build from source (optional)
 
 For contributors or custom builds you need `git`, a C++17 compiler, `cmake`, and `make` (optional: `ninja`):
 
 ```bash
-git clone --recurse-submodules https://github.com/JavOrraca/duckboost.git
+git clone --branch v0.1.0 --recurse-submodules https://github.com/JavOrraca/duckboost.git
 cd duckboost
 make
 ./build/release/duckdb -unsigned
@@ -251,7 +271,7 @@ Lead with `backend='native'` for dependency-free training. Opt into vendor C API
 
 ## Model format
 
-Models are opaque `VARCHAR` JSON documents. `ToJSON` writes the lowest format version that can represent the model (`1` for plain LESS/NaN/L2 trees; `2` when the model uses `IN` splits, non-NaN `missing_type`, non-L2 objectives, or non-exact `category_cast`). `FromJSON` rejects versions newer than this build supports.
+Models are `VARCHAR` JSON documents. Named preprocessing and calibrated intervals use version 3 wrappers with their own prediction and export functions. Positional ensembles retain their existing v1/v2 format. `ToJSON` writes the lowest format version that can represent the model (`1` for plain LESS/NaN/L2 trees; `2` when the model uses `IN` splits, non-NaN `missing_type`, non-L2 objectives, or non-exact `category_cast`). `FromJSON` rejects versions newer than this build supports.
 
 ```json
 {
@@ -273,10 +293,10 @@ Split nodes may use `"compare":"equal"` with `threshold`, or `"compare":"in"` wi
 
 ## Design notes
 
-- **Layout**: standalone community extension ([extension-template](https://github.com/duckdb/extension-template)) so optional vendor ML libraries stay out of core DuckDB builds. The `duckdb` and `extension-ci-tools` git submodules stay (required for local `make`); `duckdb` is pinned to `v2.0.0`.
+- **Layout**: standalone community extension ([extension-template](https://github.com/duckdb/extension-template)) so optional vendor ML libraries stay out of core DuckDB builds. The `duckdb` and `extension-ci-tools` git submodules stay (required for local `make`); `duckdb` is pinned to `v2.0.1`.
 - **SQL export** mirrors orbital's `separate_trees` idea so DuckDB can evaluate ensemble members as independent columns.
-- **Native histogram trainer** (`backend='native'`, alias `'reference'`) is a dependency-free GBDT: global quantile pre-binning, ordered target-statistic categorical partitions (`EQUAL`/`IN`), and depth-wise, loss-guided, or oblivious/symmetric growth. It supports squared-error, absolute-error, quantile, expectile, logistic, and softmax losses plus missing-value defaults, L1/L2/`gamma`, sample weights, and early stopping. Set `categorical_features` to comma-separated feature names or zero-based indices. It buffers rows and bin ids in memory, finds continuous splits from those histograms (depth-wise, loss-guided, and oblivious/symmetric), trains single-threaded, and is aimed at SQL-native workflows rather than replacing production XGBoost/LightGBM/CatBoost at every scale. Model JSON still serializes `"backend":"reference"` for compatibility. `duckboost_predict` caches a parsed model within each chunk when the JSON repeats; for large scoring jobs prefer `duckboost_to_sql`.
-- **Native LightGBM** maps absolute_error / quantile / lossguide / `categorical_features` / `subsample` (`bagging_freq=1`) / seed. Native XGBoost focuses on L2 depth-wise trees (plus seed / `max_bin` / sample weights / `SaveJsonConfig` intercept). Both native backends honor `early_stopping_rounds` with either `validation_fraction` (random hold-out) or a BOOLEAN `is_validation` column (LightGBM uses `early_stopping_round`, XGBoost evaluates each iter and truncates the dump). `class_weight` is folded into sample weights.
+- **Native histogram trainer** (`backend='native'`, alias `'reference'`) is a dependency-free GBDT: global quantile pre-binning, ordered target-statistic categorical partitions (`EQUAL`/`IN`), and depth-wise, loss-guided, or oblivious/symmetric growth. It supports squared-error, absolute-error, quantile, expectile, logistic, and softmax losses plus missing-value defaults, L1/L2/`gamma`, sample weights, and early stopping. Set `categorical_features` to comma-separated feature names or zero-based indices. It buffers rows and bin ids in memory, finds continuous splits from those histograms, and schedules independent feature blocks within DuckDB’s thread budget. The trainer still materializes training rows in memory. Model JSON still serializes `"backend":"reference"` for compatibility. `duckboost_predict` caches a parsed model within each chunk when the JSON repeats; for large scoring jobs prefer `duckboost_to_sql`.
+- **Native LightGBM** maps absolute_error / quantile / lossguide / `categorical_features` / `subsample` (`bagging_freq=1`) / seed. Native XGBoost focuses on L2 depth-wise trees (plus seed / `max_bin` / sample weights / `SaveJsonConfig` intercept). Both native backends honor `early_stopping_rounds` with either `validation_fraction` (random hold-out) or a BOOLEAN `is_validation` column (LightGBM uses `early_stopping_round`, XGBoost evaluates each iter and truncates the dump). `class_weight` is folded into sample weights. Balanced class frequencies use training sample weights only. Validation loss uses those fitted multipliers.
 - **Table macros** `duckboost_fit` / `duckboost_score` wrap `duckboost_train` / `duckboost_predict` with `query_table` for a compact SQL workflow. `duckboost_fit` accepts optional `weight` and `is_validation` (for example `is_validation := (split = 'validation')` after `duckboost_initial_validation_split`).
 - **Split and preprocessing macros** are plain SQL macros registered by the extension. Splits rank rows by a hash of the row's values mixed with `seed`, so they are reproducible and independent of physical row order.
 
@@ -320,7 +340,7 @@ export LD_LIBRARY_PATH="$HOME/.local/lib/python3.12/site-packages/xgboost/lib:$H
 DUCKBOOST_NATIVE_TRAIN_TEST=1 make test T=test/sql/duckboost/native_train.test
 ```
 
-Before opening a PR that touches C++ sources, run `make format-check` (or `make format-fix`) so CI Format Check stays green. Before a community submission, also run `make check-extension-metadata` so the loadable binary footer carries `v2.0.0`.
+Before opening a PR that touches C++ sources, run `make format-check` (or `make format-fix`) so CI Format Check stays green. Before a community submission, also run `make check-extension-metadata` so the loadable binary footer carries `v2.0.1`.
 
 See [`PACKAGING.md`](PACKAGING.md) for the community-extension descriptor and native-trainer flags.
 
@@ -341,4 +361,6 @@ See [`PACKAGING.md`](PACKAGING.md) for the community-extension descriptor and na
 - [x] Bump `repo.ref` to the `v0.0.4` commit (`b775ef4`)
 - [x] Cut `0.0.5`: `duckboost_to_sql` emits `DOUBLE` literals so DuckDB 2.0 does not parse them as `DECIMAL`
 - [x] Bump `repo.ref` to the `v0.0.5` commit (`0c9dc40`)
-- [ ] Submit the 0.0.5 descriptor to `duckdb/community-extensions` (community versioning is a separate update)
+- [x] Publish the 0.0.5 descriptor ([community PR #3373](https://github.com/duckdb/community-extensions/pull/3373))
+- [x] Package fitted preprocessing and calibrated prediction intervals for native and SQL scoring
+- [x] Isolate balanced weights from validation, compact SQL export, and improve native histograms

@@ -34,7 +34,7 @@ duckboost_train(y DOUBLE, features DOUBLE[], weight DOUBLE, is_validation BOOLEA
 | `learning_rate` | `eta`, `lr` | `0.1` | Must be > 0. |
 | `min_samples_leaf` | `min_data_in_leaf` | `1` | Minimum rows in a leaf. |
 | `min_child_weight` | | `0` | Minimum sum of hessians in a child (XGBoost-style). |
-| `max_bins` | | `256` | Global quantile histogram bins per continuous feature (computed once from training rows). A feature with at most `max_bins + 1` distinct values keeps every midpoint; otherwise thresholds are thinned to `max_bins` quantiles. LightGBM receives it as `max_bin`. |
+| `max_bins` | | `256` | Global quantile histogram bins per continuous feature (computed once from training rows). A feature with at most `max_bins + 1` distinct values keeps every midpoint; otherwise thresholds follow observation ranks, grouping ties and using up to `max_bins` distinct cutpoints. LightGBM receives it as `max_bin`. |
 | `reg_lambda` | `lambda`, `lambda_l2` | `0` | L2 regularization on leaf weights. |
 | `reg_alpha` | `alpha`, `lambda_l1` | `0` | L1 regularization on leaf weights. |
 | `min_split_gain` | `gamma` | `0` | Minimum loss reduction required to make a split. |
@@ -43,8 +43,8 @@ duckboost_train(y DOUBLE, features DOUBLE[], weight DOUBLE, is_validation BOOLEA
 | `validation_fraction` | `valid_fraction` | `0` | Random hold-out fraction for early stopping. Defaults to `0.2` when `early_stopping_rounds > 0` and this is unset. Cannot be combined with the `is_validation` argument. |
 | `early_stopping_rounds` | `early_stopping` | `0` | Stop if the hold-out metric does not improve for this many rounds; keep the best iteration. |
 | `seed` | `random_seed` | `0` | RNG seed for subsampling and the random validation hold-out. |
-| `class_weight` | `class_weights` | | `balanced` or comma-separated per-class multipliers (binary / multiclass). |
-| `n_classes` | `num_class`, `num_classes` | max label + 1 | Multiclass only; ignored for other tasks. Must be >= 2 and greater than every label. Set it when a class is absent from the training rows. |
+| `class_weight` | `class_weights` | | `balanced` or comma-separated per-class multipliers (binary / multiclass). Balanced frequencies use training sample weights only. An absent training class receives multiplier zero. Validation loss applies the same learned or explicit multipliers. |
+| `n_classes` | `num_class`, `num_classes` | max training label + 1 | Multiclass only; ignored for other tasks. Must be >= 2 and greater than every label. Set it when a class is absent from the training rows. |
 | `feature_names` | | `f0,f1,...` | Comma-separated names. The count must match the feature width. |
 | `categorical_features` | `cat_features`, `categorical_feature` | | Comma-separated feature names or zero-based indices. The native trainer orders categories by local target statistic (`g/h`) and emits `EQUAL` or multi-category `IN` splits. Linked LightGBM maps this to Dataset categoricals; XGBoost / CatBoost train reject it (use import). |
 
@@ -100,6 +100,26 @@ SELECT
 FROM models, (VALUES (3.0), (14.0), (27.0)) v(x);
 """)
 ```
+
+## Named-column models
+
+```text
+duckboost_train_raw(y DOUBLE, raw STRUCT, [is_validation BOOLEAN], [options MAP(VARCHAR, VARCHAR)]) -> VARCHAR
+duckboost_predict_raw(model VARCHAR, raw STRUCT) -> DOUBLE
+duckboost_to_sql_raw(model VARCHAR, table_name VARCHAR, [options MAP(VARCHAR, VARCHAR)]) -> VARCHAR
+```
+
+The aggregate fits numeric and VARCHAR fields in STRUCT order. At prediction time, names identify required fields regardless of order, and extra fields are allowed. Match the fitted DuckDB types. By default finite numeric fields pass through. Numeric NULL, NaN and infinity are treated as missing. With `numeric_imputation='median'`, a training median replaces missing numeric values when available. String categories have a deterministic training dictionary. Missing and unseen strings follow the learned missing direction. The version 3 artifact includes the preprocessing parameters and the ensemble. Use `keep_columns` to retain row identity when exporting. [Runnable preprocessing example](vignettes/split-and-preprocess.qmd)
+
+## Calibrated intervals
+
+```text
+duckboost_calibrate_interval(q_lo VARCHAR, q_50 VARCHAR, q_hi VARCHAR, alpha DOUBLE, y DOUBLE, features DOUBLE[]) -> VARCHAR
+duckboost_predict_interval(model VARCHAR, features DOUBLE[]) -> STRUCT(lower DOUBLE, median DOUBLE, upper DOUBLE)
+duckboost_interval_to_sql(model VARCHAR, table_name VARCHAR, feature_columns VARCHAR[], [keep_columns VARCHAR[]]) -> VARCHAR
+```
+
+Fit quantiles at `alpha/2`, `0.5`, and `1-alpha/2` on training rows. Finalize tuning before passing a held-out calibration set to the aggregate. The three predictions are sorted before calibration and scoring. For each calibration row the score is `greatest(lower-y, y-upper)`. The correction is the order statistic at one-based rank `ceil((n+1)*(1-alpha))`. Insufficient calibration rows raise an error. Prediction subtracts the signed correction from the lower bound and adds it to the upper bound. A negative correction can produce an empty interval. Split conformal coverage is marginal under exchangeability. [Runnable calibration and export example](vignettes/prediction-intervals.qmd)
 
 ## `duckboost_predict`
 

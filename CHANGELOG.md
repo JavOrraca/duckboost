@@ -1,12 +1,35 @@
 # Changelog
 
-duckboost uses [semantic versioning](https://semver.org/). Releases are git tags (`v0.0.1`, `v0.0.2`, ...) with matching [GitHub releases](https://github.com/JavOrraca/duckboost/releases). Targets DuckDB **2.0.0 LTS** (“Cinnamon Teal”).
+duckboost uses [semantic versioning](https://semver.org/). Releases are git tags (`v0.0.1`, `v0.0.2`, ...) with matching [GitHub releases](https://github.com/JavOrraca/duckboost/releases). Targets DuckDB **2.0.1 LTS** (“Cinnamon Teal”).
 
 A build from a release tag reports that version, and any other commit reports its short commit hash:
 
 ```sql
 SELECT extension_version FROM duckdb_extensions() WHERE extension_name = 'duckboost';
 ```
+
+## 0.1.0 (2026-11-21)
+
+### Saved models and SQL scoring
+
+- Fit a named STRUCT with `duckboost_train_raw` to save numeric inputs, optional training medians, string dictionaries and trees together. `duckboost_predict_raw` matches fields by name when scoring reordered rows. Missing and unseen categories take the model’s missing branch. `duckboost_to_sql_raw` includes the fitted mapping in the exported query. [Raw-column example](https://javorraca.github.io/duckboost/vignettes/split-and-preprocess.html)
+- `duckboost_calibrate_interval` packages three quantile fits with a correction learned on a separate calibration fold. `duckboost_predict_interval` returns lower, median and upper fields, and `duckboost_interval_to_sql` exports all three. Predictions are sorted before calibration and scoring. At 90% target coverage the exact correction for scores 1 through 10 is 10. On 300 untouched vignette rows, the calibrated interval covered 264 (88.0%) with mean width 1.4968. Insufficient calibration rows raise an error. [Calibration and coverage example](https://javorraca.github.io/duckboost/vignettes/prediction-intervals.html)
+- Raw and interval artifacts use version 3 JSON. Existing positional `DOUBLE[]` APIs still read v1/v2 models and write the lowest ensemble format they need. Use the raw or interval functions for their respective artifacts.
+
+### Training and export
+
+- Balanced class weights now use the sample-weight totals of training rows. Validation loss reuses the fitted multipliers. In the balanced binary regression fixture, changing 100 validation labels used to move the fixed-round probability between 0.25 and 0.75. Both fits now start at a probability of 0.5 (log-odds zero). Early stopping can still select a different iteration.
+- Every SQL tree split emits its left and right children once. Compact binary probability exports reuse the score across all outputs. In a complete depth-eight tree, leaf literal occurrences fell from 6,561 to 256. Compact SQL shrank from 292,757 to 19,843 bytes. Median prepare time on an Apple M2 fell from 254 to 21 ms, and scoring 100,000 rows fell from 188 to 29 ms (three runs, one thread).
+- Numeric cuts now follow training observation ranks while retaining all midpoints on low-cardinality features. In the skew fixture the first split moved from 3.5 to 0.5, separating its 10,000 zeros from its 10,000 ones. Numeric bins use packed columns. Sibling histograms use parent subtraction and large feature scans use DuckDB’s thread budget with deterministic tie-breaking.
+
+### DuckDB 2.0.1 compatibility
+
+These fixes ship in [DuckDB 2.0.1 LTS](https://github.com/duckdb/duckdb/releases/tag/v2.0.1). Both sides of the duckboost benchmark use this engine.
+
+- DuckDB retains qualifying NULL rows when filtering some data written by DuckDB 1.x. This preserves observations entering training or scoring. [DuckDB #28355](https://github.com/duckdb/duckdb/pull/28355)
+- DuckDB corrected Parquet `IS NULL` pruning for pages with constant string statistics. Missing categories can reach preprocessing correctly. [DuckDB #27514](https://github.com/duckdb/duckdb/pull/27514)
+- Window functions now propagate certain build failures under memory pressure, preventing a hang in queries such as window-based split and fold assignments. [DuckDB #27596](https://github.com/duckdb/duckdb/pull/27596)
+- DuckDB reduced repeated memory pressure in grouped aggregates with non-spillable states, relevant to surrounding `quantile_cont` or `arg_max` analytics. Interval calibration uses an exact finite-sample rank. [DuckDB #28646](https://github.com/duckdb/duckdb/pull/28646)
 
 ## 0.0.5 (2026-10-24)
 
