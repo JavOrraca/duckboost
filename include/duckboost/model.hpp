@@ -180,7 +180,7 @@ struct TrainOptions {
 };
 
 //! Class count for a multiclass train; labels must be integer class indices in [0, n_classes).
-idx_t ResolveClassCount(const vector<double> &y, const TrainOptions &options);
+idx_t ResolveClassCount(const vector<double> &y, const TrainOptions &options, const vector<idx_t> &train_rows);
 
 struct EvalOptions {
 	//! auto | rmse | mae | pinball | expectile | accuracy | logloss | brier_score |
@@ -241,6 +241,15 @@ string BackendCapabilityNote(BoostBackend backend);
 //! (defaulting to 0.2 when early_stopping_rounds > 0 and the fraction was unset).
 void ResolveTrainValidRows(idx_t n_rows, const TrainOptions &options, const vector<bool> &is_validation,
                            vector<idx_t> &train_rows, vector<idx_t> &valid_rows);
+
+struct TrainingRows {
+	vector<idx_t> train_rows;
+	vector<idx_t> valid_rows;
+};
+
+//! Fit with the split already used for learning preprocessing statistics.
+BoostModel TrainModel(const vector<double> &y, const vector<vector<double>> &x, const TrainOptions &options,
+                      const vector<double> &weights, const TrainingRows &split);
 
 //! weights empty ⇒ unit weights. is_validation empty ⇒ optional random hold-out via options.
 BoostModel TrainModel(const vector<double> &y, const vector<vector<double>> &x, const TrainOptions &options,

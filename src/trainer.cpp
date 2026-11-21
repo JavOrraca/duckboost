@@ -822,20 +822,23 @@ vector<double> NormalizeWeights(const vector<double> &y, const vector<double> &w
 	return weights;
 }
 
-void ApplyClassWeights(vector<double> &weights, const vector<double> &y, const TrainOptions &options, idx_t n_classes) {
+void ApplyClassWeights(vector<double> &weights, const vector<double> &y, const TrainOptions &options, idx_t n_classes,
+                       const vector<idx_t> &train_rows) {
 	if (options.class_weight.empty()) {
 		return;
+	}
+	for (auto label : y) {
+		if (!(label >= 0 && label < static_cast<double>(n_classes) && label == std::floor(label))) {
+			throw InvalidInputException("duckboost: class_weight requires valid integer class labels");
+		}
 	}
 	vector<double> multipliers(n_classes, 1.0);
 	auto lower = StringUtil::Lower(options.class_weight);
 	if (lower == "balanced") {
 		vector<double> counts(n_classes, 0);
 		double total = 0;
-		for (idx_t i = 0; i < y.size(); i++) {
+		for (auto i : train_rows) {
 			auto label = static_cast<idx_t>(y[i]);
-			if (label >= n_classes) {
-				continue;
-			}
 			counts[label] += weights[i];
 			total += weights[i];
 		}
@@ -862,9 +865,7 @@ void ApplyClassWeights(vector<double> &weights, const vector<double> &y, const T
 	}
 	for (idx_t i = 0; i < y.size(); i++) {
 		auto label = static_cast<idx_t>(y[i]);
-		if (label < n_classes) {
-			weights[i] *= multipliers[label];
-		}
+		weights[i] *= multipliers[label];
 	}
 }
 
@@ -1068,7 +1069,7 @@ vector<bool> ResolveCategoricalFeatures(const vector<string> &tokens, const vect
 }
 
 BoostModel TrainReference(const vector<double> &y, const vector<vector<double>> &x, const TrainOptions &options,
-                          const vector<double> &weights_in, const vector<bool> &is_validation) {
+                          const vector<double> &weights_in, const TrainingRows &split) {
 	if (y.size() != x.size()) {
 		throw InvalidInputException("duckboost: y/x row count mismatch");
 	}
@@ -1104,9 +1105,8 @@ BoostModel TrainReference(const vector<double> &y, const vector<vector<double>> 
 	auto weights = NormalizeWeights(y, weights_in);
 	SimpleRng rng(options.seed);
 
-	vector<idx_t> train_rows;
-	vector<idx_t> valid_rows;
-	ResolveTrainValidRows(y.size(), options, is_validation, train_rows, valid_rows);
+	const auto &train_rows = split.train_rows;
+	const auto &valid_rows = split.valid_rows;
 
 	// Global quantile histogram boundaries (and per-row bin ids) are fixed before boosting.
 	auto binnings = BuildFeatureBinnings(x, train_rows, categorical_features, options.max_bins);
@@ -1117,7 +1117,7 @@ BoostModel TrainReference(const vector<double> &y, const vector<vector<double>> 
 	idx_t rounds_since_improve = 0;
 
 	if (options.task == BoostTask::MULTICLASS) {
-		const idx_t n_classes = ResolveClassCount(y, options);
+		const idx_t n_classes = ResolveClassCount(y, options, split.train_rows);
 		for (auto label : y) {
 			if (static_cast<idx_t>(label) >= n_classes) {
 				throw InvalidInputException("duckboost: multiclass label %g >= n_classes %llu", label,
@@ -1125,7 +1125,7 @@ BoostModel TrainReference(const vector<double> &y, const vector<vector<double>> 
 			}
 		}
 		model.n_classes = n_classes;
-		ApplyClassWeights(weights, y, options, n_classes);
+		ApplyClassWeights(weights, y, options, n_classes, train_rows);
 
 		vector<double> class_weight_sum(n_classes, 0);
 		double total_w = 0;
@@ -1192,12 +1192,12 @@ BoostModel TrainReference(const vector<double> &y, const vector<vector<double>> 
 	}
 
 	if (options.task == BoostTask::BINARY) {
-		ApplyClassWeights(weights, y, options, 2);
 		for (auto label : y) {
 			if (!(label == 0.0 || label == 1.0)) {
 				throw InvalidInputException("duckboost: binary task requires labels in {0, 1}");
 			}
 		}
+		ApplyClassWeights(weights, y, options, 2, train_rows);
 		double pos = WeightedMean(y, weights, train_rows);
 		pos = std::min(1.0 - 1e-6, std::max(1e-6, pos));
 		model.base_score = std::log(pos / (1.0 - pos));
@@ -1299,7 +1299,7 @@ BoostModel TrainReference(const vector<double> &y, const vector<vector<double>> 
 
 } // namespace
 
-idx_t ResolveClassCount(const vector<double> &y, const TrainOptions &options) {
+idx_t ResolveClassCount(const vector<double> &y, const TrainOptions &options, const vector<idx_t> &train_rows) {
 	double max_label = -1;
 	for (auto v : y) {
 		if (!std::isfinite(v) || v < 0 || v != std::floor(v)) {
@@ -1307,7 +1307,9 @@ idx_t ResolveClassCount(const vector<double> &y, const TrainOptions &options) {
 			    "duckboost: multiclass labels must be integer class indices 0, 1, ..., n_classes - 1 (got %s)",
 			    std::to_string(v));
 		}
-		max_label = std::max(max_label, v);
+	}
+	for (auto row : train_rows) {
+		max_label = std::max(max_label, y[row]);
 	}
 	auto n_classes = static_cast<idx_t>(max_label) + 1;
 	if (options.n_classes > 0) {
@@ -1317,6 +1319,12 @@ idx_t ResolveClassCount(const vector<double> &y, const TrainOptions &options) {
 		}
 		n_classes = options.n_classes;
 	}
+	for (auto v : y) {
+		if (v >= static_cast<double>(n_classes)) {
+			throw InvalidInputException("duckboost: multiclass label %g is out of range for n_classes = %llu", v,
+			                            (unsigned long long)n_classes);
+		}
+	}
 	if (n_classes < 2) {
 		throw InvalidInputException("duckboost: multiclass train requires at least 2 classes");
 	}
@@ -1325,12 +1333,15 @@ idx_t ResolveClassCount(const vector<double> &y, const TrainOptions &options) {
 
 BoostModel TrainModel(const vector<double> &y, const vector<vector<double>> &x, const TrainOptions &options,
                       const vector<double> &weights, const vector<bool> &is_validation) {
-	if (!is_validation.empty() && is_validation.size() != y.size()) {
-		throw InvalidInputException("duckboost: is_validation count (%llu) must match row count (%llu)",
-		                            (unsigned long long)is_validation.size(), (unsigned long long)y.size());
-	}
+	TrainingRows split;
+	ResolveTrainValidRows(y.size(), options, is_validation, split.train_rows, split.valid_rows);
+	return TrainModel(y, x, options, weights, split);
+}
+
+BoostModel TrainModel(const vector<double> &y, const vector<vector<double>> &x, const TrainOptions &options,
+                      const vector<double> &weights, const TrainingRows &split) {
 	if (options.backend == BoostBackend::REFERENCE) {
-		return TrainReference(y, x, options, weights, is_validation);
+		return TrainReference(y, x, options, weights, split);
 	}
 	if (options.growth_policy == GrowthPolicy::OBLIVIOUS && options.backend != BoostBackend::REFERENCE) {
 		throw NotImplementedException("duckboost: growth_policy='oblivious' requires backend='reference'");
@@ -1354,15 +1365,16 @@ BoostModel TrainModel(const vector<double> &y, const vector<vector<double>> &x, 
 	}
 	if (NativeTrainerCompiled(options.backend)) {
 		if (options.class_weight.empty()) {
-			return TrainNative(y, x, options, weights, is_validation);
+			return TrainNative(y, x, options, weights, split);
 		}
 		if (options.task == BoostTask::REGRESSION) {
 			throw InvalidInputException("duckboost: class_weight is only supported for binary and multiclass tasks");
 		}
 		auto native_weights = NormalizeWeights(y, weights);
 		ApplyClassWeights(native_weights, y, options,
-		                  options.task == BoostTask::MULTICLASS ? ResolveClassCount(y, options) : 2);
-		return TrainNative(y, x, options, native_weights, is_validation);
+		                  options.task == BoostTask::MULTICLASS ? ResolveClassCount(y, options, split.train_rows) : 2,
+		                  split.train_rows);
+		return TrainNative(y, x, options, native_weights, split);
 	}
 	throw NotImplementedException(
 	    "duckboost: native training for backend '%s' is not linked in this build. "

@@ -240,3 +240,18 @@ SELECT duckboost_train(y, [x1, x2], MAP {'backend': 'catboost', 'n_estimators': 
 FROM train;
 ----
 <REGEX>:.*(CatBoost has no public|native training for backend 'catboost').*
+
+# Both vendor bridges fit balanced weights using only the training fold.
+query II
+WITH fits AS (
+	SELECT backend, valid_y, duckboost_train(CASE WHEN i < 100 THEN i % 2 ELSE valid_y END,
+		[(i % 7)::DOUBLE], (1 + i % 3)::DOUBLE, i >= 100,
+		MAP {'backend': backend, 'task': 'binary', 'class_weight': 'balanced', 'n_estimators': '3'}) AS model
+	FROM range(200) t(i), (VALUES ('xgboost'), ('lightgbm')) v(backend), (VALUES (0), (1)) y(valid_y)
+	GROUP BY ALL
+)
+SELECT count(*), max(abs(duckboost_predict(a.model, [i]) - duckboost_predict(b.model, [i]))) < 1e-6
+FROM fits a JOIN fits b USING(backend), range(7) t(i)
+WHERE a.valid_y = 0 AND b.valid_y = 1;
+----
+14	true

@@ -96,17 +96,6 @@ ImportOptions ImportOptionsFromTrain(const TrainOptions &options) {
 	return import_options;
 }
 
-struct RowSplit {
-	vector<idx_t> train_rows;
-	vector<idx_t> valid_rows;
-};
-
-RowSplit SplitTrainValidRows(idx_t n_rows, const TrainOptions &options, const vector<bool> &is_validation) {
-	RowSplit split;
-	ResolveTrainValidRows(n_rows, options, is_validation, split.train_rows, split.valid_rows);
-	return split;
-}
-
 double ParseEvalMetric(const char *eval_result) {
 	if (!eval_result) {
 		return std::numeric_limits<double>::quiet_NaN();
@@ -156,11 +145,11 @@ string ObjectiveForLightGBM(const TrainOptions &options, idx_t n_classes) {
 	}
 }
 
-idx_t InferClassCount(const vector<double> &y, const TrainOptions &options) {
+idx_t InferClassCount(const vector<double> &y, const TrainOptions &options, const TrainingRows &split) {
 	if (options.task != BoostTask::MULTICLASS) {
 		return 1;
 	}
-	return ResolveClassCount(y, options);
+	return ResolveClassCount(y, options, split.train_rows);
 }
 
 #if defined(DUCKBOOST_WITH_XGBOOST) && !defined(DUCKBOOST_NATIVE_STUB)
@@ -213,16 +202,15 @@ DMatrixHandle MakeXGBoostDMatrix(const vector<float> &flat, const vector<float> 
 }
 
 BoostModel TrainWithXGBoost(const vector<double> &y, const vector<vector<double>> &x, const TrainOptions &options,
-                            const vector<double> &weights, const vector<bool> &is_validation) {
+                            const vector<double> &weights, const TrainingRows &split) {
 	EnsureRectangular(y, x);
 	const idx_t nrow = y.size();
 	const idx_t ncol = x[0].size();
-	const idx_t n_classes = InferClassCount(y, options);
+	const idx_t n_classes = InferClassCount(y, options, split);
 	if (!weights.empty() && weights.size() != nrow) {
 		throw InvalidInputException("duckboost: sample weight count must match row count for xgboost train");
 	}
 
-	const auto split = SplitTrainValidRows(nrow, options, is_validation);
 	vector<float> train_flat, train_labels, train_weights;
 	PackXGBoostRows(y, x, weights, split.train_rows, train_flat, train_labels, train_weights);
 	DMatrixHandle dtrain = MakeXGBoostDMatrix(train_flat, train_labels, train_weights, ncol);
@@ -456,15 +444,14 @@ DatasetHandle MakeLightGBMDataset(const vector<double> &flat, const vector<float
 }
 
 BoostModel TrainWithLightGBM(const vector<double> &y, const vector<vector<double>> &x, const TrainOptions &options,
-                             const vector<double> &weights, const vector<bool> &is_validation) {
+                             const vector<double> &weights, const TrainingRows &split) {
 	EnsureRectangular(y, x);
 	const auto ncol = NumericCast<int32_t>(x[0].size());
-	const idx_t n_classes = InferClassCount(y, options);
+	const idx_t n_classes = InferClassCount(y, options, split);
 	if (!weights.empty() && weights.size() != y.size()) {
 		throw InvalidInputException("duckboost: sample weight count must match row count for lightgbm train");
 	}
 
-	const auto split = SplitTrainValidRows(y.size(), options, is_validation);
 	const string dataset_params = LightGBMDatasetParams(options, ncol);
 	vector<double> train_flat;
 	vector<float> train_labels, train_weights;
@@ -646,7 +633,7 @@ bool NativeTrainerLinked(BoostBackend backend) {
 }
 
 BoostModel TrainNative(const vector<double> &y, const vector<vector<double>> &x, const TrainOptions &options,
-                       const vector<double> &weights, const vector<bool> &is_validation) {
+                       const vector<double> &weights, const TrainingRows &split) {
 	if (!options.categorical_features.empty() && options.backend != BoostBackend::LIGHTGBM) {
 		throw NotImplementedException("duckboost: categorical_features requires backend='lightgbm' or 'reference'");
 	}
@@ -668,13 +655,13 @@ BoostModel TrainNative(const vector<double> &y, const vector<vector<double>> &x,
 	switch (options.backend) {
 	case BoostBackend::XGBOOST:
 #if defined(DUCKBOOST_WITH_XGBOOST) && !defined(DUCKBOOST_NATIVE_STUB)
-		return TrainWithXGBoost(y, x, options, weights, is_validation);
+		return TrainWithXGBoost(y, x, options, weights, split);
 #else
 		break;
 #endif
 	case BoostBackend::LIGHTGBM:
 #if defined(DUCKBOOST_WITH_LIGHTGBM) && !defined(DUCKBOOST_NATIVE_STUB)
-		return TrainWithLightGBM(y, x, options, weights, is_validation);
+		return TrainWithLightGBM(y, x, options, weights, split);
 #else
 		break;
 #endif
