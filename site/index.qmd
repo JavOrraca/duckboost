@@ -7,11 +7,11 @@ image-alt: "duckboost: gradient-boosted trees, trained and scored in DuckDB SQL"
 
 <img src="images/duckboost-hex.svg" class="home-hex" alt="duckboost hex logo">
 
-`duckboost` is an experimental [DuckDB](https://duckdb.org/) extension for **SQL-native gradient boosting**. Train a histogram gradient-boosted decision trees (“GBDT”) inside DuckDB with zero vendor libraries, score with SQL functions, export trees as ordinary SQL, and optionally import XGBoost / LightGBM / CatBoost dumps when you need their full toolbox.
+`duckboost` is an experimental [DuckDB](https://duckdb.org/) extension for **SQL-native gradient boosting**. Train histogram gradient-boosted decision trees (“GBDT”) inside DuckDB with zero vendor libraries, score with SQL functions, export trees as ordinary SQL, and optionally import XGBoost / LightGBM / CatBoost dumps when you need their full toolbox.
 
 ::: {.callout-note}
 ## Status
-Experimental. Builds against **DuckDB 2.0.0 LTS** (“Cinnamon Teal”). DuckDB 1.x cannot load this extension. Install from the [community store](https://duckdb.org/community_extensions/extensions/duckboost): `INSTALL duckboost FROM community;` then `LOAD duckboost;`.
+duckboost 0.1.0 builds against **DuckDB 2.0.1 LTS** (“Cinnamon Teal”). DuckDB 1.x cannot load this extension. Install from the [community store](https://duckdb.org/community_extensions/extensions/duckboost): `INSTALL duckboost FROM community;` then `LOAD duckboost;`.
 :::
 
 ## Why train inside the database
@@ -61,6 +61,8 @@ Read penguins with `nullstr = 'NA'`. [Getting started](getting-started.qmd) fits
 | Piece | What it does |
 | --- | --- |
 | Native GBDT | `duckboost_train` with `backend = 'native'` (default) for regression, binary, and multiclass |
+| Raw named columns | Save training medians and category mappings with the trees. [Worked example](vignettes/split-and-preprocess.qmd) |
+| Prediction intervals | Calibrate held-out residuals and export lower, median and upper predictions. [Worked example](vignettes/prediction-intervals.qmd) |
 | Dump import | `duckboost_import` for XGBoost `dump_model` JSON, LightGBM `save_model` text, and CatBoost `save_model` JSON |
 | In-process score | `duckboost_predict` and `duckboost_predict_proba` |
 | Metrics & importance | `duckboost_evaluate` / `duckboost_evaluate_agg` (incl. `brier_score`, `roc_auc_ovr`, `roc_auc_ovo`), `duckboost_importance` |
@@ -68,8 +70,8 @@ Read penguins with `nullstr = 'NA'`. [Getting started](getting-started.qmd) fits
 
 Optional in-process XGBoost and LightGBM training is a compile-time flag (`DUCKBOOST_WITH_XGBOOST`, `DUCKBOOST_WITH_LIGHTGBM`). CatBoost has no public training C API, so it is import-only. A default `make` build ships the native trainer and dump import, not the vendor libraries.
 
-## DuckDB 2.0.0
+## DuckDB 2.0.1
 
-[DuckDB 2.0.0 LTS](https://duckdb.org/2026/10/21/announcing-duckdb-200) is out. This repository pins the same release community CI builds against (`v2.0.0` / `d54cbbe`). DuckDB 1.x clients cannot load the extension.
+[DuckDB 2.0.1 LTS](https://duckdb.org/2026/11/20/announcing-duckdb-201) is out. This repository pins the release commit `8d78114`. Community binaries are built and deployed separately by DuckDB. DuckDB 1.x clients cannot load the extension.
 
 [Getting started](getting-started.qmd) is the step-by-step path: `INSTALL duckboost FROM community` → first penguins model (clone/`make` is optional for contributors).

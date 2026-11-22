@@ -2,22 +2,18 @@
 title: "Getting started"
 ---
 
-A short path from zero to a first model on **DuckDB 2.0.0+**. The usual path is a community install; clone and build only if you are developing duckboost or need a custom binary.
-
-::: {.callout-note}
-## DuckDB 1.x
-
-DuckDB 1.x cannot load this extension. Use a DuckDB **2.0.0** (or newer) CLI, Python, R, or other client. Listing: [duckboost on Community Extensions](https://duckdb.org/community_extensions/extensions/duckboost).
-:::
+duckboost 0.1.0 targets **DuckDB 2.0.1 LTS**. Start with a stock 2.0.1 CLI or client.
 
 ## 1. Install and load
-
-In any DuckDB 2.0.0+ session:
 
 ```sql
 INSTALL duckboost FROM community;
 LOAD duckboost;
+SELECT version() AS engine, extension_version
+FROM duckdb_extensions() WHERE extension_name = 'duckboost' AND loaded;
 ```
+
+The 0.1.0 examples require extension version 0.1.0. Community availability depends on the engine and platform. If the package is still being deployed, the tagged source build below provides the same functions.
 
 Confirm the backends this binary can train or import:
 
@@ -141,7 +137,7 @@ On macOS, Xcode Command Line Tools plus Homebrew `cmake` is enough. On Ubuntu/De
 ### Clone and build
 
 ```bash
-git clone --recurse-submodules https://github.com/JavOrraca/duckboost.git
+git clone --branch v0.1.0 --recurse-submodules https://github.com/JavOrraca/duckboost.git
 cd duckboost
 make
 ```
@@ -172,7 +168,7 @@ LOAD duckboost;
 
 From a checkout, you can also load penguins offline with `read_csv('data/penguins.csv', nullstr = 'NA')` instead of the HTTPS URL.
 
-To load the `.duckdb_extension` into a **different** DuckDB 2.0.0 shell (not this repo’s binary), build that shell from the same `duckdb` submodule commit:
+To load the `.duckdb_extension` into a **different** DuckDB 2.0.1 shell (not this repo’s binary), build that shell from the same `duckdb` submodule commit:
 
 ```sql
 LOAD '/path/to/duckboost/build/release/extension/duckboost/duckboost.duckdb_extension';
@@ -181,6 +177,7 @@ LOAD '/path/to/duckboost/build/release/extension/duckboost/duckboost.duckdb_exte
 ## Next steps
 
 - [Native trainer](vignettes/native-trainer.qmd) — categoricals, early stopping, importance, SQL export, and small benchmarks.
-- [Splitting data and preprocessing](vignettes/split-and-preprocess.qmd) — train/test splits and encoding helpers.
+- [Splitting data and preprocessing](vignettes/split-and-preprocess.qmd) — save a training dictionary and median with the trees, then score raw rows by name.
+- [Prediction intervals](vignettes/prediction-intervals.qmd) — reserve a calibration set and export calibrated bounds.
 - [Example datasets: iris and penguins](vignettes/datasets.qmd) — multiclass, binary, and regression on URL-loaded CSVs.
 - [Train, predict, export](vignettes/train-predict-export.qmd) — export a model to plain SQL and score without calling the extension.

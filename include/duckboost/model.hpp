@@ -15,6 +15,7 @@
 #include "duckdb/common/vector.hpp"
 
 namespace duckdb {
+class TaskScheduler;
 namespace duckboost {
 
 //! REFERENCE is the built-in native histogram trainer. JSON still serializes as "reference";
@@ -134,6 +135,8 @@ struct BoostModel {
 };
 
 struct TrainOptions {
+	//! Shared DuckDB scheduler of the calling aggregate; standalone fits run serially.
+	TaskScheduler *scheduler = nullptr;
 	BoostBackend backend = BoostBackend::REFERENCE;
 	BoostTask task = BoostTask::REGRESSION;
 	RegressionLoss loss = RegressionLoss::SQUARED_ERROR;
@@ -180,7 +183,7 @@ struct TrainOptions {
 };
 
 //! Class count for a multiclass train; labels must be integer class indices in [0, n_classes).
-idx_t ResolveClassCount(const vector<double> &y, const TrainOptions &options);
+idx_t ResolveClassCount(const vector<double> &y, const TrainOptions &options, const vector<idx_t> &train_rows);
 
 struct EvalOptions {
 	//! auto | rmse | mae | pinball | expectile | accuracy | logloss | brier_score |
@@ -242,11 +245,22 @@ string BackendCapabilityNote(BoostBackend backend);
 void ResolveTrainValidRows(idx_t n_rows, const TrainOptions &options, const vector<bool> &is_validation,
                            vector<idx_t> &train_rows, vector<idx_t> &valid_rows);
 
+struct TrainingRows {
+	vector<idx_t> train_rows;
+	vector<idx_t> valid_rows;
+};
+
+//! Fit with the split already used for learning preprocessing statistics.
+BoostModel TrainModel(const vector<double> &y, const vector<vector<double>> &x, const TrainOptions &options,
+                      const vector<double> &weights, const TrainingRows &split);
+
 //! weights empty ⇒ unit weights. is_validation empty ⇒ optional random hold-out via options.
 BoostModel TrainModel(const vector<double> &y, const vector<vector<double>> &x, const TrainOptions &options,
                       const vector<double> &weights = {}, const vector<bool> &is_validation = {});
 double EvaluateModel(const BoostModel &model, const vector<double> &y, const vector<vector<double>> &x,
                      const EvalOptions &options);
+//! Raw score expression for a single-output ensemble over already prepared feature columns.
+string ExportScoreExpression(const BoostModel &model, const vector<string> &columns);
 string ExportModelSQL(const BoostModel &model, const string &table_name, const vector<string> &feature_columns,
                       const SqlExportOptions &options);
 

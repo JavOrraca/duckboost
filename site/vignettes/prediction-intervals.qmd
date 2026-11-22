@@ -1,109 +1,99 @@
 ---
-title: "Prediction intervals with quantile models"
-execute:
-  enabled: false
+title: "Calibrated prediction intervals"
 ---
 
-Quantile regression gives a direct path to prediction intervals inside DuckDB: train several pinball models, check coverage, and optionally apply split-conformal calibration. Export with `keep_columns` so scored rows keep their identity keys.
+Fit three quantile models on training rows, freeze those fits, and estimate the calibration correction on a separate fold. The interval artifact stores the three fits, target miscoverage, calibration count, crossing policy, and correction in one JSON string. Scoring needs only the artifact and the input features.
 
-```sql
+## Fit and calibrate
+
+This example uses row IDs to create three disjoint sets. The generated features and noise depend on separate hashes of each ID.
+
+```{python}
+#| echo: false
+#| output: asis
+from _helpers.duckrun import show
+
+fit_and_calibrate = """
 LOAD duckboost;
 
-CREATE TABLE series AS
-SELECT
-	i::DOUBLE AS x,
-	(0.5 * i + 3.0 * sin(i / 5.0) + (i % 7) * 0.2)::DOUBLE AS y,
-	i AS id
-FROM range(1, 101) t(i);
+CREATE TABLE observations AS
+WITH sampled AS (
+    SELECT i AS id,
+           (md5_number_lower('x-' || i) % 1000000) / 1000000.0 AS x,
+           (md5_number_lower('noise-' || i) % 1000000) / 1000000.0 AS u
+    FROM range(1200) t(i)
+)
+SELECT id, x, sin(6 * x) + (0.2 + x) * (2 * u - 1) AS y
+FROM sampled;
 
-CREATE TABLE quantile_models AS
+CREATE TABLE fits AS
 SELECT
-	duckboost_train(y, [x], MAP {
-		'objective': 'quantile', 'quantile_alpha': '0.05',
-		'n_estimators': '30', 'max_depth': '3', 'feature_names': 'x'
-	}) AS q05,
-	duckboost_train(y, [x], MAP {
-		'objective': 'quantile', 'quantile_alpha': '0.50',
-		'n_estimators': '30', 'max_depth': '3', 'feature_names': 'x'
-	}) AS q50,
-	duckboost_train(y, [x], MAP {
-		'objective': 'quantile', 'quantile_alpha': '0.95',
-		'n_estimators': '30', 'max_depth': '3', 'feature_names': 'x'
-	}) AS q95
-FROM series;
+    duckboost_train(y, [x], MAP {
+        'objective':'quantile', 'quantile_alpha':'0.05', 'n_estimators':'30',
+        'max_depth':'3', 'feature_names':'x'
+    }) AS lo,
+    duckboost_train(y, [x], MAP {
+        'objective':'quantile', 'quantile_alpha':'0.5', 'n_estimators':'30',
+        'max_depth':'3', 'feature_names':'x'
+    }) AS med,
+    duckboost_train(y, [x], MAP {
+        'objective':'quantile', 'quantile_alpha':'0.95', 'n_estimators':'30',
+        'max_depth':'3', 'feature_names':'x'
+    }) AS hi
+FROM observations WHERE id < 700;
+
+CREATE TABLE intervals AS
+SELECT duckboost_calibrate_interval(lo, med, hi, 0.10, y, [x]) AS model
+FROM fits, observations WHERE id BETWEEN 700 AND 899;
+
+CREATE TABLE holdout AS SELECT * FROM observations WHERE id >= 900;
+"""
+show(fit_and_calibrate + """
+SELECT round((model::JSON->>'correction')::DOUBLE, 5) AS correction,
+       (model::JSON->>'n_calibration')::INTEGER AS calibration_rows
+FROM intervals;
+""")
 ```
 
-Empirical coverage and mean interval width on the training rows:
+If you tune hyperparameters or use early stopping, complete those decisions before opening the calibration fold. Each calibration group requires the same three fitted models and `alpha` on every row. Supply the lower quantile fit, the 0.5 fit, and the upper quantile fit in that order. Calibration rejects NULL targets and feature lists. A NULL feature value inside the list follows each fitted tree’s missing-value routing.
 
-```sql
-SELECT
-	round(avg((y >= lo AND y <= hi)::INTEGER), 2) AS coverage,
-	round(avg(hi - lo), 2) AS mean_width,
-	round(avg((lo <= mid AND mid <= hi)::INTEGER), 2) AS ordered_bands
-FROM (
-	SELECT
-		s.y,
-		duckboost_predict(m.q05, [s.x]) AS lo,
-		duckboost_predict(m.q50, [s.x]) AS mid,
-		duckboost_predict(m.q95, [s.x]) AS hi
-	FROM series s, quantile_models m
+## Interpret the correction
+
+At calibration and scoring time, duckboost sorts each row’s three predictions by value. Call the sorted predictions \(L, M, U\). For each of the \(n\) calibration rows, compute \(s_i = \max(L_i-y_i, y_i-U_i)\). The correction \(c\) is the calibration score at **one-based rank** \(\lceil(n+1)(1-\alpha)\rceil\) among the ordered scores. For scores 1 through 10 and \(\alpha=0.1\), the correction is 10. Calibration raises an error if the rank exceeds the number of rows.
+
+The returned fields are `lower` = \(L-c\), `median` = \(M\), and `upper` = \(U+c\). A negative correction shrinks the band and can move an endpoint past the reported median. If `lower > upper`, the prediction set is empty and its width is zero. Under exchangeability of calibration and future observations, split conformal prediction gives marginal coverage of at least \(1-\alpha\). Realized coverage on any particular test set varies. [Romano, Patterson, and Candès, *Conformalized Quantile Regression* (2019)](https://proceedings.neurips.cc/paper/2019/hash/5103c3584b063c431bd1268e9b5e76fb-Abstract.html)
+
+## Score untouched rows and export
+
+```{python}
+#| echo: false
+#| output: asis
+show("""
+WITH predictions AS (
+    SELECT y, duckboost_predict_interval(model, [x]) AS band
+    FROM holdout, intervals
+)
+SELECT count(*) AS test_rows,
+       count_if(y BETWEEN band.lower AND band.upper) AS covered,
+       round(avg((y BETWEEN band.lower AND band.upper)::INTEGER), 4) AS coverage,
+       round(avg(greatest(0, band.upper - band.lower)), 4) AS mean_width
+FROM predictions;
+""", setup=fit_and_calibrate)
+```
+
+Save `intervals.model` in a DuckDB table or store its text in a model registry. A NULL artifact or feature list yields a NULL prediction. For extension-free deployment, generate the scoring query once and execute it wherever the raw numeric columns are available. The optional fourth argument lists identity columns to return alongside the three estimates.
+
+```{python}
+#| echo: false
+#| output: asis
+show("""
+SET VARIABLE score_sql = (
+    SELECT duckboost_interval_to_sql(model, 'holdout', ['x'], ['id'])
+    FROM intervals
 );
+
+SELECT id, lower, median, upper
+FROM query(getvariable('score_sql'))
+ORDER BY id LIMIT 5;
+""", setup=fit_and_calibrate)
 ```
-
-Pinball loss via `duckboost_evaluate` follows the stored `objective_alpha` when `metric` is `auto`:
-
-```sql
-SELECT
-	duckboost_evaluate_agg(model, y, [x]) AS auto_pinball,
-	duckboost_evaluate_agg(model, y, [x], MAP {'metric': 'pinball'}) AS pinball
-FROM q90, series;
-```
-
-When independently trained quantiles cross, enforce order with `least` / `greatest` before reporting the interval:
-
-```sql
-SELECT
-	id,
-	least(lo, hi) AS lower,
-	greatest(lo, hi) AS upper
-FROM (
-	SELECT
-		s.id,
-		duckboost_predict(m.q05, [s.x]) AS lo,
-		duckboost_predict(m.q95, [s.x]) AS hi
-	FROM series s, quantile_models m
-);
-```
-
-## Split-conformal calibration
-
-Hold out a calibration fold, compute absolute residual scores against the quantile band, and take the conformal quantile of those scores. Adding that width to every prediction interval restores finite-sample coverage under exchangeability, at the cost of wider intervals.
-
-```sql
--- Example shape (fill in with your calibration split):
--- score_i = greatest(q_lo(x_i) - y_i, y_i - q_hi(x_i))
--- q_hat = quantile_cont(score, 1 - alpha) on the calibration fold
--- interval = [q_lo - q_hat, q_hi + q_hat]
-```
-
-## Deploy with identity columns
-
-For scoring jobs, keep the row id beside the prediction so results join back without relying on row order:
-
-```sql
-SELECT duckboost_to_sql(
-	model,
-	'series',
-	['x'],
-	MAP {
-		'separate_trees': 'false',
-		'prediction_alias': 'q50',
-		'keep_columns': 'id'
-	}
-) AS export_sql
-FROM q50;
-```
-
-## Scale note
-
-The native trainer buffers every training row and its bin ids in memory, then finds splits from histograms (including oblivious / symmetric growth). Training is single-threaded. `duckboost_predict` caches a parsed model within each execution chunk when the JSON repeats; for large scoring jobs prefer `duckboost_to_sql` (optionally with `keep_columns` / `proba`) and run the generated SQL without the extension.

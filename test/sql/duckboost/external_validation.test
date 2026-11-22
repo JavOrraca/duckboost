@@ -129,3 +129,41 @@ FROM penguins_ext_models m, penguins_tvt s
 WHERE s.split = 'test';
 ----
 true
+
+# Balanced multipliers use only the training class totals (including sample weights).
+# Validation labels can select a round under early stopping; with fixed rounds all seven scores must match.
+statement ok
+CREATE TABLE balanced_fits AS
+SELECT weighted, valid_y, duckboost_train(
+	CASE WHEN i < 100 THEN i % 2 ELSE valid_y END,
+	[(i % 7)::DOUBLE],
+	CASE WHEN weighted THEN 1.0 + i % 3 ELSE 1.0 END,
+	i >= 100,
+	MAP {'task': 'binary', 'class_weight': 'balanced', 'n_estimators': '3'}
+) AS model
+FROM range(200) t(i), (VALUES (0), (1)) v(valid_y), (VALUES (false), (true)) w(weighted)
+GROUP BY ALL;
+
+query II
+SELECT count(*), max(abs(regexp_extract(model, '"base_score":([-0-9.e+]+)', 1)::DOUBLE)) < 1e-12
+FROM balanced_fits;
+----
+4	true
+
+query II
+SELECT count(*), max(abs(duckboost_predict(a.model, [i]) - duckboost_predict(b.model, [i]))) < 1e-12
+FROM balanced_fits a JOIN balanced_fits b USING(weighted), range(7) t(i)
+WHERE a.valid_y = 0 AND b.valid_y = 1;
+----
+14	true
+
+# Unequal multiclass sample weights and altered held-out class masses produce identical full models.
+query I
+SELECT count(DISTINCT model) FROM (
+	SELECT duckboost_train(CASE WHEN i < 90 THEN i % 3 ELSE valid_y END, [(i % 7)::DOUBLE],
+		(1 + i % 4)::DOUBLE, i >= 90,
+		MAP {'task': 'multiclass', 'class_weight': 'balanced', 'n_estimators': '3'}) AS model
+	FROM range(180) t(i), (VALUES (0), (2)) v(valid_y) GROUP BY valid_y
+);
+----
+1

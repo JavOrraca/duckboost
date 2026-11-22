@@ -20,6 +20,7 @@
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/main/extension/extension_loader.hpp"
 #include "duckdb/parser/parsed_data/create_macro_info.hpp"
+#include "duckdb/parallel/task_scheduler.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -28,8 +29,6 @@
 
 namespace duckdb {
 namespace duckboost {
-
-namespace {
 
 unordered_map<string, string> MapVectorToOptions(Vector &map_vector, idx_t row) {
 	unordered_map<string, string> options;
@@ -114,6 +113,8 @@ vector<string> ReadVarcharList(Vector &list_vector, idx_t row) {
 	}
 	return values;
 }
+
+namespace {
 
 // Total order on doubles with every NaN equal to every other NaN and after all numbers, so std::sort stays well
 // defined when a feature is NaN.
@@ -333,7 +334,7 @@ void TrainCombine(Vector &source, Vector &target, AggregateInputData &, idx_t co
 	}
 }
 
-void TrainFinalize(Vector &state_vector, AggregateFinalizeInputData &, Vector &result, idx_t count, idx_t offset) {
+void TrainFinalize(Vector &state_vector, AggregateFinalizeInputData &input, Vector &result, idx_t count, idx_t offset) {
 	result.SetVectorType(VectorType::FLAT_VECTOR);
 	UnifiedVectorFormat state_format;
 	state_vector.ToUnifiedFormat(state_format);
@@ -346,6 +347,7 @@ void TrainFinalize(Vector &state_vector, AggregateFinalizeInputData &, Vector &r
 			continue;
 		}
 		auto options = state.data->options_set ? state.data->options : TrainOptions();
+		options.scheduler = &GetTrainingScheduler(input);
 		SortRowsCanonically(state.data->y, state.data->x, state.data->has_weights ? &state.data->weights : nullptr,
 		                    state.data->has_is_validation ? &state.data->is_validation : nullptr);
 		const vector<double> empty_weights;
@@ -1077,6 +1079,21 @@ void ImportanceFunction(ClientContext &, TableFunctionInput &data, DataChunk &ou
 	state.offset += count;
 }
 
+struct TrainingFunctionInfo : public AggregateFunctionInfo {
+	explicit TrainingFunctionInfo(TaskScheduler &scheduler) : scheduler(scheduler) {
+	}
+	TaskScheduler &scheduler;
+};
+
+void ConfigureTrainingScheduler(AggregateFunctionSet &functions, ExtensionLoader &loader) {
+	auto info = make_shared_ptr<TrainingFunctionInfo>(TaskScheduler::GetScheduler(loader.GetDatabaseInstance()));
+	functions.ApplyToFunctions([&](AggregateFunction &fun) { fun.SetExtraFunctionInfo(info); });
+}
+
+TaskScheduler &GetTrainingScheduler(const AggregateFinalizeInputData &input) {
+	return input.function.GetExtraFunctionInfo().Cast<TrainingFunctionInfo>().scheduler;
+}
+
 void RegisterDuckBoostFunctions(ExtensionLoader &loader) {
 	AggregateFunctionSet train_set("duckboost_train");
 	train_set.AddFunction(GetTrainFunction(false, false, false));
@@ -1087,6 +1104,7 @@ void RegisterDuckBoostFunctions(ExtensionLoader &loader) {
 	train_set.AddFunction(GetTrainFunction(true, false, true));
 	train_set.AddFunction(GetTrainFunction(true, true, false));
 	train_set.AddFunction(GetTrainFunction(true, true, true));
+	ConfigureTrainingScheduler(train_set, loader);
 	loader.RegisterFunction(train_set);
 
 	ScalarFunctionSet predict_set("duckboost_predict");

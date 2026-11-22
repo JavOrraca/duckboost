@@ -1,13 +1,12 @@
 ---
-title: "Native vs LightGBM benchmark"
+title: "Training and SQL export benchmarks"
 ---
 
-Medium-scale holdout comparison of the built-in histogram trainer (`backend = 'native'`) against in-process LightGBM (`backend = 'lightgbm'`) on a deterministic synthetic tabular problem. Numbers come from the committed results file produced by [`scripts/native_benchmark/run.py`](https://github.com/JavOrraca/duckboost/blob/main/scripts/native_benchmark/run.py).
+## duckboost 0.1.0 on DuckDB 2.0.1 LTS
 
-::: {.callout-important}
-## How to read this
-Same hyperparameter MAP for both backends, ~200k rows, ~20% hash holdout. This is evidence that the native path learns useful structure at a moderate scale — not a bake-off that LightGBM loses in general. LightGBM still wins on huge data, GPU, and vendor-only features.
-:::
+Four trainer revisions ran on the same Apple M2 with 24 GiB of RAM, using the stock DuckDB 2.0.1 CLI. Each configuration ran three times in fresh processes. The table cells show median training seconds and peak process memory in MiB. Lower values are better for RMSE and log loss.
+
+The standard workload uses 200,000 rows with four categorical and eight numeric features. The wide regression workload uses 50,000 rows with 32 numeric features. Each wide feature has approximately 48% zeros, 48% ones and a long tail. The target depends on whether each of the first three features is positive. All fits use seed 7, an untouched 20% hash holdout, 80 trees, depth 5 and at most 64 numeric cutpoints.
 
 ```{python}
 #| echo: false
@@ -15,103 +14,69 @@ Same hyperparameter MAP for both backends, ~200k rows, ~20% hash holdout. This i
 import json
 from pathlib import Path
 
-results_path = Path("..") / "scripts" / "native_benchmark" / "results.json"
-payload = json.loads(results_path.read_text())
+directory = Path("..") / "scripts" / "native_benchmark"
+release = json.loads((directory / "results-v0.1.0.json").read_text())
+by_key = {(r["revision"], r["workload"], r["task"], r["threads"]): r for r in release["runs"]}
 
-print(f"**Generated:** `{payload['generated_at']}`  ")
-print(f"**Rows:** {payload['n_rows']:,} (seed `{payload['seed']}`)  ")
-host = payload.get("host", {})
-print(f"**Host:** `{host.get('platform', 'unknown')}`")
-print()
-
-opts = payload["shared_options"]
-print("**Shared train options**")
-print()
-print("| Option | Value |")
-print("| --- | --- |")
-for key in (
-    "n_estimators",
-    "max_depth",
-    "learning_rate",
-    "min_samples_leaf",
-    "max_bins",
-    "reg_lambda",
-    "subsample",
-    "colsample_bytree",
-    "seed",
-):
-    print(f"| `{key}` | `{opts[key]}` |")
-print()
-print("Both runs also set `categorical_features` to `cat_a,cat_b,cat_c,cat_d`.")
-print()
-
-runs = payload["runs"]
-print("## Holdout results")
-print()
-print("| Task | Backend | Metric | Holdout | Secondary | Train seconds |")
-print("| --- | --- | --- | ---: | ---: | ---: |")
-for run in runs:
-    secondary = ""
-    if run.get("secondary_metric") is not None:
-        secondary = f"{run['secondary_metric_name']}={run['secondary_metric']:.4f}"
-    print(
-        f"| {run['task']} | `{run['backend']}` | {run['metric']} | "
-        f"{run['holdout_metric']:.6f} | {secondary} | {run['train_seconds']:.3f} |"
-    )
-
-# Pairwise deltas for the summary callout.
-by_key = {(r["task"], r["backend"]): r for r in runs}
-print()
-print("## Takeaways from this run")
-print()
-if ("regression", "native") in by_key and ("regression", "lightgbm") in by_key:
-    n = by_key[("regression", "native")]
-    l = by_key[("regression", "lightgbm")]
-    print(
-        f"- **Regression RMSE:** native `{n['holdout_metric']:.4f}` vs LightGBM `{l['holdout_metric']:.4f}` "
-        f"(train `{n['train_seconds']:.1f}` s vs `{l['train_seconds']:.1f}` s)."
-    )
-if ("binary", "native") in by_key and ("binary", "lightgbm") in by_key:
-    n = by_key[("binary", "native")]
-    l = by_key[("binary", "lightgbm")]
-    print(
-        f"- **Binary logloss:** native `{n['holdout_metric']:.4f}` vs LightGBM `{l['holdout_metric']:.4f}` "
-        f"(accuracy `{n['secondary_metric']:.4f}` vs `{l['secondary_metric']:.4f}`; "
-        f"train `{n['train_seconds']:.1f}` s vs `{l['train_seconds']:.1f}` s)."
-    )
+for workload, task, heading, metric in [
+    ("standard", "regression", "Standard regression", "RMSE"),
+    ("standard", "binary", "Standard binary classification", "Log loss"),
+    ("wide-skewed", "regression", "Wide skewed regression", "RMSE"),
+]:
+    print(f"### {heading}\n")
+    print(f"| Trainer | Holdout {metric} | 1 thread (s / MiB) | 4 threads (s / MiB) | 8 threads (s / MiB) |")
+    print("| --- | ---: | ---: | ---: | ---: |")
+    for variant, meta in release["revisions"].items():
+        runs = [by_key[variant, workload, task, threads] for threads in (1, 4, 8)]
+        cells = [f"{r['train_seconds']:.3f} / {r['peak_process_mib']:.1f}" for r in runs]
+        scores = list(dict.fromkeys(r["holdout_metric"] for r in runs))
+        value = " / ".join(f"{score:.6f}" for score in scores)
+        print(f"| {meta['label']} | {value} | " + " | ".join(cells) + " |")
+    print()
 ```
 
-## Problem design
+The timer includes the SQL aggregate, canonical row ordering, binning, tree construction and model serialization. It excludes dataset preparation and holdout evaluation. Memory is the highest process RSS across the three repeats and includes those other phases. The engine, compiler flags, revision IDs, per-fit times and peak memory measurements, and training options are recorded in the [release benchmark data](https://github.com/JavOrraca/duckboost/blob/v0.1.0/scripts/native_benchmark/results-v0.1.0.json).
 
-Synthetic rows from `range(n)`:
+The empirical cutpoints reduced wide holdout RMSE from 1.831095 to 0.142511. Standard regression RMSE rose from 0.238832 to 0.240560 and binary log loss rose from 0.048162 to 0.048164. The storage and scheduler revisions preserved the cutpoint revision's holdout scores to six decimals.
 
-| Feature group | Columns | Role |
-| --- | --- | --- |
-| Categorical | `cat_a`…`cat_d` | Low-cardinality integer codes (`% 17`, `% 9`, …) |
-| Continuous | `x1`…`x8` | Sines/cosines, scaled remainders, logs |
-| Regression target | `y_reg` | Additive signal + `sin × cat` interaction + small noise |
-| Binary target | `y_bin` | Threshold on a related score |
-| Split | `split` | `hash(i, seed) % 5 = 0` → `test`, else `train` |
+At eight threads, standard regression training dropped from 5.508 to 2.831 seconds, binary training from 4.059 to 2.190 seconds and wide training from 1.571 to 0.396 seconds. The release used less peak process memory than the baseline on all three workloads at that budget. At one thread, the packed-only revision ran slightly faster than the final revision on standard regression and classification. The tables show the differences across budgets.
 
-Train wall time is measured with `epoch_ms(current_timestamp)` immediately before and after the `duckboost_train` aggregate (dataset build excluded). Holdout metrics use `duckboost_evaluate_agg` on the test split only.
-
-## Reproduce
+## Reproduce the release workloads
 
 ```bash
-# LightGBM-linked release build
-EXT_FLAGS='-DDUCKBOOST_WITH_LIGHTGBM=ON' make release
-
-python3 scripts/native_benchmark/run.py --n-rows 200000 --seed 7
-# refreshes scripts/native_benchmark/results.json — re-render this page to update the table
+make release
+python3 scripts/native_benchmark/run.py --n-rows 200000 --seed 7 --skip-lightgbm \
+  --threads 4 --repeats 3 --output standard.json
+python3 scripts/native_benchmark/run.py --wide --n-rows 50000 --seed 7 --skip-lightgbm \
+  --threads 4 --repeats 3 --output wide.json
 ```
 
-See [`scripts/native_benchmark/README.md`](https://github.com/JavOrraca/duckboost/blob/main/scripts/native_benchmark/README.md) for flags and caveats.
+Use `--threads 1` and `--threads 8` to reproduce the other budgets. To compare extension builds on one engine, pass `--cli` and `--extension` with the paths to a matching stock CLI and loadable extension. [Benchmark harness](https://github.com/JavOrraca/duckboost/blob/v0.1.0/scripts/native_benchmark/README.md)
 
-## What this does *not* show
+## Historical comparison with linked LightGBM
 
-- Public leaderboard datasets (Higgs, airline, …)
-- Multi-million-row throughput or multithreaded native training
-- Vendor-only knobs (monotonic constraints, GPU, GOSS/EFB)
-- Perfect hyperparameter parity — DuckDB maps a shared MAP into each backend
+The October 2026 benchmark used the standard 200,000-row problem and one holdout fit per backend and task on Linux x86-64. The following results come from that earlier build. [Original measurements](https://github.com/JavOrraca/duckboost/blob/v0.0.5/scripts/native_benchmark/results.json)
 
-For the SQL walkthrough on real CSVs, see the [native trainer vignette](vignettes/native-trainer.qmd).
+```{python}
+#| echo: false
+#| output: asis
+historical = json.loads((directory / "results.json").read_text())
+print("| Task | Backend | Metric | Holdout | Accuracy | Training seconds |")
+print("| --- | --- | --- | ---: | ---: | ---: |")
+for r in historical["runs"]:
+    acc = f"{r['secondary_metric']:.4f}" if "secondary_metric" in r else ""
+    print(f"| {r['task']} | {r['backend']} | {r['metric']} | {r['holdout_metric']:.6f} | {acc} | {r['train_seconds']:.3f} |")
+```
+
+For worked SQL examples on real CSVs, see the [native trainer vignette](vignettes/native-trainer.qmd).
+
+## SQL export size and execution
+
+On the same Apple M2, each fixed ensemble scored 100,000 rows in a stock DuckDB 2.0.1 CLI with one thread. The table reports the median of three fresh processes. PREPARE includes parsing, binding, optimization and physical planning. EXECUTE computes the sum of predictions to force every row to be scored. All four before/after checksums matched. The baseline is the v0.0.5 implementation built for 2.0.1. [Reproduce the export benchmark](https://github.com/JavOrraca/duckboost/blob/v0.1.0/scripts/native_benchmark/sql_export.py)
+
+| Ensemble | Separate trees | SQL bytes, before → after | Leaf literals, before → after | Prepare (ms) | Execute (ms) |
+| --- | --- | ---: | ---: | ---: | ---: |
+| 1 × depth 8 | false | 292,757 → 19,843 | 6,561 → 256 | 254 → 21 | 188 → 29 |
+| 1 × depth 8 | true | 292,880 → 19,966 | 6,561 → 256 | 229 → 19 | 165 → 27 |
+| 8 × depth 5 | false | 85,850 → 19,218 | 1,944 → 256 | 84 → 24 | 79 → 42 |
+| 8 × depth 5 | true | 86,295 → 19,663 | 1,944 → 256 | 65 → 19 | 63 → 38 |

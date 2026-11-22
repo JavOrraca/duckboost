@@ -1,0 +1,162 @@
+# name: test/sql/duckboost/raw_pipeline.test
+# description: fitted preprocessing, save/load and pure SQL raw scoring
+# group: [duckboost]
+
+require duckboost
+
+statement ok
+CREATE TABLE obs AS
+SELECT * FROM (VALUES
+ (0, 'basic', 2, 1.0::DOUBLE, 0.0, false),
+ (1, 'basic', 4, 4.0, 0.0, false),
+ (2, 'pro''s', NULL, 8.0, 1.0, false),
+ (3, 'pro''s', 6, NULL, 1.0, false),
+ (4, NULL, 8, 'NaN'::DOUBLE, 1.0, false),
+ (5, 'validation only', 1000, 500.0, 0.0, true)
+) AS t(id, plan_type, tenure_months, usage_30d, y, is_validation);
+
+statement ok
+CREATE TABLE fitted AS SELECT duckboost_train_raw(y, {
+ 'plan_type': plan_type, 'tenure_months': tenure_months, 'usage_30d': usage_30d
+}, is_validation, MAP {'numeric_imputation':'median', 'task':'binary', 'n_estimators':'3'}) AS model FROM obs;
+
+statement ok
+COPY fitted TO '{TEST_DIR}/raw_model.csv' (FORMAT CSV, HEADER);
+
+statement ok
+CREATE TABLE reloaded(model VARCHAR);
+
+statement ok
+COPY reloaded FROM '{TEST_DIR}/raw_model.csv' (FORMAT CSV, HEADER);
+
+statement ok
+SET VARIABLE model = (SELECT model FROM reloaded);
+
+query I
+SELECT contains(m, '"duckboost_version":3,')
+   AND contains(m, '{"name":"plan_type","type":"VARCHAR","levels":["basic","pro''s"]}')
+   AND regexp_extract(m, '"name":"tenure_months","type":"INTEGER","median":([0-9.]+)', 1)::DOUBLE = 5
+   AND regexp_extract(m, '"name":"usage_30d","type":"DOUBLE","median":([0-9.]+)', 1)::DOUBLE = 4
+FROM (SELECT getvariable('model') AS m);
+----
+true
+
+# A whole table row may include pass-through fields and a different feature order.
+statement ok
+CREATE TABLE raw_score AS SELECT * FROM (VALUES
+ (107, 4.0::DOUBLE, 5, 'basic'),
+ (103, 2.0, 7, 'pro''s'),
+ (105, NULL, NULL, 'never seen'),
+ (104, 4.0, 5, NULL),
+ (106, 'Infinity'::DOUBLE, NULL, 'validation only')
+) AS r(id, usage_30d, tenure_months, plan_type);
+
+statement ok
+CREATE TABLE native AS SELECT id, duckboost_predict_raw(getvariable('model'), r) AS p FROM raw_score r;
+
+query I
+SELECT count(DISTINCT p) = 1 FROM native WHERE id IN (104,105,106);
+----
+true
+
+query I
+SELECT max(p) - min(p) > .01 FROM native;
+----
+true
+
+foreach mode false true
+
+statement ok
+SET VARIABLE q = duckboost_to_sql_raw(getvariable('model'), 'raw_score', MAP {
+ 'keep_columns':'*','prediction_alias':'estimate','proba':'true','separate_trees':'{mode}'
+});
+
+query I
+SELECT count(*) = 5 AND max(abs(p - estimate)) < 1e-12 AND max(abs(p - proba_1)) < 1e-12
+   AND max(abs(1-p - proba_0)) < 1e-12 AND count(usage_30d) = 4
+FROM query(getvariable('q')) JOIN native USING (id);
+----
+true
+
+endloop
+
+# No median exists for an entirely missing training feature; default passthrough also learns no median.
+query I
+SELECT contains(m, '{"name":"x","type":"DOUBLE","median":null}')
+   AND contains(m, '{"name":"cat","type":"VARCHAR","levels":[]}')
+FROM (SELECT duckboost_train_raw(y, {'x':NULL::DOUBLE, 'cat':NULL::VARCHAR},
+      MAP {'numeric_imputation':'median'}) AS m FROM obs);
+----
+true
+
+query I
+SELECT contains(m, '"numeric_imputation":"none"') AND
+       contains(m, '{"name":"x","type":"DOUBLE","median":null}')
+FROM (SELECT duckboost_train_raw(y, {'x':usage_30d}) AS m FROM obs);
+----
+true
+
+# Every distinct category identifies one row. The implicit validation split must exclude its categories.
+query I
+SELECT len(string_split(regexp_extract(m, '"levels":\[([^]]*)\]', 1), ',')) = 15
+FROM (SELECT duckboost_train_raw(i, {'c': i::VARCHAR}, MAP {
+  'early_stopping_rounds':'1','validation_fraction':'0.25','seed':'10','n_estimators':'2'
+}) AS m FROM range(20) t(i));
+----
+true
+
+statement error
+SELECT duckboost_predict_raw(getvariable('model'), {'plan_type':'basic', 'usage_30d':4::DOUBLE});
+----
+missing required raw column 'tenure_months'
+
+statement error
+SELECT duckboost_predict_raw(getvariable('model'), {'plan_type':42, 'usage_30d':2::DOUBLE, 'tenure_months':1});
+----
+raw column 'plan_type' expected VARCHAR
+
+statement ok
+CREATE TABLE wrong AS SELECT id, plan_type, usage_30d, tenure_months::VARCHAR AS tenure_months FROM raw_score;
+
+statement ok
+SET VARIABLE wrong_sql = duckboost_to_sql_raw(getvariable('model'),'wrong');
+
+statement error
+SELECT * FROM query(getvariable('wrong_sql'));
+----
+raw column 'tenure_months' expected INTEGER
+
+statement error
+SELECT duckboost_train_raw(y, {'date':DATE '2026-11-21'}) FROM obs;
+----
+must be numeric or VARCHAR
+
+# Neither a table called encoded nor extra fields called r, f0 or input_row
+# may shadow the generated encoding or replace the original passthrough value.
+statement ok
+CREATE TABLE encoded AS SELECT *, 17 AS r, 83 AS f0, 'original' AS input_row FROM raw_score;
+
+statement ok
+SET VARIABLE reserved_sql = duckboost_to_sql_raw(getvariable('model'), 'encoded', MAP {'keep_columns':'*'});
+
+query I
+SELECT count(*) = 5 AND bool_and(r=17 AND f0=83 AND input_row='original' AND abs(p-prediction)<1e-12)
+FROM query(getvariable('reserved_sql')) JOIN native USING (id);
+----
+true
+
+statement ok
+CREATE TABLE already_scored AS SELECT *, -999 AS Prediction FROM raw_score;
+
+statement ok
+SET VARIABLE colliding_sql = duckboost_to_sql_raw(getvariable('model'),'already_scored',MAP {'keep_columns':'*'});
+
+statement error
+SELECT * FROM query(getvariable('colliding_sql'));
+----
+duplicate STRUCT entry
+
+statement error
+SELECT duckboost_train_raw(y, {'x':usage_30d}, MAP {'n_estimators':CASE WHEN id=1 THEN '1' ELSE '2' END}) FROM obs;
+----
+options must be constant per fit

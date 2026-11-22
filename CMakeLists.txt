@@ -13,8 +13,14 @@ project(DuckboostExtension)
 include_directories(include)
 
 set(EXTENSION_SOURCES
-    duckboost_extension.cpp src/model.cpp src/trainer.cpp src/native_train.cpp
-    src/import.cpp src/duckboost_functions.cpp)
+    duckboost_extension.cpp
+    src/model.cpp
+    src/trainer.cpp
+    src/native_train.cpp
+    src/import.cpp
+    src/interval.cpp
+    src/raw_pipeline.cpp
+    src/duckboost_functions.cpp)
 
 if(COMMAND build_extension_library)
   build_extension_library(${TARGET_NAME} ${EXTENSION_SOURCES})
@@ -60,6 +66,8 @@ macro(duckboost_link_lib LIB)
     endif()
   endforeach()
 endmacro()
+
+duckboost_link_lib(duckdb_yyjson)
 
 if(DUCKBOOST_WITH_XGBOOST)
   duckboost_compile_def(DUCKBOOST_WITH_XGBOOST=1)

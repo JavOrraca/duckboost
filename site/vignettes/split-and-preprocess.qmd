@@ -2,9 +2,9 @@
 title: "Splitting data and preprocessing"
 ---
 
-This page covers the two steps that come before training: splitting the rows into sets with different jobs, and turning raw columns into the numeric features `duckboost_train` accepts. The ideas and names come from the tidymodels packages [rsample](https://rsample.tidymodels.org/) (splits) and [recipes](https://recipes.tidymodels.org/) (preprocessing). The tidymodels [case study](https://www.tidymodels.org/start/case-study/) is a good end-to-end introduction.
+Split the rows before learning preprocessing values. You can save fitted preprocessing with a model using `duckboost_train_raw`, or build numeric features explicitly for `duckboost_train`. The ideas and names come from the tidymodels packages [rsample](https://rsample.tidymodels.org/) (splits) and [recipes](https://recipes.tidymodels.org/) (preprocessing). The tidymodels [case study](https://www.tidymodels.org/start/case-study/) is a good end-to-end introduction.
 
-duckboost does not try to recreate those packages. It adds a few small SQL macros for the parts that are awkward to write by hand, and everything else stays ordinary SQL.
+The split helpers assign observations to training, validation, and test sets. The following examples use both a custom penguin recipe and a saved pipeline for named columns.
 
 The examples load the Palmer penguins CSV from its public raw URL. Released DuckDB autoloads `httpfs` for HTTPS `read_csv`. Each block on this page starts a new in-memory database. Blocks that continue an earlier step silently recreate the tables that step made.
 
@@ -421,6 +421,85 @@ GROUP BY model;
 
 All 344 penguins are used, including the ones with missing values, and nothing computed from the test rows reaches the model.
 
-To score new penguins later, run the same bake query against the new rows and the saved `prep` table. Keep `prep` next to the model: a model trained on these features is only valid with the medians and level lists it was trained with.
+For this custom one-hot penguin recipe, keep the `prep` table with the positional model. To score new penguins, run the same bake query with the saved medians and levels.
 
 A note on cross-validation: strictly, preprocessing should be learned again inside each fold, from that fold's analysis rows only. The tune package does this for you. With medians and level lists, learning them once from the whole training set changes the fold scores very little, but for heavier steps, such as target encoding, prep per fold.
+
+
+## Save preprocessing with a named-column model {#named-column-model}
+
+A subscription model can learn its category dictionary and numeric medians during training. Supply the input fields as a named `STRUCT`. Their names, DuckDB types, and feature order are stored in the model JSON. The following training set has two observed plans. The enterprise plan occurs only in validation and stays outside the dictionary.
+
+```{python}
+#| echo: false
+#| output: asis
+import json
+from _helpers.duckrun import parse_json_sets, run_sql
+
+raw_fit = """
+LOAD duckboost;
+CREATE TABLE subscriptions AS SELECT * FROM (VALUES
+  ('basic',  2,  3::DOUBLE,  4.0, false),
+  ('basic',  4,  5::DOUBLE,  6.0, false),
+  ('pro',    8, 15::DOUBLE, 18.0, false),
+  ('pro', NULL, 21::DOUBLE, 24.0, false),
+  ('enterprise', 90, 80::DOUBLE, 94.0, true)
+) AS obs(plan_type, tenure_months, usage_30d, spend, is_validation);
+
+CREATE TABLE models AS
+SELECT duckboost_train_raw(spend, struct_pack(
+  plan_type := plan_type, tenure_months := tenure_months, usage_30d := usage_30d
+), is_validation, MAP {'numeric_imputation':'median', 'n_estimators':'3'}) AS model
+FROM subscriptions;
+"""
+
+print("```sql", raw_fit.strip(), "```", sep=chr(10))
+stored = parse_json_sets(run_sql(raw_fit + "SELECT model FROM models;", json_output=True))[-1][0]["model"]
+fields = {f["name"]: f for f in json.loads(stored)["features"]}
+plans = ", ".join(fields["plan_type"]["levels"])
+print(f"The saved plan dictionary contains {plans}. The fitted tenure median is "
+      f"{fields['tenure_months']['median']:g} months.")
+```
+
+Numeric inputs pass through as doubles. With `numeric_imputation = 'median'`, SQL `NULL`, NaN and infinities take the median of the finite training observations. If a feature has no finite training observations, the model uses the tree's missing direction. The default `'none'` sends missing numeric values directly to that branch. A `VARCHAR` feature uses a byte-sorted dictionary fitted on training rows. A missing string or an unfamiliar category also follows the tree's missing direction.
+
+Score a table row directly. Duckboost matches field names case-insensitively, permits extra fields such as `id`, and checks the saved DuckDB type for each required field. The table below reorders the model inputs and includes both a new plan and missing measurements.
+
+```{python}
+#| echo: false
+#| output: asis
+raw_score = """
+CREATE TABLE new_accounts AS SELECT * FROM (VALUES
+  (701,  5::DOUBLE, 6, 'pro'),
+  (412, NULL::DOUBLE, 4, 'trial'),
+  (930, 15::DOUBLE, NULL, NULL)
+) AS accounts(id, usage_30d, tenure_months, plan_type);
+"""
+native_query = """
+SELECT a.id, duckboost_predict_raw(m.model, a) AS prediction
+FROM new_accounts a, models m ORDER BY id;
+"""
+show(raw_score + native_query, setup=raw_fit)
+```
+
+Generate a query for the raw scoring table. The SQL includes the fitted preprocessing and tree splits. Keeping `id` lets the caller join predictions back to the original rows.
+
+```{python}
+#| echo: false
+#| output: asis
+export_query = """
+SELECT duckboost_to_sql_raw(model, 'new_accounts', MAP {'keep_columns':'id'}) AS sql
+FROM models;
+"""
+print("```sql", export_query.strip(), "```", sep=chr(10))
+native, exported = parse_json_sets(run_sql(raw_fit + raw_score + native_query + export_query, json_output=True))
+plain_query = exported[0]["sql"]
+plain = parse_json_sets(run_sql(raw_score + plain_query, json_output=True))[-1]
+native_by_id = {row["id"]: row["prediction"] for row in native}
+plain_by_id = {row["id"]: row["prediction"] for row in plain}
+assert native_by_id.keys() == plain_by_id.keys()
+max_difference = max(abs(native_by_id[k] - plain_by_id[k]) for k in native_by_id)
+assert max_difference < 1e-12
+print(f"A fresh DuckDB process scored {len(plain)} raw rows from the generated SQL. "
+      f"The largest absolute difference from native predictions matched by ID was {max_difference:g}.")
+```

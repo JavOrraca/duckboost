@@ -2,11 +2,14 @@
 
 #include "duckboost_extension.hpp"
 #include "duckboost/functions.hpp"
+#include "duckboost/raw_pipeline.hpp"
 
 namespace duckdb {
 
 static void LoadInternal(ExtensionLoader &loader) {
 	duckboost::RegisterDuckBoostFunctions(loader);
+	duckboost::RegisterIntervalFunctions(loader);
+	duckboost::RegisterRawFunctions(loader);
 }
 
 void DuckboostExtension::Load(ExtensionLoader &loader) {

@@ -242,3 +242,78 @@ FROM (
 JOIN large_sql_pred s USING (id);
 ----
 true
+
+# A complete depth-eight tree has 256 distinct leaves. Binary probability columns
+# must also share the compact score, or each marker would occur three times.
+statement ok
+CREATE TABLE marked_tree AS
+SELECT '{"duckboost_version":1,"n_features":1,"task":"binary","base_score":0,"learning_rate":1,"trees":[{"nodes":[' ||
+       string_agg(CASE WHEN i < 255 THEN
+           printf('{"is_leaf":false,"feature":0,"threshold":1,"left":%d,"right":%d}', 2*i+1, 2*i+2)
+           ELSE printf('{"is_leaf":true,"value":%d}', 100000+i) END, ',' ORDER BY i) || ']}]}' AS model
+FROM range(511) t(i);
+
+query I
+WITH exported AS (
+    SELECT duckboost_to_sql(model, 'score', ['x'], MAP {'separate_trees':'false','proba':'true'}) AS q
+    FROM marked_tree
+)
+SELECT bool_and(len(string_split(q, (100000+i)::VARCHAR || 'e0')) = 2) FROM exported, range(255,511) t(i);
+----
+true
+
+# Match by ID for every missing/threshold mode, including LightGBM's tiny
+# floats, and retain original columns with compact and separated probabilities.
+statement ok
+CREATE TABLE route_score(id, x) AS
+VALUES (1,NULL::DOUBLE),(2,'NaN'::DOUBLE),(3,0.0),(4,0.5),(5,-2.0),(6,2.0),
+       (7,1e-36),(8,-1e-36),(9,1.0),(10,-1.0),(11,3.9);
+
+statement ok
+CREATE TABLE route_models AS
+SELECT parse_filename(filename, true) AS fixture,
+       replace(replace(duckboost_import('lightgbm', content), '"task":"regression"', '"task":"binary"'),
+               '"learning_rate":1,', '"learning_rate":0.01,') AS model
+FROM read_text(['test/sql/duckboost/data/lgb_numeric_missing.txt',
+                'test/sql/duckboost/data/lgb_categorical.txt',
+                'test/sql/duckboost/data/lgb_categorical_single.txt']);
+
+foreach fixture lgb_numeric_missing lgb_categorical lgb_categorical_single
+
+foreach mode false true
+
+statement ok
+SET VARIABLE routes = (
+    SELECT duckboost_to_sql(model, 'route_score', ['x','x'],
+                            MAP {'separate_trees':'{mode}','keep_columns':'*','proba':'true'})
+    FROM route_models WHERE fixture = '{fixture}'
+);
+
+query I
+SELECT count(*) = 11 AND bool_and(abs(e.prediction - p[2]) < 1e-12 AND
+    abs(e.proba_1 - p[2]) < 1e-12 AND abs(e.proba_0 - p[1]) < 1e-12)
+FROM route_score s JOIN query(getvariable('routes')) e USING (id), route_models m,
+LATERAL (SELECT duckboost_predict_proba(m.model,[s.x,s.x]) AS p) WHERE fixture = '{fixture}';
+----
+true
+
+endloop
+
+endloop
+
+# A passthrough column can share the internal source alias.
+statement ok
+CREATE TABLE named_source AS SELECT id AS __duckboost_src, x FROM bin_score;
+
+statement ok
+SET VARIABLE named_source_sql = (
+    SELECT duckboost_to_sql(model, 'named_source', ['x'], MAP {'separate_trees':'false','keep_columns':'*','proba':'true'})
+    FROM bin_models
+);
+
+query I
+SELECT count(*) = 20 AND bool_and(abs(p.prediction - duckboost_predict(m.model,[p.x])) < 1e-12)
+    AND count(DISTINCT p.__duckboost_src) = 20
+FROM query(getvariable('named_source_sql')) p, bin_models m;
+----
+true
