@@ -20,8 +20,8 @@ extension:
 
 repo:
   github: JavOrraca/duckboost
-  # v0.0.5 release commit (tag v0.0.5). Raw SHA only — not a movable tag.
-  ref: 0c9dc402641c7c6a25faee93e8aeb5bb70123a27
+  # Peeled commit of the annotated v0.1.0 release tag.
+  ref: 0ef5c3ef8fd058b4e56f518ad12ced3c2437a2e3
 
 docs:
   # Mirrors the Getting Started penguins first-model loop. Uses a public raw URL so the
