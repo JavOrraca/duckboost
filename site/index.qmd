@@ -1,77 +1,112 @@
 ---
-title: "duckboost"
-# otherwise Quarto uses the first image on the page (the SVG hex) as the link preview
-image: /images/duckboost-banner.png
-image-alt: "duckboost: gradient-boosted trees, trained and scored in DuckDB SQL"
+pagetitle: "Train trees. Ship SQL."
+description: "Train gradient-boosted trees inside DuckDB, score your data and export the fitted model as plain SQL."
+image: /field-guide/assets/share.png
+image-alt: "Train trees. Ship SQL. A golden duck leaves a branching wake beside the duckboost headline."
+page-layout: custom
+title-block-style: none
+sidebar: false
+toc: false
+repo-actions: false
+format:
+  html:
+    minimal: true
+    theme: none
+    code-copy: false
+    css:
+      - field-guide/assets/fonts.css
+      - field-guide/home.css
+      - field-guide/workbench.css
+    include-in-header:
+      text: |
+        <meta name="theme-color" content="#f7f3e8">
+        <script src="field-guide/workbench.js" defer></script>
 ---
 
-<img src="images/duckboost-hex.svg" class="home-hex" alt="duckboost hex logo">
+```{=html}
+<a class="skip" href="#main">Skip to content</a>
+  <div class="sheet">
+    <header class="topbar">
+      <a class="brand" href="./" aria-label="duckboost field guide home">
+        <img src="field-guide/assets/duck-mark.svg" alt="" width="43" height="38">
+        <span>duckboost</span>
+      </a>
+      <nav class="primary-nav" aria-label="Main navigation">
+        <a href="#workbench">Workbench</a>
+        <a href="reference.html">SQL reference</a>
+        <a href="https://github.com/JavOrraca/duckboost">GitHub</a>
+      </nav>
+    </header>
 
-`duckboost` is an experimental [DuckDB](https://duckdb.org/) extension for **SQL-native gradient boosting**. Train histogram gradient-boosted decision trees (“GBDT”) inside DuckDB with zero vendor libraries, score with SQL functions, export trees as ordinary SQL, and optionally import XGBoost / LightGBM / CatBoost dumps when you need their full toolbox.
+    <main id="main">
+      <header class="masthead quarto-title-block" id="title-block-header">
+        <h1><span>Train trees.</span> <em>Ship SQL.</em></h1>
+        <p>Fit gradient-boosted trees in DuckDB. Export a scoring query you can run in a fresh DuckDB session.</p>
+      </header>
 
-::: {.callout-note}
-## Status
-duckboost 0.1.0 builds against **DuckDB 2.0.1 LTS** (“Cinnamon Teal”). DuckDB 1.x cannot load this extension. Install from the [community store](https://duckdb.org/community_extensions/extensions/duckboost): `INSTALL duckboost FROM community;` then `LOAD duckboost;`.
-:::
+      <div class="spread">
+        <figure class="frontispiece">
+          <div class="mat">
+            <img class="print" src="field-guide/assets/portrait-print.webp" alt="A golden duck swims across dark teal water, leaving a wake shaped like a branching tree." fetchpriority="high">
+          </div>
+          <figcaption>
+            <cite>Branching Wake</cite>
+            <a href="changelog.html">duckboost v0.1.0</a>
+          </figcaption>
+        </figure>
 
-## Why train inside the database
+        <section class="directory" aria-labelledby="contents-heading">
+          <div class="section-heading">
+            <span class="rubric-rule" aria-hidden="true"></span>
+            <h2 id="contents-heading">Contents</h2>
+          </div>
+          <ol class="chapters">
+            <li>
+              <a href="getting-started.html">
+                <span class="folio" aria-hidden="true">01</span>
+                <span class="entry"><strong>Fit your first model</strong><small>Predict penguin body mass from bill and flipper measurements.</small></span>
+              </a>
+            </li>
+            <li>
+              <a href="vignettes/native-trainer.html">
+                <span class="folio" aria-hidden="true">02</span>
+                <span class="entry"><strong>Inside the native trainer</strong><small>Explore how histograms and split rules shape a tree.</small></span>
+              </a>
+            </li>
+            <li>
+              <a href="vignettes/train-predict-export.html">
+                <span class="folio" aria-hidden="true">03</span>
+                <span class="entry"><strong>From trees to SQL</strong><small>Score a holdout, measure error and export a scoring query.</small></span>
+              </a>
+            </li>
+            <li>
+              <a href="vignettes/import-dumps.html">
+                <span class="folio" aria-hidden="true">04</span>
+                <span class="entry"><strong>Bring a trained model</strong><small>Import trees from XGBoost, LightGBM or CatBoost.</small></span>
+              </a>
+            </li>
+          </ol>
+        </section>
+      </div>
 
-[Orbital](https://posit-dev.github.io/orbital/) turns an already-trained Python or R pipeline into SQL so production scoring can stay in the warehouse. `duckboost` pulls the **training** step into DuckDB as well:
+{{< include _includes/field-guide-workbench.html >}}
 
-1. Train with the built-in native histogram trainer (or an optional vendor backend / imported dump).
-2. Measure fit quality in SQL (`duckboost_evaluate_agg`, `duckboost_importance`).
-3. Export the trees with `duckboost_to_sql` (`CASE` expressions, optionally one column per tree; numeric literals are `DOUBLE`).
-4. Score later with `duckboost_predict`, or run the exported SQL in any DuckDB session — even without the extension.
+      <nav class="reading" aria-labelledby="reading-heading">
+        <h2 id="reading-heading">Further reading</h2>
+        <ul>
+          <li><a href="use-cases.html">Use cases and choosing a trainer</a></li>
+          <li><a href="benchmarks.html">Native trainer benchmarks</a></li>
+          <li><a href="vignettes/split-and-preprocess.html">Splitting data and preprocessing</a></li>
+          <li><a href="vignettes/datasets.html">Iris and penguin datasets</a></li>
+          <li><a href="vignettes/prediction-intervals.html">Prediction intervals</a></li>
+          <li><a href="vignettes/support-tickets-text.html">Classifying support tickets</a></li>
+        </ul>
+      </nav>
+    </main>
 
-## Native-first, import when you need to
-
-The default path is the **native histogram trainer** (`backend = 'native'`, also accepted as `'reference'` for compatibility):
-
-- Global quantile pre-binning and histogram split finding
-- Ordered target-statistic categorical partitions (`EQUAL` / `IN`)
-- Depth-wise, loss-guided, or oblivious / symmetric growth
-- Squared-error, absolute-error, quantile, expectile, logistic, and softmax losses
-- Missing-value defaults, L1/L2/`gamma`, sample weights, early stopping
-
-It is aimed at SQL-native workflows and moderate data sizes, not at replacing LightGBM or XGBoost at every scale. Prefer `duckboost_import()` when you already train outside DuckDB or need vendor features duckboost does not expose.
-
-[Use cases and choosing a trainer](use-cases.qmd) · [Native trainer vignette](vignettes/native-trainer.qmd) · [Native vs LightGBM benchmark](benchmarks.qmd)
-
-## Use cases
-
-- **SQL-first analysts and pipelines** that train, evaluate, and retrain as ordinary queries, including one model per group with `GROUP BY`.
-- **Scoring without an ML runtime**: `duckboost_to_sql` turns a model into a plain `SELECT` for views, dbt models, or any DuckDB session.
-- **Teams that train in Python or R** with XGBoost, LightGBM, or CatBoost and want to score next to the data with `duckboost_import`.
-- **Teaching, prototyping, and CI**, where the native trainer gives a deterministic model with no extra dependencies.
-- **Local ticket NLP**, by pairing community [`quackformers`](https://duckdb.org/community_extensions/extensions/quackformers.html) embeddings with duckboost (no separate Python scoring loop or hosted embedding API) — [vignette](vignettes/support-tickets-text.qmd).
-
-## Practice datasets
-
-Getting Started and the vignettes load small public CSVs over HTTPS (no repo checkout):
-
-| Dataset | Rows | Good for |
-| --- | --- | --- |
-| [Iris](https://vincentarelbundock.github.io/Rdatasets/) (Rdatasets) | 150 | Multiclass species, binary setosa detection |
-| [Palmer penguins](https://allisonhorst.github.io/palmerpenguins/) | 344 | Body-mass regression, binary sex, species classification |
-
-Read penguins with `nullstr = 'NA'`. [Getting started](getting-started.qmd) fits a first penguins model; the [example datasets vignette](vignettes/datasets.qmd) walks through train/test splits for both files. Offline SQL tests still use thin copies under [`data/`](https://github.com/JavOrraca/duckboost/tree/main/data).
-
-## What you can do
-
-| Piece | What it does |
-| --- | --- |
-| Native GBDT | `duckboost_train` with `backend = 'native'` (default) for regression, binary, and multiclass |
-| Raw named columns | Save training medians and category mappings with the trees. [Worked example](vignettes/split-and-preprocess.qmd) |
-| Prediction intervals | Calibrate held-out residuals and export lower, median and upper predictions. [Worked example](vignettes/prediction-intervals.qmd) |
-| Dump import | `duckboost_import` for XGBoost `dump_model` JSON, LightGBM `save_model` text, and CatBoost `save_model` JSON |
-| In-process score | `duckboost_predict` and `duckboost_predict_proba` |
-| Metrics & importance | `duckboost_evaluate` / `duckboost_evaluate_agg` (incl. `brier_score`, `roc_auc_ovr`, `roc_auc_ovo`), `duckboost_importance` |
-| SQL export | `duckboost_to_sql` writes a query that reproduces those predictions |
-
-Optional in-process XGBoost and LightGBM training is a compile-time flag (`DUCKBOOST_WITH_XGBOOST`, `DUCKBOOST_WITH_LIGHTGBM`). CatBoost has no public training C API, so it is import-only. A default `make` build ships the native trainer and dump import, not the vendor libraries.
-
-## DuckDB 2.0.1
-
-[DuckDB 2.0.1 LTS](https://duckdb.org/2026/11/20/announcing-duckdb-201) is out. This repository pins the release commit `8d78114`. Community binaries are built and deployed separately by DuckDB. DuckDB 1.x clients cannot load the extension.
-
-[Getting started](getting-started.qmd) is the step-by-step path: `INSTALL duckboost FROM community` → first penguins model (clone/`make` is optional for contributors).
+    <footer>
+      <a href="https://duckdb.org/community_extensions/extensions/duckboost">DuckDB Community Extensions</a>
+      <a href="changelog.html">Changelog</a>
+    </footer>
+  </div>
+```

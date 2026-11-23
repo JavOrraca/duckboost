@@ -4,16 +4,18 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f7f3e8">
-  <meta name="description" content="A field guide to duckboost. Learn to train boosted trees in DuckDB, score your data and export the fitted model as plain SQL.">
-  <title>The Field Guide · duckboost</title>
+  <title>Train trees. Ship SQL. · duckboost</title>
+  <meta name="description" content="Train gradient-boosted trees inside DuckDB and export the model as plain SQL.">
   <link rel="icon" href="../assets/favicon.png" sizes="32x32">
   <link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png">
   <link rel="stylesheet" href="../assets/fonts.css">
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="edition/home.css">
+  <link rel="stylesheet" href="edition/workbench.css">
+  <script defer src="edition/workbench.js"></script>
 </head>
 <body>
-  <a class="skip" href="#main">Skip to content</a>
+<a class="skip" href="#main">Skip to content</a>
   <div class="sheet">
     <header class="topbar">
       <a class="brand" href="./index.html" aria-label="duckboost field guide home">
@@ -21,15 +23,16 @@
         <span>duckboost</span>
       </a>
       <nav class="primary-nav" aria-label="Main navigation">
+        <a href="#workbench">Workbench</a>
         <a href="https://javorraca.github.io/duckboost/reference.html">SQL reference</a>
         <a href="https://github.com/JavOrraca/duckboost">GitHub</a>
       </nav>
     </header>
 
     <main id="main">
-      <header class="masthead">
-        <h1>The <em>Field</em> Guide</h1>
-        <p>Gradient-boosted trees, from training in DuckDB to predictions in plain SQL.</p>
+      <header class="masthead quarto-title-block" id="title-block-header">
+        <h1><span>Train trees.</span> <em>Ship SQL.</em></h1>
+        <p>Fit gradient-boosted trees in DuckDB. Export a scoring query you can run in a fresh DuckDB session.</p>
       </header>
 
       <div class="spread">
@@ -39,7 +42,7 @@
           </div>
           <figcaption>
             <cite>Branching Wake</cite>
-            <span>duckboost v0.1.0</span>
+            <a href="https://javorraca.github.io/duckboost/changelog.html">duckboost v0.1.0</a>
           </figcaption>
         </figure>
 
@@ -77,14 +80,69 @@
         </section>
       </div>
 
-      <section class="install" aria-labelledby="install-heading">
-        <div>
-          <h2 id="install-heading">Install duckboost</h2>
-          <p>For DuckDB 2.0.1 LTS</p>
-        </div>
-        <pre><code><span>INSTALL</span> duckboost <span>FROM</span> community;
-<span>LOAD</span> duckboost;</code></pre>
-      </section>
+<section class="sql-workbench" id="workbench" aria-labelledby="workbench-title">
+  <header class="workbench-header">
+    <h2 id="workbench-title"><span aria-hidden="true">›_</span> SQL workbench</h2>
+    <span class="workbench-engine">DuckDB 2.0.1 LTS</span>
+  </header>
+  <div class="workbench-body">
+    <div class="workbench-tools" hidden>
+      <div role="tablist" aria-label="SQL examples">
+        <button type="button" role="tab" id="workbench-install-tab" aria-controls="workbench-install" aria-selected="true">Install</button>
+        <button type="button" role="tab" id="workbench-train-tab" aria-controls="workbench-train" aria-selected="false" tabindex="-1">Train</button>
+        <button type="button" role="tab" id="workbench-export-tab" aria-controls="workbench-export" aria-selected="false" tabindex="-1">Export</button>
+      </div>
+      <button type="button" class="workbench-copy" aria-label="Copy SQL">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.35" aria-hidden="true"><rect x="5" y="5" width="8" height="9" rx="1.3"/><path d="M10 3H4a2 2 0 0 0-2 2v6"/></svg>
+        <span>Copy</span>
+      </button>
+    </div>
+    <div class="workbench-sample" id="workbench-install">
+      <div class="workbench-note">
+        <h3>Load the extension</h3>
+        <p>Install duckboost from the community repository. Load it each time you open a new DuckDB session.</p>
+      </div>
+      <pre class="workbench-code"><code><span class="workbench-comment">-- From the DuckDB shell</span>
+<span class="workbench-keyword">INSTALL</span> duckboost <span class="workbench-keyword">FROM</span> community;
+<span class="workbench-keyword">LOAD</span> duckboost;</code></pre>
+    </div>
+    <div class="workbench-sample" id="workbench-train">
+      <div class="workbench-note">
+        <h3>Fit a curve</h3>
+        <p>Generate 100 points on a parabola, train a regression model and save it in a table called <code>fit</code>.</p>
+      </div>
+      <pre class="workbench-code"><code><span class="workbench-keyword">CREATE TABLE</span> fit <span class="workbench-keyword">AS</span>
+<span class="workbench-keyword">SELECT</span> <span class="workbench-fn">duckboost_train</span>(y, [x]) <span class="workbench-keyword">AS</span> model
+<span class="workbench-keyword">FROM</span> (<span class="workbench-keyword">SELECT</span> i::DOUBLE <span class="workbench-keyword">AS</span> x,
+             (i * i)::DOUBLE <span class="workbench-keyword">AS</span> y
+      <span class="workbench-keyword">FROM</span> <span class="workbench-fn">range</span>(100) t(i)) data;</code></pre>
+    </div>
+    <div class="workbench-sample" id="workbench-export">
+      <div class="workbench-note">
+        <h3>Get a scoring query</h3>
+        <p>Use the model from the Train step to generate a SQL query. Run the returned query to predict a value for <code>x = 4</code>.</p>
+      </div>
+      <pre class="workbench-code"><code><span class="workbench-keyword">CREATE TABLE</span> scoring_rows <span class="workbench-keyword">AS</span>
+<span class="workbench-keyword">SELECT</span> 4.0::DOUBLE <span class="workbench-keyword">AS</span> x;
+<span class="workbench-keyword">SELECT</span> <span class="workbench-fn">duckboost_to_sql</span>(
+  model, <span class="workbench-str">'scoring_rows'</span>, [<span class="workbench-str">'x'</span>])
+<span class="workbench-keyword">FROM</span> fit;</code></pre>
+    </div>
+    <p class="workbench-status" role="status"></p>
+  </div>
+</section>
+
+      <nav class="reading" aria-labelledby="reading-heading">
+        <h2 id="reading-heading">Further reading</h2>
+        <ul>
+          <li><a href="https://javorraca.github.io/duckboost/use-cases.html">Use cases and choosing a trainer</a></li>
+          <li><a href="https://javorraca.github.io/duckboost/benchmarks.html">Native trainer benchmarks</a></li>
+          <li><a href="https://javorraca.github.io/duckboost/vignettes/split-and-preprocess.html">Splitting data and preprocessing</a></li>
+          <li><a href="https://javorraca.github.io/duckboost/vignettes/datasets.html">Iris and penguin datasets</a></li>
+          <li><a href="https://javorraca.github.io/duckboost/vignettes/prediction-intervals.html">Prediction intervals</a></li>
+          <li><a href="https://javorraca.github.io/duckboost/vignettes/support-tickets-text.html">Classifying support tickets</a></li>
+        </ul>
+      </nav>
     </main>
 
     <footer>

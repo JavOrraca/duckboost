@@ -1,0 +1,111 @@
+.sql-workbench {
+  --workbench-cream: #f7edd7;
+  --workbench-muted: #b9cbc1;
+  --workbench-amber: #ffbf43;
+  --workbench-rule: #47665b;
+  --workbench-inset: clamp(1rem, 2.4vw, 2.5rem);
+  --workbench-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Consolas, monospace;
+  box-sizing: border-box;
+  min-width: 0;
+  color-scheme: dark;
+  background: #0a2421;
+  color: var(--workbench-cream);
+  font-family: "Bricolage Grotesque", Arial, sans-serif;
+}
+
+.sql-workbench *, .sql-workbench *::after { box-sizing: border-box; }
+.sql-workbench [hidden] { display: none !important; }
+.sql-workbench :focus-visible { outline: 2px solid var(--workbench-amber); outline-offset: 3px; }
+.sql-workbench ::selection { background: #ffcd70; color: #0a2421; }
+.sql-workbench .workbench-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: .25rem 1rem;
+  padding: 1rem var(--workbench-inset);
+  border-bottom: 1px solid var(--workbench-rule);
+  background: #173b33;
+}
+.sql-workbench .workbench-header h2 {
+  display: flex;
+  align-items: center;
+  gap: .72rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  color: var(--workbench-cream);
+  font: 650 clamp(1.28rem, 2vw, 1.7rem)/1.2 "Bricolage Grotesque", Arial, sans-serif;
+  letter-spacing: -.035em;
+}
+.sql-workbench .workbench-header h2 span { color: var(--workbench-amber); font: 500 1.3rem/1 var(--workbench-mono); letter-spacing: -.08em; }
+.sql-workbench .workbench-engine { color: var(--workbench-muted); font: .81rem/1.5 var(--workbench-mono); }
+.sql-workbench .workbench-body { padding: .6rem var(--workbench-inset) clamp(1.2rem, 2.3vw, 2.15rem); }
+.sql-workbench .workbench-tools { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0 .75rem; border-bottom: 1px solid var(--workbench-rule); }
+.sql-workbench [role="tablist"] { display: flex; align-items: stretch; gap: clamp(.2rem, 1.2vw, 1rem); }
+.sql-workbench .workbench-tools button {
+  appearance: none;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--workbench-muted);
+  cursor: pointer;
+  font: 500 1rem/1.35 "Bricolage Grotesque", Arial, sans-serif;
+}
+.sql-workbench [role="tab"] { position: relative; padding: .65rem .35rem; min-height: 2.75rem; }
+.sql-workbench [role="tab"]:first-child { margin-left: -.35rem; }
+.sql-workbench [role="tab"][aria-selected="true"] { color: var(--workbench-amber); }
+.sql-workbench [role="tab"][aria-selected="true"]::after { content: ""; position: absolute; inset: auto .35rem -1px; border-bottom: 2px solid currentColor; }
+.sql-workbench .workbench-tools button:hover { color: var(--workbench-cream); }
+.sql-workbench .workbench-copy { display: inline-flex; align-items: center; justify-content: end; gap: .38rem; min-width: 4.2rem; min-height: 2.75rem; padding: .4rem 0 .4rem .5rem; }
+.sql-workbench .workbench-sample {
+  display: grid;
+  grid-template-columns: minmax(0, 1.7fr) minmax(13rem, .85fr);
+  grid-template-areas: "code note";
+  align-items: start;
+  gap: clamp(1.2rem, 3vw, 3.2rem);
+  padding-top: clamp(1.2rem, 2.2vw, 2.1rem);
+}
+.sql-workbench .workbench-sample + .workbench-sample:not([role]) { border-top: 1px dashed var(--workbench-rule); margin-top: 1.35rem; }
+.sql-workbench .workbench-note { grid-area: note; border-left: 1px solid var(--workbench-rule); padding-left: clamp(1.3rem, 2.6vw, 2.75rem); }
+.sql-workbench .workbench-note h3 { margin: 0 0 .48rem; padding: 0; color: var(--workbench-cream); font: 400 clamp(1.25rem, 1.7vw, 1.65rem)/1.15 Georgia, serif; letter-spacing: -.025em; }
+.sql-workbench .workbench-note p { margin: 0; color: var(--workbench-muted); font-size: 1rem; line-height: 1.48; }
+.sql-workbench .workbench-note code { padding: 0; background: transparent; color: #e7dec0; font: .92em/1.4 var(--workbench-mono); }
+.sql-workbench pre.workbench-code {
+  grid-area: code;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  overflow-x: auto;
+  background: transparent;
+  color: #e7eee4;
+  font: 400 clamp(.94rem, 1.25vw, 1.15rem)/1.65 var(--workbench-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.sql-workbench .workbench-code code { display: inline; padding: 0; background: none; color: inherit; font: inherit; white-space: inherit; }
+.sql-workbench .workbench-comment { color: #a2bcad; }
+.sql-workbench .workbench-keyword { color: #ffcc72; }
+.sql-workbench .workbench-fn { color: #b6dabb; }
+.sql-workbench .workbench-str { color: #f4ce92; }
+.sql-workbench .workbench-status { margin: 0; font-size: .92rem; color: var(--workbench-amber); }
+.sql-workbench .workbench-status:not(:empty) { margin-top: 1rem; }
+.sql-workbench .workbench-status[data-silent] { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+
+@media (min-width: 45.01rem) {
+  .sql-workbench .workbench-sample[role="tabpanel"] { min-height: clamp(10rem, 13vw, 11.7rem); }
+}
+@media (max-width: 45rem) {
+  .sql-workbench .workbench-sample { grid-template-columns: minmax(0, 1fr); grid-template-areas: "code" "note"; gap: 1.05rem; }
+  .sql-workbench .workbench-note { border-left: 0; border-top: 1px dashed var(--workbench-rule); padding: .9rem 0 0; }
+}
+@media (max-width: 25rem) {
+  .sql-workbench .workbench-header { align-items: start; }
+  .sql-workbench .workbench-header h2 { flex: 1 0 100%; }
+  .sql-workbench .workbench-engine { margin-left: 2.1rem; }
+  .sql-workbench .workbench-tools { gap: 0 .28rem; }
+  .sql-workbench .workbench-tools button { font-size: .94rem; }
+  .sql-workbench .workbench-copy { min-width: 0; }
+}
