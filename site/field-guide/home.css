@@ -52,6 +52,7 @@ a:focus-visible { outline: 3px solid var(--accent); outline-offset: 5px; }
 .primary-nav { gap: clamp(1rem, 2.5vw, 2.25rem); }
 .primary-nav a, footer a { text-decoration: none; font-size: .96rem; font-weight: 600; }
 .primary-nav a:hover, footer a:hover { text-decoration: underline; }
+.primary-nav [aria-current="page"] { text-decoration: underline; text-decoration-color: var(--accent); text-underline-offset: .4em; }
 
 .masthead {
   display: grid;

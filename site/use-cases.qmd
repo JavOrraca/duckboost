@@ -65,6 +65,8 @@ ORDER BY species;
 """)
 ```
 
+To check these models on held-out birds, follow [Train one model per group](vignettes/grouped-models.qmd). It compares each model with the average training mass for its species.
+
 ## When duckboost is not the right tool
 
 - **Data larger than memory.** `duckboost_train` materializes every training row (and bin ids) before it fits. DuckDB can scan more than that; the training step cannot stream.

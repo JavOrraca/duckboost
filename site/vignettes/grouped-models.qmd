@@ -1,0 +1,99 @@
+---
+title: "Train one model per group"
+description: "Fit a penguin body-mass model for each species, join each held-out bird to its model, and compare predictions with a species-average baseline."
+---
+
+In the Palmer penguins data, a Gentoo and an Adélie can have similar bill lengths and very different body masses. If you know the species at prediction time, you can fit a separate relationship for each group. Here you will use `GROUP BY` to train the models and a join to choose which one scores each bird.
+
+Run the three examples in order in one DuckDB session after [installing duckboost](../getting-started.qmd). The tables are temporary. The measurements come from the [Palmer penguins dataset](https://allisonhorst.github.io/palmerpenguins/).
+
+## Set aside birds from each species
+
+Keep birds with a recorded mass and all three measurements. Stratify the split by species so each model has both training birds and a held-out group to score.
+
+```{python}
+#| echo: false
+#| output: asis
+from _helpers.duckrun import show
+from _helpers.example_data import PENGUINS_FROM_URL
+
+split_sql = f"""
+LOAD duckboost;
+
+CREATE TEMP TABLE birds AS
+SELECT species, body_mass_g::DOUBLE AS mass_g,
+       [bill_length_mm, bill_depth_mm, flipper_length_mm]::DOUBLE[] AS features
+{PENGUINS_FROM_URL}
+WHERE species IS NOT NULL AND body_mass_g IS NOT NULL
+  AND bill_length_mm IS NOT NULL AND bill_depth_mm IS NOT NULL
+  AND flipper_length_mm IS NOT NULL;
+
+CREATE TEMP TABLE sampled AS
+FROM duckboost_initial_split('birds', prop := 0.8, strata := species, seed := 42);
+"""
+show(split_sql + """
+SELECT species,
+       count(*) FILTER (WHERE split = 'train') AS training_birds,
+       count(*) FILTER (WHERE split = 'test') AS test_birds
+FROM sampled
+GROUP BY species
+ORDER BY species;
+""")
+```
+
+## Save the model beside its group key
+
+`duckboost_train` is an aggregate. Grouping by species produces one row per species, with its fitted model and the average training mass. That mean gives you a baseline prediction for a new bird when all you know is its species.
+
+```{python}
+#| echo: false
+#| output: asis
+fit_sql = """
+CREATE TEMP TABLE fits AS
+SELECT species,
+       avg(mass_g) AS baseline_g,
+       duckboost_train(mass_g, features, MAP {
+         'n_estimators': '40',
+         'max_depth': '2',
+         'learning_rate': '0.1'
+       }) AS model
+FROM sampled
+WHERE split = 'train'
+GROUP BY species;
+"""
+show(fit_sql + """
+SELECT species, round(baseline_g) AS mean_training_mass_g
+FROM fits
+ORDER BY species;
+""", setup=split_sql)
+```
+
+## Score the holdout against both predictions
+
+Join on `species`. Every test bird receives the fitted model and mean for its own species. A left join also keeps a bird visible if its species is missing from the model table. In that case its prediction is `NULL`, and the difference between the two row counts exposes the gap.
+
+```{python}
+#| echo: false
+#| output: asis
+show("""
+WITH scored AS (
+  SELECT b.species, b.mass_g, f.baseline_g,
+         CASE WHEN f.model IS NOT NULL
+              THEN duckboost_predict(f.model, b.features)
+         END AS predicted_g
+  FROM sampled AS b
+  LEFT JOIN fits AS f USING (species)
+  WHERE b.split = 'test'
+)
+SELECT species, count(*) AS test_birds, count(predicted_g) AS scored_birds,
+       round(avg(abs(mass_g - baseline_g)), 1) AS baseline_mae_g,
+       round(avg(abs(mass_g - predicted_g)), 1) AS model_mae_g
+FROM scored
+GROUP BY species
+ORDER BY species;
+""", setup=split_sql + fit_sql)
+```
+
+Both errors are mean absolute error in grams. First check that every test bird was scored. Then compare the last two columns within each species. On this split the trees reduce error for Adélie and Gentoo. For the 14 held-out Chinstrap birds, the training mean gives a smaller error. Reporting all three comparisons makes that difference visible.
+
+For comparison with a single model across species, the [native trainer guide](native-trainer.qmd) fits a model with a categorical feature. To carry the group-specific models into another process, see [Train, predict, and export SQL](train-predict-export.qmd).

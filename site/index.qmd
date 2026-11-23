@@ -5,7 +5,9 @@ image: /field-guide/assets/share.png
 image-alt: "Train trees. Ship SQL. A golden duck leaves a branching wake beside the duckboost headline."
 page-layout: custom
 title-block-style: none
+navbar: false
 sidebar: false
+guides-current: "false"
 toc: false
 repo-actions: false
 format:
@@ -14,7 +16,6 @@ format:
     theme: none
     code-copy: false
     css:
-      - field-guide/assets/fonts.css
       - field-guide/home.css
       - field-guide/workbench.css
     include-in-header:
@@ -24,19 +25,8 @@ format:
 ---
 
 ```{=html}
-<a class="skip" href="#main">Skip to content</a>
-  <div class="sheet">
-    <header class="topbar">
-      <a class="brand" href="./" aria-label="duckboost field guide home">
-        <img src="field-guide/assets/duck-mark.svg" alt="" width="43" height="38">
-        <span>duckboost</span>
-      </a>
-      <nav class="primary-nav" aria-label="Main navigation">
-        <a href="#workbench">Workbench</a>
-        <a href="reference.html">SQL reference</a>
-        <a href="https://github.com/JavOrraca/duckboost">GitHub</a>
-      </nav>
-    </header>
+<div class="sheet">
+{{< include _includes/field-guide-header.html >}}
 
     <main id="main">
       <header class="masthead quarto-title-block" id="title-block-header">

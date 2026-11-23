@@ -10,24 +10,24 @@
   <link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png">
   <link rel="stylesheet" href="../assets/fonts.css">
-  <link rel="stylesheet" href="edition/home.css">
-  <link rel="stylesheet" href="edition/workbench.css">
-  <script defer src="edition/workbench.js"></script>
+  <link rel="stylesheet" href="site/field-guide/home.css">
+  <link rel="stylesheet" href="site/field-guide/workbench.css">
+  <script defer src="site/field-guide/workbench.js"></script>
 </head>
 <body>
+<div class="sheet">
 <a class="skip" href="#main">Skip to content</a>
-  <div class="sheet">
-    <header class="topbar">
-      <a class="brand" href="./index.html" aria-label="duckboost field guide home">
-        <img src="../assets/duck-mark.svg" alt="" width="43" height="38">
-        <span>duckboost</span>
-      </a>
-      <nav class="primary-nav" aria-label="Main navigation">
-        <a href="#workbench">Workbench</a>
-        <a href="https://javorraca.github.io/duckboost/reference.html">SQL reference</a>
-        <a href="https://github.com/JavOrraca/duckboost">GitHub</a>
-      </nav>
-    </header>
+<header class="topbar">
+  <a class="brand" href="./index.html" aria-label="duckboost home">
+    <img src="../assets/duck-mark.svg" alt="" width="43" height="38">
+    <span>duckboost</span>
+  </a>
+  <nav class="primary-nav" aria-label="Main navigation">
+    <a href="https://javorraca.github.io/duckboost/guides.html" aria-current="false">Guides</a>
+    <a href="https://javorraca.github.io/duckboost/reference.html">Reference</a>
+    <a href="https://github.com/JavOrraca/duckboost">GitHub</a>
+  </nav>
+</header>
 
     <main id="main">
       <header class="masthead quarto-title-block" id="title-block-header">
@@ -82,7 +82,7 @@
 
 <section class="sql-workbench" id="workbench" aria-labelledby="workbench-title">
   <header class="workbench-header">
-    <h2 id="workbench-title"><span aria-hidden="true">›_</span> SQL workbench</h2>
+    <h2 id="workbench-title"><span aria-hidden="true">›_</span> Install in DuckDB</h2>
     <span class="workbench-engine">DuckDB 2.0.1 LTS</span>
   </header>
   <div class="workbench-body">
@@ -150,5 +150,19 @@
       <a href="https://javorraca.github.io/duckboost/changelog.html">Changelog</a>
     </footer>
   </div>
+  <script>
+    // The standalone gallery uses the published docs until the local Pages build is available.
+    const publishedDocs = "https://javorraca.github.io/duckboost/";
+    const localDocs = new URL("site/_site/", document.baseURI);
+    const builtIcon = new Image();
+    builtIcon.onload = () => {
+      for (const link of document.querySelectorAll("a[href]")) {
+        if (link.href.startsWith(publishedDocs)) {
+          link.href = new URL(link.href.slice(publishedDocs.length), localDocs).href;
+        }
+      }
+    };
+    builtIcon.src = new URL("field-guide/assets/favicon.png", localDocs).href;
+  </script>
 </body>
 </html>

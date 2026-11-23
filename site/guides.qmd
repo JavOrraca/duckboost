@@ -1,0 +1,104 @@
+---
+pagetitle: "Guides"
+description: "Fit a first model on Palmer penguins, then follow SQL walkthroughs for training, evaluating and deploying boosted trees in DuckDB."
+image: /field-guide/assets/share.png
+image-alt: "Train trees. Ship SQL. A golden duck leaves a branching wake beside the duckboost headline."
+body-classes: guides-page
+guides-current: "page"
+page-layout: custom
+title-block-style: none
+sidebar: false
+navbar: false
+toc: false
+repo-actions: false
+format:
+  html:
+    minimal: true
+    theme: none
+    code-copy: false
+    css:
+      - field-guide/home.css
+      - field-guide/guides.css
+    include-in-header:
+      text: |
+        <meta name="theme-color" content="#f7f3e8">
+---
+
+```{=html}
+<div class="sheet">
+{{< include _includes/field-guide-header.html >}}
+  <main id="main">
+    <header class="guide-heading quarto-title-block" id="title-block-header">
+      <h1>Guides</h1>
+      <p>Learn duckboost by working through a model, from the first training table to a scoring query you can share.</p>
+    </header>
+
+    <section class="first-model" aria-labelledby="first-model-title">
+      <img class="wake-margin" src="field-guide/assets/wake-detail.webp" alt="">
+      <div class="first-model-story">
+        <p class="guide-label">Start here</p>
+        <h2 id="first-model-title">Fit your first <em>penguin model.</em></h2>
+        <p>How much does a penguin weigh? Load the Palmer penguins CSV into DuckDB, fit a regression model, and put each prediction beside the bird’s measured mass.</p>
+        <a class="guide-cta" href="getting-started.html">Start the walkthrough</a>
+      </div>
+      <div class="model-notes">
+        <h3>Inside the example</h3>
+        <dl>
+          <div><dt>Target</dt><dd>Body mass in grams</dd></div>
+          <div><dt>Features</dt><dd>Bill length, bill depth, flipper length and sex</dd></div>
+          <div><dt>Fit check</dt><dd>Root mean squared error on the training rows</dd></div>
+        </dl>
+      </div>
+    </section>
+
+    <nav class="path-index" aria-label="Learning paths on this page">
+      <span>Learning paths</span>
+      <a href="#train">Prepare and fit</a>
+      <a href="#score">Score and export</a>
+      <a href="#choose">Choose a workflow</a>
+    </nav>
+
+    <section class="learning-path" id="train" aria-labelledby="train-title">
+      <div class="path-heading">
+        <h2 id="train-title">Prepare and fit</h2>
+        <p>Start with data you can inspect. Split the rows before learning any preprocessing values, then fit and inspect your trees.</p>
+      </div>
+      <ul class="guide-list">
+        <li><a href="vignettes/datasets.html"><strong>Practice with iris and penguins</strong><span>Read public CSVs, predict a species, and compare classification with body-mass regression.</span></a></li>
+        <li><a href="vignettes/split-and-preprocess.html"><strong>Split rows and prepare features</strong><span>Set aside validation and test rows. Learn medians and category levels on training data, then save them with a named-column model.</span></a></li>
+        <li><a href="vignettes/native-trainer.html"><strong>Work with the native trainer</strong><span>Use island as a categorical feature, hold out rows for early stopping, and inspect which features the trees split on.</span></a></li>
+        <li><a href="vignettes/grouped-models.html"><strong>Train one model per group</strong><span>Fit a body-mass model per species. Score each held-out bird with its species model and compare the predictions with the species average.</span></a></li>
+      </ul>
+    </section>
+
+    <section class="learning-path" id="score" aria-labelledby="score-title">
+      <div class="path-heading">
+        <h2 id="score-title">Score and export</h2>
+        <p>Once you have a fitted model, check what it predicts on unseen rows and take its scoring logic into another DuckDB session.</p>
+      </div>
+      <ul class="guide-list">
+        <li><a href="vignettes/train-predict-export.html"><strong>Turn fitted trees into SQL</strong><span>Measure error on a holdout, export the trees, and check that plain SQL reproduces the model’s predictions in a fresh session.</span></a></li>
+        <li><a href="vignettes/prediction-intervals.html"><strong>Calibrate prediction intervals</strong><span>Fit three quantiles, use a separate fold to calibrate the interval, and score new rows with lower, median and upper estimates.</span></a></li>
+        <li><a href="vignettes/import-dumps.html"><strong>Score a model trained elsewhere</strong><span>Import an XGBoost JSON dump, a LightGBM text model or a CatBoost JSON model and inspect its predictions in DuckDB.</span></a></li>
+      </ul>
+    </section>
+
+    <section class="learning-path" id="choose" aria-labelledby="choose-title">
+      <div class="path-heading">
+        <h2 id="choose-title">Choose a workflow</h2>
+        <p>Match the trainer to your data, check the cost of the fit, and see how duckboost works alongside another extension.</p>
+      </div>
+      <ul class="guide-list">
+        <li><a href="use-cases.html"><strong>Decide where to train</strong><span>Compare training inside DuckDB with importing trees from a vendor library. Use the examples to decide where the model belongs in your pipeline.</span></a></li>
+        <li><a href="benchmarks.html"><strong>Read and reproduce the benchmarks</strong><span>Compare fit time, peak memory and holdout quality across thread counts. Inspect the size and execution cost of exported SQL.</span></a></li>
+        <li><a href="vignettes/support-tickets-text.html"><strong>Route support tickets with embeddings</strong><span>Embed a ticket’s subject and body with quackformers, then train a classifier to distinguish billing requests from technical support.</span></a></li>
+      </ul>
+    </section>
+  </main>
+
+  <footer>
+    <a href="reference.html">SQL reference</a>
+    <a href="changelog.html">Changelog</a>
+  </footer>
+</div>
+```
