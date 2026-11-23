@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f7f3e8">
+  <meta name="description" content="A field guide to duckboost. Learn to train boosted trees in DuckDB, score your data and export the fitted model as plain SQL.">
+  <title>The Field Guide · duckboost</title>
+  <link rel="icon" href="../assets/favicon.png" sizes="32x32">
+  <link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png">
+  <link rel="stylesheet" href="../assets/fonts.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <div class="sheet">
+    <header class="topbar">
+      <a class="brand" href="./index.html" aria-label="duckboost field guide home">
+        <img src="../assets/duck-mark.svg" alt="" width="43" height="38">
+        <span>duckboost</span>
+      </a>
+      <nav class="primary-nav" aria-label="Main navigation">
+        <a href="https://javorraca.github.io/duckboost/reference.html">SQL reference</a>
+        <a href="https://github.com/JavOrraca/duckboost">GitHub</a>
+      </nav>
+    </header>
+
+    <main id="main">
+      <header class="masthead">
+        <h1>The <em>Field</em> Guide</h1>
+        <p>Gradient-boosted trees, from training in DuckDB to predictions in plain SQL.</p>
+      </header>
+
+      <div class="spread">
+        <figure class="frontispiece">
+          <div class="mat">
+            <img class="print" src="../assets/portrait-print.webp" alt="A golden duck swims across dark teal water, leaving a wake shaped like a branching tree." fetchpriority="high">
+          </div>
+          <figcaption>
+            <cite>Branching Wake</cite>
+            <span>duckboost v0.1.0</span>
+          </figcaption>
+        </figure>
+
+        <section class="directory" aria-labelledby="contents-heading">
+          <div class="section-heading">
+            <span class="rubric-rule" aria-hidden="true"></span>
+            <h2 id="contents-heading">Contents</h2>
+          </div>
+          <ol class="chapters">
+            <li>
+              <a href="https://javorraca.github.io/duckboost/getting-started.html">
+                <span class="folio" aria-hidden="true">01</span>
+                <span class="entry"><strong>Fit your first model</strong><small>Predict penguin body mass from bill and flipper measurements.</small></span>
+              </a>
+            </li>
+            <li>
+              <a href="https://javorraca.github.io/duckboost/vignettes/native-trainer.html">
+                <span class="folio" aria-hidden="true">02</span>
+                <span class="entry"><strong>Inside the native trainer</strong><small>Explore how histograms and split rules shape a tree.</small></span>
+              </a>
+            </li>
+            <li>
+              <a href="https://javorraca.github.io/duckboost/vignettes/train-predict-export.html">
+                <span class="folio" aria-hidden="true">03</span>
+                <span class="entry"><strong>From trees to SQL</strong><small>Score a holdout, measure error and export a scoring query.</small></span>
+              </a>
+            </li>
+            <li>
+              <a href="https://javorraca.github.io/duckboost/vignettes/import-dumps.html">
+                <span class="folio" aria-hidden="true">04</span>
+                <span class="entry"><strong>Bring a trained model</strong><small>Import trees from XGBoost, LightGBM or CatBoost.</small></span>
+              </a>
+            </li>
+          </ol>
+        </section>
+      </div>
+
+      <section class="install" aria-labelledby="install-heading">
+        <div>
+          <h2 id="install-heading">Install duckboost</h2>
+          <p>For DuckDB 2.0.1 LTS</p>
+        </div>
+        <pre><code><span>INSTALL</span> duckboost <span>FROM</span> community;
+<span>LOAD</span> duckboost;</code></pre>
+      </section>
+    </main>
+
+    <footer>
+      <a href="../index.html">All design previews</a>
+      <a href="https://javorraca.github.io/duckboost/changelog.html">Changelog</a>
+    </footer>
+  </div>
+</body>
+</html>
