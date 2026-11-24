@@ -1,0 +1,95 @@
+{
+  "text-color": "#f4f0dd",
+  "background-color": "#0a2b26",
+  "line-number-color": "#a8bfb0",
+  "line-number-background-color": "#0a2b26",
+  "text-styles": {
+    "Alert": {
+      "text-color": "#ffac95"
+    },
+    "Annotation": {
+      "text-color": "#ffcd72"
+    },
+    "Attribute": {
+      "text-color": "#f4f0dd"
+    },
+    "BaseN": {
+      "text-color": "#add7ee"
+    },
+    "BuiltIn": {
+      "text-color": "#9edbc8"
+    },
+    "Char": {
+      "text-color": "#f2dab5"
+    },
+    "Comment": {
+      "text-color": "#a8bfb0"
+    },
+    "CommentVar": {
+      "text-color": "#a8bfb0"
+    },
+    "Constant": {
+      "text-color": "#add7ee"
+    },
+    "ControlFlow": {
+      "text-color": "#ffcd72"
+    },
+    "DataType": {
+      "text-color": "#9edbc8"
+    },
+    "DecVal": {
+      "text-color": "#add7ee"
+    },
+    "Documentation": {
+      "text-color": "#a8bfb0"
+    },
+    "Error": {
+      "text-color": "#ffac95"
+    },
+    "Extension": {
+      "text-color": "#9edbc8"
+    },
+    "Float": {
+      "text-color": "#add7ee"
+    },
+    "Function": {
+      "text-color": "#9edbc8"
+    },
+    "Import": {
+      "text-color": "#ffcd72"
+    },
+    "Information": {
+      "text-color": "#a8bfb0"
+    },
+    "Keyword": {
+      "text-color": "#ffcd72"
+    },
+    "Operator": {
+      "text-color": "#f4f0dd"
+    },
+    "Other": {
+      "text-color": "#f4f0dd"
+    },
+    "Preprocessor": {
+      "text-color": "#ffcd72"
+    },
+    "SpecialChar": {
+      "text-color": "#f2dab5"
+    },
+    "SpecialString": {
+      "text-color": "#f2dab5"
+    },
+    "String": {
+      "text-color": "#f2dab5"
+    },
+    "Variable": {
+      "text-color": "#f4f0dd"
+    },
+    "VerbatimString": {
+      "text-color": "#f2dab5"
+    },
+    "Warning": {
+      "text-color": "#ffac95"
+    }
+  }
+}

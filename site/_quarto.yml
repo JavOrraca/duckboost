@@ -3,8 +3,11 @@ project:
   execute-dir: project
   post-render: _helpers/og_url.py
   resources:
+    - field-guide/**
     - images/duckboost-banner.png
     - images/apple-touch-icon.png
+    - images/favicon.png
+    - images/duckboost-hex.svg
 
 website:
   title: "duckboost"
@@ -13,60 +16,38 @@ website:
   site-url: https://javorraca.github.io/duckboost
   repo-url: https://github.com/JavOrraca/duckboost
   repo-actions: [edit, issue]
-  favicon: images/favicon.png
-  image: /images/duckboost-banner.png
-  image-alt: "duckboost: SQL-native gradient-boosted trees in DuckDB"
+  favicon: field-guide/assets/favicon.png
+  image: /field-guide/assets/share.png
+  image-alt: "Train trees. Ship SQL. A golden duck leaves a branching wake beside the duckboost headline."
   open-graph: true
   twitter-card:
     card-style: summary_large_image
-  sidebar:
-    logo: images/duckboost-hex.svg
-    logo-alt: duckboost hex logo
-    title: false
-    style: docked
-    search: true
-    tools:
-      - icon: github
-        href: https://github.com/JavOrraca/duckboost/tree/main
-        text: GitHub
-        aria-label: GitHub repository (main)
-    contents:
-      - text: Overview
-        href: index.qmd
-      - text: Use cases and choosing a trainer
-        href: use-cases.qmd
-      - text: Getting started
-        href: getting-started.qmd
-      - text: Benchmarks
-        href: benchmarks.qmd
-      - section: Vignettes
-        contents:
-          - text: Native histogram trainer
-            href: vignettes/native-trainer.qmd
-          - text: Train, predict, export
-            href: vignettes/train-predict-export.qmd
-          - text: Splitting data and preprocessing
-            href: vignettes/split-and-preprocess.qmd
-          - text: "Example datasets: iris and penguins"
-            href: vignettes/datasets.qmd
-          - text: Local ticket NLP (quackformers)
-            href: vignettes/support-tickets-text.qmd
-          - text: Import model dumps
-            href: vignettes/import-dumps.qmd
-          - text: Prediction intervals
-            href: vignettes/prediction-intervals.qmd
-      - text: SQL reference
+  search:
+    location: navbar
+    type: overlay
+  navbar:
+    logo: field-guide/assets/duck-mark.svg
+    logo-alt: duckboost home
+    collapse: false
+    title: duckboost
+    pinned: true
+    right:
+      - text: Guides
+        href: guides.qmd
+      - text: Reference
         href: reference.qmd
       - text: Changelog
         href: changelog.qmd
+      - text: GitHub
+        href: https://github.com/JavOrraca/duckboost
 
 format:
   html:
-    # dark is listed first so it is the default; the toggle switches to light.
     theme:
-      dark: [darkly, theme/duckdb-common.scss, theme/duckdb-dark.scss]
       light: [cosmo, theme/duckdb-common.scss, theme/duckdb-light.scss]
-    highlight-style: github
+      dark: [darkly, theme/duckdb-common.scss, theme/duckdb-dark.scss]
+    css: field-guide/assets/fonts.css
+    highlight-style: theme/field-guide.theme
     include-in-header: _includes/apple-touch-icon.html
     toc: true
     code-copy: true

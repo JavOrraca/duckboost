@@ -1,81 +1,180 @@
 /*-- scss:defaults --*/
 
-// duckdb.org sets text in Suisse Intl (commercial) and code in JetBrains Mono (SIL OFL).
-// Inter (SIL OFL) stands in for Suisse Intl.
-@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:ital,wght@0,400;0,500;0,700;1,400&display=swap");
+$web-font-path: false; // Both families are served locally via field-guide/assets/fonts.css.
+$font-family-sans-serif: "Bricolage Grotesque", Arial, sans-serif;
+$font-family-monospace: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+$headings-font-family: Georgia, "Times New Roman", serif;
+$headings-font-weight: 400;
+$h1h2h3-font-weight: 400;
+$line-height-base: 1.58;
+$border-radius: .2rem;
+$border-radius-lg: .25rem;
 
-$font-family-sans-serif: "Inter", "Helvetica Neue", Helvetica, Arial, sans-serif;
-$font-family-monospace: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-$headings-font-weight: 600;
-$link-decoration: underline;
-$border-radius: 6px;
-$border-radius-lg: 10px;
-$breadcrumb-bg: transparent;
-$breadcrumb-padding-x: 0;
+$guide-code-bg: #0a2b26;
+$guide-code-fg: #f4f0dd;
+$code-block-bg: $guide-code-bg;
+$code-block-border-left: false;
+$btn-code-copy-color: #d3e2d5;
+$btn-code-copy-color-active: #ffcd72;
+$callout-border-width: 4px;
+$callout-color-note: #337465;
+$callout-color-warning: #b97720;
 
 /*-- scss:rules --*/
 
-// duckdb.org docs: links keep the text colour with a muted underline and turn yellow on hover.
-main a,
-.quarto-title-block a {
-  text-decoration-color: $duckdb-link-underline;
-  text-decoration-thickness: 2px;
-  text-underline-offset: 0.2em;
-  transition: color 0.3s, text-decoration-color 0.3s;
+::selection { background: #f1cc79; color: #123e39; }
+:focus-visible { outline: 3px solid $link-hover-color; outline-offset: 3px; }
 
-  &:hover {
-    color: $link-hover-color;
-    text-decoration-color: $link-hover-color;
+#quarto-header .navbar {
+  background: $body-bg;
+  padding: 0;
+  box-shadow: none;
+  .navbar-container {
+    width: 88%;
+    max-width: 84rem;
+    margin-inline: auto;
+    padding: .8rem 0;
+    border-bottom: 1px solid $body-emphasis-color;
+  }
+  .navbar-brand {
+    font: 750 1.5rem/1.1 $font-family-sans-serif;
+    letter-spacing: -.035em;
+    color: $body-emphasis-color;
+  }
+  .navbar-logo { width: 2.6rem; max-height: 2.2rem; padding: 0; }
+  .navbar-container > .navbar-brand-container { order: 0; }
+  .navbar-container > .navbar-nav { order: 1; flex-direction: row; }
+  .quarto-navbar-tools { order: 2; }
+  #quarto-search { order: 3; margin-left: 0; }
+  .nav-link {
+    color: $navbar-fg;
+    font-size: .96rem;
+    font-weight: 600;
+    &:hover, &:focus-visible, &.active { text-decoration: underline; text-underline-offset: .3em; }
   }
 }
 
-.sidebar-navigation .sidebar-item .sidebar-link {
-  transition: color 0.3s;
-}
-
-// Quarto hides the sidebar logo below the lg breakpoint, so the home page carries it there instead.
-.home-hex {
-  float: right;
-  height: 130px;
-  margin: 0 0 0.75rem 1.25rem;
-
-  @include media-breakpoint-up(lg) {
-    display: none;
+main.content {
+  min-width: 0;
+  overflow-wrap: break-word;
+  h1, h2, h3 { color: $body-emphasis-color; line-height: 1.14; }
+  h2 {
+    font-size: clamp(1.7rem, 3vw, 2.5rem);
+    letter-spacing: -.045em;
+    margin-top: 2.4rem;
+    border-bottom: 1px solid $border-color;
+    padding-bottom: .35em;
+  }
+  h3 { font-size: clamp(1.4rem, 2vw, 1.8rem); letter-spacing: -.035em; }
+  a { text-underline-offset: .16em; }
+  :not(pre) > code:not(.sourceCode) {
+    padding: .05em .28em;
+    border-radius: .15rem;
+    font-size: .86em;
+    overflow-wrap: anywhere;
+    white-space: normal;
   }
 }
 
-.sidebar-navigation .sidebar-item .sidebar-link.active {
-  font-weight: 500;
-  color: $body-color;
-  background-color: $duckdb-sidebar-selected-bg;
-  border-radius: $border-radius;
-  padding-left: 0.4em;
-  margin-left: -0.4em;
+#title-block-header.quarto-title-block {
+  margin-block: clamp(1.6rem, 4vw, 3.3rem) 1.5rem;
+  padding-bottom: 1.25rem;
+  border-bottom: 4px double $body-emphasis-color;
+  .title {
+    margin: 0;
+    font-size: clamp(2.85rem, 5.5vw, 5rem);
+    line-height: 1;
+    letter-spacing: -.065em;
+  }
 }
 
-div.sourceCode,
-pre:not(.sourceCode) {
+// Keep source visually distinct from the box-drawn DuckDB result sets below it.
+main.content div.sourceCode {
+  border: 1px solid #365a50;
+  border-radius: .25rem;
+  background: $guide-code-bg;
+  pre.sourceCode {
+    margin: 0;
+    padding: .95rem 2.55rem .95rem 1rem;
+    border: 0;
+    background: transparent;
+    color: $guide-code-fg;
+    overflow-x: auto;
+  }
+  code.sourceCode { color: $guide-code-fg; }
+  pre > code.sourceCode > span { line-height: 1.55; }
+}
+.code-copy-outer-scaffold > .code-copy-button {
+  background-color: $guide-code-bg;
+  border-radius: .2rem;
+  min-height: 1.75rem;
+  min-width: 1.75rem;
+}
+main.content pre:not(.sourceCode) {
+  max-width: 100%;
+  overflow-x: auto;
+  padding: .85rem 1rem;
   border: 1px solid $border-color;
-  border-radius: $border-radius-lg;
+  background: $guide-panel;
+  color: $body-color;
 }
 
-code {
-  font-size: 0.875em;
-}
-
-// Inline code is dark text on DuckDB yellow in both modes; keep it readable inside links and on hover.
-:not(pre) > code:not(.sourceCode),
-a:hover > code:not(.sourceCode) {
-  color: $code-color;
-  background-color: $code-bg;
-}
-
-// Quarto pads inline code by .2em on every side, which makes the yellow box taller than the line.
-main :is(p, li, td, dd) code:not(.sourceCode) {
-  padding: 0.05em 0.3em;
-  border-radius: 3px;
-}
-
-.table {
+main.content .table {
+  --bs-table-bg: transparent;
+  --bs-table-color: #{$body-color};
   --bs-table-border-color: #{$border-color};
+  margin-block: 1.1rem 1.5rem;
+  line-height: 1.4;
+  th { color: $body-emphasis-color; background: $guide-panel; }
+  td, th { padding: .55rem .65rem; vertical-align: top; }
+}
+
+#quarto-margin-sidebar #toc-title {
+  font: 650 .86rem/1.3 $font-family-sans-serif;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+  color: $body-emphasis-color;
+}
+#quarto-margin-sidebar nav[role="doc-toc"] a { overflow-wrap: anywhere; }
+
+@media (pointer: coarse) {
+  #quarto-header .navbar .nav-link {
+    display: inline-flex;
+    align-items: center;
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+
+@include media-breakpoint-down(lg) {
+  #quarto-header .navbar {
+    .navbar-container { width: 91%; padding-block: .55rem; }
+    .navbar-brand { font-size: 1.28rem; }
+    .navbar-logo { width: 2.05rem; }
+  }
+}
+
+@media (max-width: 33rem) {
+  #quarto-header .navbar {
+    .navbar-container {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto auto;
+      align-items: center;
+      row-gap: .2rem;
+      padding: .55rem 0 .25rem;
+    }
+    .navbar-brand-container { max-width: 100%; }
+    .quarto-navigation-tool, .aa-DetachedSearchButton { min-width: 2.25rem; min-height: 2.25rem; }
+    .navbar-nav {
+      grid-area: 2 / 1 / 3 / -1;
+      width: 100%;
+      justify-content: space-between;
+      overflow: visible;
+    }
+    .nav-link { padding: .4rem 0; font-size: .9rem; }
+  }
+}
+
+@include media-breakpoint-down(sm) {
+  main.content .table { display: block; overflow-x: auto; }
 }

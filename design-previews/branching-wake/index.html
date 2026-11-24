@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>duckboost · Gradient boosting in DuckDB</title>
+  <meta name="description" content="Train gradient-boosted trees in DuckDB and export the model as plain SQL.">
+  <link rel="icon" href="../assets/favicon.png" sizes="32x32">
+  <link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png">
+  <link rel="stylesheet" href="../assets/fonts.css">
+  <link rel="stylesheet" href="style.css">
+  <script defer src="copy.js"></script>
+</head>
+<body>
+  <a href="#main" class="skip">Skip to content</a>
+  <header class="mast">
+    <div class="measure nav-row">
+      <a class="brand" href="./index.html" aria-label="duckboost home"><img src="../assets/duck-mark.svg" width="47" height="40" alt="">duckboost</a>
+      <nav aria-label="Main navigation">
+        <a href="https://javorraca.github.io/duckboost/getting-started.html"><span class="long">Documentation</span><span class="short">Docs</span></a>
+        <a class="ref-nav" href="https://javorraca.github.io/duckboost/reference.html">SQL reference</a>
+        <a class="source" href="https://github.com/JavOrraca/duckboost">GitHub</a>
+      </nav>
+    </div>
+  </header>
+  <main id="main">
+    <section class="hero measure" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <div class="eyebrow"><span class="swatch" aria-hidden="true"></span>DuckDB community extension</div>
+        <h1 id="hero-title">Grow trees<br>in DuckDB<span>.</span></h1>
+        <p>Train gradient-boosted trees where your tables live. Score new rows and export the model as a plain SQL query.</p>
+        <div class="actions">
+          <a class="primary" href="https://javorraca.github.io/duckboost/getting-started.html">Get started</a>
+          <a class="secondary" href="#guides">Explore the guides</a>
+        </div>
+      </div>
+      <figure class="edition">
+        <div class="image-wrap">
+          <picture>
+            <source media="(min-width: 861px) and (max-width: 1080px)" srcset="../assets/portrait-print.webp">
+            <img src="../assets/duck-print.webp" alt="A marigold duck cuts through dark teal water, leaving a wake that forks like a decision tree." width="1536" height="797">
+          </picture>
+          <div class="print-lettering" aria-hidden="true">Branching<br><i>Wake</i></div>
+        </div>
+        <figcaption><span>duckboost v0.1.0</span><span>DuckDB 2.0.1 LTS</span></figcaption>
+      </figure>
+    </section>
+    <section class="install" aria-labelledby="install-title">
+      <div class="measure install-row">
+        <div class="install-title"><span aria-hidden="true" class="prompt">›_</span><h2 id="install-title">Install in DuckDB</h2></div>
+        <pre><code id="sql"><b>INSTALL</b> duckboost <b>FROM</b> community;
+<b>LOAD</b> duckboost;</code></pre>
+        <button id="copy" type="button"><svg width="15" height="16" viewBox="0 0 16 18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5.5" y="5.5" width="9" height="11" rx="1"></rect><path d="M10 3V1.5H1.5v11H3"></path></svg><span aria-live="polite">Copy SQL</span></button>
+      </div>
+    </section>
+    <section class="guides measure" id="guides" aria-labelledby="guides-title">
+      <div class="guide-intro"><p class="eyebrow">Developer guides</p><h2 id="guides-title">From table<br>to prediction.</h2></div>
+      <div class="guide-list">
+        <a href="https://javorraca.github.io/duckboost/vignettes/native-trainer.html"><span><strong>Train a model</strong><small>Fit histogram gradient-boosted trees inside a query.</small></span><code>duckboost_train</code></a>
+        <a href="https://javorraca.github.io/duckboost/vignettes/train-predict-export.html"><span><strong>Score and export</strong><small>Predict on new rows, then turn the trees into SQL.</small></span><code>duckboost_to_sql</code></a>
+        <a href="https://javorraca.github.io/duckboost/vignettes/import-dumps.html"><span><strong>Bring your own trees</strong><small>Score XGBoost, LightGBM, or CatBoost model dumps.</small></span><code>duckboost_import</code></a>
+      </div>
+    </section>
+  </main>
+  <footer><div class="measure"><b>duckboost</b><a href="../index.html">All design previews</a></div></footer>
+</body>
+</html>

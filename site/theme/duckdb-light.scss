@@ -1,38 +1,23 @@
 /*-- scss:defaults --*/
 
-// Light-mode values from duckdb.org (:root). The bright #fff100 yellow is unreadable on white,
-// so accents use yellow-30 (#998b00), which duckdb.org uses for light-mode link hovers.
-$duckdb-yellow: #998b00;
-$duckdb-link-underline: #fff100;
-$duckdb-sidebar-selected-bg: #f2f2f2;
-
-$body-bg: #fcfcfc;
-$body-color: #0d0d0d;
-$body-emphasis-color: #050505;
-$text-muted: #666666;
-$border-color: #e6e6e6;
-
-$primary: $duckdb-yellow;
-$secondary: #666666;
-$link-color: $body-color;
-$link-hover-color: $duckdb-yellow;
-
-$code-color: #0d0d0d;
-$code-bg: rgba(#fff100, 0.6);
-$code-block-bg: #f2f2f2;
-$code-block-border-left: false;
-
-$sidebar-bg: $body-bg;
-$sidebar-fg: #262626;
-$sidebar-hl: $duckdb-yellow;
-$toc-color: #666666;
-$toc-active-border: $duckdb-yellow;
-$toc-inactive-border: #e6e6e6;
-
-$input-bg: #ffffff;
+$body-bg: #f7f3e8;
+$body-color: #24443c;
+$body-emphasis-color: #123e39;
+$text-muted: #52645b;
+$border-color: #acb7a6;
+$primary: #16544a;
+$secondary: $text-muted;
+$link-color: #16594f;
+$link-hover-color: #89450c;
+$code-color: #184b40;
+$code-bg: #e6e9da;
+$navbar-bg: $body-bg;
+$navbar-fg: $body-emphasis-color;
+$navbar-hl: $link-hover-color;
+$toc-color: $link-color;
+$toc-active-border: #a96115;
+$toc-inactive-border: $border-color;
+$input-bg: #fffbf1;
 $input-color: $body-color;
-$input-border-color: #d9d9d9;
-
-$table-color: $body-color;
-$table-border-color: $border-color;
-$hr-border-color: $border-color;
+$input-border-color: $border-color;
+$guide-panel: #eeeee1;
