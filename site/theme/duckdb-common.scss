@@ -137,6 +137,15 @@ main.content .table {
 }
 #quarto-margin-sidebar nav[role="doc-toc"] a { overflow-wrap: anywhere; }
 
+@media (pointer: coarse) {
+  #quarto-header .navbar .nav-link {
+    display: inline-flex;
+    align-items: center;
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+
 @include media-breakpoint-down(lg) {
   #quarto-header .navbar {
     .navbar-container { width: 91%; padding-block: .55rem; }

@@ -36,6 +36,8 @@ website:
         href: guides.qmd
       - text: Reference
         href: reference.qmd
+      - text: Changelog
+        href: changelog.qmd
       - text: GitHub
         href: https://github.com/JavOrraca/duckboost
 

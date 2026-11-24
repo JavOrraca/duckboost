@@ -97,7 +97,7 @@ format:
   </main>
 
   <footer>
-    <a href="reference.html">SQL reference</a>
+    <a href="reference.html">Reference</a>
     <a href="changelog.html">Changelog</a>
   </footer>
 </div>
