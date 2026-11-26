@@ -1,9 +1,8 @@
 """Build the duckboost logo assets in site/images/.
 
-Writes the hex sticker, the favicon, the apple-touch-icon and the 2400x1260
-link-preview card as SVG, then
-rasterizes them to PNG with headless Chrome. Text is converted to outlines so
-the SVGs render identically without the fonts installed.
+Renders the Field Guide sticker to PNG from its master, duckboost-hex.svg.
+Also builds the legacy favicon, apple-touch-icon and 2400x1260 link-preview
+card as SVG and PNG. All SVG lettering uses outlines.
 
     pip install fonttools uharfbuzz
     python3 site/_helpers/make_logo.py [--chrome /usr/bin/google-chrome-stable]
@@ -136,19 +135,6 @@ def svg(width, height, body):
     )
 
 
-def hex_sticker(sans):
-    w, h = 2 * 100 * math.cos(math.radians(30)), 200
-    cx = w / 2
-    body = "\n".join(
-        [
-            hex_frame(cx, 100, 100, 7),
-            family_tree(cx, 27, 0.88),
-            sans.path("duckboost", 19, cx, 164, anchor="middle"),
-        ]
-    )
-    return svg(round(w, 2), h, body)
-
-
 def social_card(sans, sans_regular, mono):
     w, h = 1200, 630
     hex_r = 215
@@ -238,7 +224,6 @@ def main():
 
     OUT.mkdir(exist_ok=True)
     assets = {
-        "duckboost-hex.svg": hex_sticker(sans),
         "duckboost-icon.svg": icon(),
         "duckboost-touch-icon.svg": touch_icon(),
         "duckboost-banner.svg": social_card(sans, sans_regular, mono),
