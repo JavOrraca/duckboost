@@ -4,9 +4,6 @@ project:
   post-render: _helpers/og_url.py
   resources:
     - field-guide/**
-    - images/duckboost-banner.png
-    - images/apple-touch-icon.png
-    - images/favicon.png
     - images/duckboost-hex.svg
 
 website:
